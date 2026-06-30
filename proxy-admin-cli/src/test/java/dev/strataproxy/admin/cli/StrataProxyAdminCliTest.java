@@ -553,7 +553,17 @@ final class StrataProxyAdminCliTest {
         var registry = new InMemoryServerRegistry();
         var metrics = new ProxyMetrics();
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 128, 0);
-        metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FABRIC_HANDSHAKE", "fabric:registry/sync", 256, 64);
+        metrics.customPayload(
+                "survival-1",
+                ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                "FABRIC_HANDSHAKE",
+                "fabric:registry/sync",
+                256,
+                64,
+                "Steve",
+                "127.0.0.1:50000",
+                "CONFIGURATION",
+                1);
         try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
             admin.start();
             var baseUrl = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
@@ -564,6 +574,12 @@ final class StrataProxyAdminCliTest {
             assertTrue(payloads.output().contains("server direction kind channel packets payload_bytes compressed_bytes max_payload_bytes max_compressed_bytes first_seen last_seen\n"));
             assertTrue(payloads.output().contains("survival-1 frontend_to_backend FABRIC_HANDSHAKE fabric:registry/sync 1 256 64 256 64"));
             assertTrue(payloads.output().contains("survival-1 frontend_to_backend FORGE_HANDSHAKE fml:handshake 1 128 0 128 0"));
+
+            var payloadSamples = execute("--base-url", baseUrl, "mod-payloads", "--samples");
+
+            assertEquals(0, payloadSamples.exitCode());
+            assertTrue(payloadSamples.output().contains("recent_samples\nsequence server direction kind channel payload_bytes compressed_bytes player remote state packet_id timestamp\n"));
+            assertTrue(payloadSamples.output().contains("survival-1 frontend_to_backend FABRIC_HANDSHAKE fabric:registry/sync 256 64 Steve 127.0.0.1:50000 CONFIGURATION 1"));
         }
     }
 

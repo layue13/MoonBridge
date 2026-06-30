@@ -4,6 +4,7 @@ final class RelaySessionIdentity {
     private final String remoteAddress;
     private volatile String playerName;
     private volatile MinecraftSessionVerifier.GameProfile profile;
+    private volatile MinecraftLoginStart.ChatSessionKey chatSessionKey;
 
     RelaySessionIdentity(String remoteAddress) {
         this.remoteAddress = remoteAddress == null ? "" : remoteAddress;
@@ -30,5 +31,13 @@ final class RelaySessionIdentity {
         if (profile != null && !profile.name().isBlank()) {
             playerName(profile.name());
         }
+    }
+
+    MinecraftLoginStart.ChatSessionKey chatSessionKey() {
+        return chatSessionKey;
+    }
+
+    void chatSessionKey(MinecraftLoginStart.ChatSessionKey chatSessionKey) {
+        this.chatSessionKey = chatSessionKey;
     }
 }

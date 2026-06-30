@@ -68,6 +68,15 @@ The packaged example config is available in `proxy-app/src/main/resources/config
 The packaged production-oriented config is available in `proxy-app/src/main/resources/config/strataproxy-production.yml` and is included in the installed distribution as `config/strataproxy-production.yml`.
 String config values support environment placeholders in the form `${NAME}` and `${NAME:default}`, which is useful for secrets such as `STRATAPROXY_ADMIN_TOKEN`.
 
+When StrataProxy runs behind a trusted TCP load balancer, enable HAProxy PROXY protocol v1 parsing so admission limits, routing, audit logs, and backend forwarding use the real client address:
+
+```yaml
+network:
+  proxyProtocol: true
+```
+
+Only enable this on listeners that are not reachable directly by players. When enabled, every accepted connection must start with a valid PROXY v1 header before the Minecraft handshake.
+
 Build a complete release bundle with checksums:
 
 ```powershell
@@ -190,12 +199,14 @@ registry:
   healthCheckEnabled: true
   healthCheckInterval: "5s"
   healthCheckTimeout: "2s"
+  healthCheckMode: "minecraft-status"
 ```
 
 Static config is loaded first. Persisted dynamic entries are then replayed when their names are not already present in static config.
 Relative `registry.persistencePath` values are resolved from the directory containing the active config file, so the packaged default `data/registry.json` lives next to `config/strataproxy.yml` instead of depending on the process working directory.
 If the persisted registry file is corrupt or contains invalid entries, startup quarantines it with a `.invalid-<timestamp>` suffix, logs a warning, and continues from static config or an empty dynamic registry.
 Set `registry.staticServers: false` for dynamic-only deployments. In that mode `servers:` entries in YAML are ignored, the proxy may start with zero registered backends, and operators can add servers through the Admin API or persisted registry state. If the Admin API is disabled, at least one backend server must be configured.
+`healthCheckMode` accepts `tcp` or `minecraft-status`. `tcp` only verifies that the backend port accepts connections. `minecraft-status` sends a Minecraft server-list Handshake plus Status Request and marks the backend down unless it returns a valid Status Response, which is better for production backends whose process may keep the port open while the Minecraft protocol path is unhealthy.
 
 Custom payload anomaly thresholds are configurable and accept byte units:
 
@@ -221,6 +232,23 @@ observability:
 `prometheus: false` disables the Prometheus text endpoint at `/metrics` while leaving structured Admin API reports such as `/overview`, `/compression-report`, `/packet-traffic`, and `/packet-anomalies` available.
 `packetTopN` limits the sorted rule list returned by `/packet-anomalies`. `anomalySampling: false` keeps counters and Prometheus metrics active, but stops retaining recent anomaly samples.
 `flushIntervalSeconds` controls how often proxy-observed bytes, packet counts, and event loop delay are converted into per-server `ServerLoad` rates for routing and admin metrics.
+
+Minecraft server-list status can be answered directly by the proxy:
+
+```yaml
+status:
+  enabled: true
+  motd: "StrataProxy"
+  protocolName: "StrataProxy"
+  protocolVersion: -1
+  maxPlayers: 1000
+  faviconPath: "favicon.png"
+  samplePlayers:
+    - name: "Survival"
+      id: "00000000-0000-0000-0000-000000000001"
+```
+
+When enabled, Handshake `nextState=1` is handled locally and does not require a routable backend. This keeps the server list useful during maintenance, dynamic-only startup, or total backend outage. `online` is derived from active player sessions observed by the proxy; `maxPlayers`, MOTD, protocol display, optional PNG favicon, and sample player rows are operator-configured. `favicon` accepts a `data:image/png;base64,...` URI; `faviconPath` reads a PNG relative to the active config file.
 
 Native CPU/runtime acceleration is enabled by default and can be adjusted explicitly:
 
@@ -269,7 +297,11 @@ forwarding:
   secret: "${STRATAPROXY_FORWARDING_SECRET}"
 ```
 
-`velocity-modern` intercepts the backend Login Plugin Request on `velocity:player_info` before compression negotiation and replies with a HMAC-SHA256 signed Login Plugin Response containing the client address, verified UUID, username, and Mojang profile properties. Backend Paper-compatible servers should run behind the proxy with backend `online-mode=false`, Velocity forwarding enabled, and the same secret. The current implementation forwards the version 1 identity/profile payload; Minecraft 1.19+ chat signing key forwarding is still a separate compatibility item because it requires parsing and retaining the client's login public-key material.
+Supported modes are `none`, `velocity-modern`, `bungee-legacy`, and `bungee-guard`.
+
+`velocity-modern` intercepts the backend Login Plugin Request on `velocity:player_info` before compression negotiation and replies with a HMAC-SHA256 signed Login Plugin Response containing the client address, verified UUID, username, and Mojang profile properties. Backend Paper-compatible servers should run behind the proxy with backend `online-mode=false`, Velocity forwarding enabled, and the same secret. Version 1 identity/profile forwarding is always supported. When the backend requests version 2 and the client Login Start supplied chat signing key material, StrataProxy returns version 2 and appends the public-key expiry, encoded public key, and Mojang key signature. If no key material is available, it returns a version 1 payload rather than fabricating invalid chat-signing data.
+
+`bungee-legacy` rewrites the backend Handshake host field to the classic BungeeCord NUL-separated format: requested host, client address, UUID without dashes, and profile properties JSON. In offline-mode proxy operation it waits for Login Start before connecting so it can derive the offline UUID from the player name instead of sending an incomplete legacy handshake. `bungee-guard` uses the same handshake format and appends the configured shared secret as the final NUL-separated field. Use these modes for Spigot/Paper servers configured with BungeeCord-style IP forwarding; prefer `bungee-guard` when the backend supports it.
 
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 
@@ -284,26 +316,33 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Honors `network.nativeTransport`: uses Netty epoll/kqueue when available and falls back to NIO otherwise; startup logs the selected transport.
 - Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
 - Supports Minecraft online-mode player-side encryption termination with optional Mojang session verification.
-- Supports Velocity modern forwarding v1 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads.
+- Supports proxy-level Minecraft server-list status responses without opening a backend connection, including configurable MOTD, protocol display, max players, favicon, and sample player rows.
+- Sends Minecraft Login Disconnect JSON frames for routable login failures such as no available backend route, oversized pipelined login data, or backend connect failure, instead of exposing clients to a bare TCP close.
+- Supports Velocity modern forwarding v1/v2 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads and optional 1.19+ chat signing key material.
+- Supports BungeeCord legacy IP forwarding and BungeeGuard secret forwarding by rewriting the backend Handshake after player identity is known.
 - Parses the first Minecraft handshake frame using bounded VarInt/frame checks.
 - Rejects excessive bytes pipelined after the initial handshake before backend connect; pre-route pending data is capped by `network.maxFrameBytes`.
 - Provides Minecraft compression frame codec and Netty encoder/decoder handlers with bounded VarInt parsing, threshold checks, maximum uncompressed-size guard, partial-frame handling, and malformed zlib rejection.
 - Provides a bounded custom payload classifier for inspection paths. It identifies brand, Forge/FML handshake, Fabric handshake, registry/config sync, unknown channels, and large payloads without consuming the original `ByteBuf`.
 - Provides configurable custom payload anomaly policies for large payloads, large unknown channels, oversized Forge/Fabric handshake payloads, and per-connection custom payload flood windows.
-- Runs custom payload classification and anomaly policies on uncompressed client-to-backend configuration payload frames in the live relay. After compression negotiation, it also inspects a bounded early compressed-frame window for configuration custom payloads. WARN findings record anomaly counters and recent samples without changing forwarded bytes; THROTTLE findings close the relay before forwarding the triggering payload.
+- Runs custom payload classification and anomaly policies on uncompressed client-to-backend configuration payload frames in the live relay. It also records backend-to-client Login Plugin Request metadata before compression negotiation, covering Forge/Fabric login handshake channels without changing forwarded bytes. After compression negotiation, it inspects a bounded early compressed-frame window for configuration custom payloads. WARN findings record anomaly counters and recent samples without changing forwarded bytes; THROTTLE findings close the relay before forwarding the triggering payload.
 - Records classified custom payload counters by server, direction, kind, and bounded channel for Forge/Fabric/registry diagnostics. Unknown channels are grouped as `unknown` to avoid unbounded metric cardinality.
+- Records a fixed-size recent custom payload metadata ring for Forge/Fabric login and configuration diagnostics, including server, direction, kind, bounded channel, payload size, compressed size, player, remote address, state, packet id, and timestamp without retaining full payload bytes.
 - Provides configured compression strategies for `off`, `fixed`, and `adaptive` modes. Adaptive decisions use packet size, RTT, historical compression ratio, threshold bounds, and the configured CPU guard.
 - Provides a standalone compressed-frame rewriter that can decode one Minecraft compression-mode frame, re-encode it with a target threshold, and return before/after frame size attribution.
 - Supports opt-in live compressed-frame rewrite after backend compression negotiation through `compression.rewriteEnabled`. The default remains `false`; when enabled, the relay rewrites safe bounded compressed-frame batches selected by the configured compression strategy, including frames split across reads, and records low-cardinality rewrite outcomes plus CPU time.
 - Routes to a backend by requested host, server name, tag, metadata `host`, metadata `route`, protocol range, health, drain state, capacity, and effective weight.
+- Normalizes the handshake route host before routing by trimming DNS trailing dots and Forge/FML NUL suffixes, so modded clients still match configured host aliases.
 - Distributes matching requests with deterministic weighted selection, so gray/canary backends receive traffic according to weight while repeated requests from the same source remain stable.
 - Exposes route preview with candidate explanations through the Admin API and CLI so operators can verify host/tag/capability/protocol decisions, effective weights, and rejection reasons before changing DNS, weights, or drain mode.
 - Falls back to a generic healthy backend when no host-specific backend matches, which makes a one-backend setup work out of the box.
 - Relays client/backend traffic transparently after routing.
 - Uses Netty with manual read backpressure: both frontend and backend channels keep `AUTO_READ=false` during relay and only read after writes complete.
 - Applies configured backend connect timeout and write-buffer watermarks to frontend/backend channels.
-- Enforces global and per-address connection admission limits before handshake routing to reduce connection storm impact.
-- Attributes admission rejections by low-cardinality reason (`global_limit` or `per_address_limit`) so operators can distinguish total saturation from one-address storms without high-cardinality client labels.
+- Enforces global and per-address connection admission limits before handshake routing to cap active socket resource use.
+- Enforces optional global and per-address new-connection-per-second admission limits before handshake routing to absorb login storms before route/backend work starts.
+- Supports optional HAProxy PROXY protocol v1 parsing on trusted listener deployments, so per-address limits, routing, player attribution, and Bungee/Velocity forwarding use the forwarded client address.
+- Attributes admission rejections by low-cardinality reason (`global_limit`, `per_address_limit`, `global_rate_limit`, or `per_address_rate_limit`) so operators can distinguish total saturation from one-address storms without high-cardinality client labels.
 - Closes connections that do not send the initial Minecraft handshake within `network.initialHandshakeTimeoutMillis`.
 - Uses Netty pooled `ByteBuf` allocation for listener and backend connections.
 - Tracks accepted connections, active connections, rejected connections by reason, routed connections, route failures, backend connect failures, and bidirectional bytes with low-contention `LongAdder` counters.
@@ -333,7 +372,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Exposes unauthenticated liveness and readiness probes: `/healthz` reports process health, while `/readyz` returns 503 until at least one backend is routable.
 - Exposes a structured packet anomaly report sorted by rule count and limited by `observability.packetTopN`, plus an optional fixed-size recent sample ring buffer for operators and CLI tooling.
 - Exposes a structured packet traffic report sorted by raw bytes and limited by `observability.packetTopN`.
-- Exposes a structured diagnostic report combining overview, admission rejection reason breakdown, server state, compression audit, packet traffic, classified custom payload traffic, packet anomaly samples, relay backpressure rows, and active payload capture state for incident export.
+- Exposes a structured diagnostic report combining overview, admission rejection reason breakdown, server state, compression audit, packet traffic, classified custom payload traffic and recent metadata samples, packet anomaly samples, relay backpressure rows, and active payload capture state for incident export.
 - Ships packaged Prometheus alert rules and a Grafana overview dashboard under `deployment/observability`.
 - Supports operator-toggled short-lived payload prefix captures with fixed-size ring buffers. Captures are disabled by default, expire automatically, store only the first configured bytes per matching relay buffer, and include player plus remote-address attribution when the connection identity is known.
 - Persists dynamic registry changes to `registry.persistencePath` with temp-file write plus atomic move when supported.
@@ -347,7 +386,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Validates Admin API JSON request bodies and returns 400 for malformed or unsafe registration, health, and load updates.
 - Treats `POST /servers` as an upsert: new servers return 201, existing names return 200 and replace descriptor fields while preserving current health/load samples.
 - Returns 404 for health/load updates to unknown servers and rolls back in-memory registration when registry persistence fails.
-- Runs optional TCP backend health checks and marks unreachable servers `DOWN`, causing routing to avoid them.
+- Runs optional backend health checks and marks unhealthy servers `DOWN`, causing routing to avoid them. Checks can use plain TCP connect or Minecraft status protocol validation.
 - Exposes:
   - `GET /healthz`
   - `GET /readyz`
@@ -374,7 +413,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
   - `POST /servers/{name}/undrain`
   - `POST /servers/{name}/health`
   - `POST /servers/{name}/load`
-- Provides `strataproxy-admin` CLI commands for health, readiness, structured operational overview with admission rejection reasons independent of Prometheus, scriptable SLO gates for readiness, event-loop delay, active connections, rejected connections, anomaly count, and native transport, native CPU/runtime capability summaries, metrics, diagnostic report export, direction-aware compression audit, strategy decision, and live rewrite outcome summaries independent of Prometheus, packet traffic summaries, classified custom payload summaries, active player sessions, route preview, structured packet anomaly summary with optional recent samples, relay backpressure summaries, payload capture list/start/get/stop, server list/get/register/update/remove/drain/undrain, and health/load updates.
+- Provides `strataproxy-admin` CLI commands for health, readiness, structured operational overview with admission rejection reasons independent of Prometheus, scriptable SLO gates for readiness, event-loop delay, active connections, rejected connections, anomaly count, and native transport, native CPU/runtime capability summaries, metrics, diagnostic report export, direction-aware compression audit, strategy decision, and live rewrite outcome summaries independent of Prometheus, packet traffic summaries, classified custom payload summaries with optional recent metadata samples, active player sessions, route preview, structured packet anomaly summary with optional recent samples, relay backpressure summaries, payload capture list/start/get/stop, server list/get/register/update/remove/drain/undrain, and health/load updates.
 - Supports optional Admin API HTTPS and mTLS using Java keystore/truststore configuration.
 - Provides `strataproxy-query` CLI commands for Minecraft status checks, idle TCP connection load probes, Minecraft handshake route-load probes, multi-virtual-host route storm probes, generated packet traffic-load probes, compression rewrite load probes with partial-frame writes, repeatable smoke/acceptance load-suite orchestration, JSON load-test result output for automation, and a slow-reading backend sink for backpressure validation.
 
@@ -515,13 +554,14 @@ The first usable runtime favors a high-throughput transparent fast path:
 - Live compression rewrite is conservative: it only runs after negotiated compression, buffers partial compressed frames with bounded per-connection state, rewrites only audited complete compressed-mode frame batches, and falls back to forwarding the original `ByteBuf` for bypass decisions, mixed per-frame policy targets, high event-loop delay, unsafe frame shapes, or rewrite failures.
 - Packet anomaly recent samples use a fixed-size ring buffer and record bounded metadata only; full payload bytes are not retained.
 - Payload prefix captures are opt-in, bounded by sample count and bytes per sample, and expire automatically. Relay handlers copy bytes only when a matching capture is active.
-- Custom payload classification performs bounded channel-name parsing only; full mod payload semantics are not decoded on the fast path. Live inspection covers uncompressed client-to-backend configuration payload frames and a bounded early compressed-frame window after compression negotiation, then closes the deep inspection sampler so normal play traffic returns to metadata-only auditing.
+- Custom payload classification performs bounded channel-name parsing only; full mod payload semantics are not decoded on the fast path. Live inspection covers backend-to-client Login Plugin Requests, uncompressed client-to-backend configuration payload frames, and a bounded early compressed-frame window after compression negotiation, then closes the deep inspection sampler so normal play traffic returns to metadata-only auditing. Recent custom payload samples retain metadata only and are capped at 256 entries.
 - Custom payload anomaly policies operate on classifier metadata only and do not retain full payloads. THROTTLE enforcement for large unknown channels and per-connection custom payload floods happens before backend forwarding, protecting modded login/configuration phases from oversized or high-rate unknown payload abuse.
 - Minecraft compression codec and Netty handler instances reuse zlib state and scratch buffers. Compressed custom-payload inspection inflates only bounded early frames and immediately releases decoded buffers.
 - `network.writeBufferLow` and `network.writeBufferHigh` are applied as Netty watermarks to protect pending write queues.
 - `network.connectTimeoutMillis` is applied to backend connection attempts so failed routes do not hang.
-- `network.maxConnections` and `network.maxConnectionsPerAddress` reject excess connections before route/backend work starts.
-- Admission rejects are exported as `/overview` and `/diagnostic-report` JSON reason maps, CLI overview reason rows, a compatible total counter, and `strataproxy_connections_rejected_total{reason="global_limit|per_address_limit"}` for storm attribution.
+- `network.maxConnections` and `network.maxConnectionsPerAddress` reject excess active connections before route/backend work starts.
+- `network.maxNewConnectionsPerSecond` and `network.maxNewConnectionsPerAddressPerSecond` optionally reject excess admission rate before route/backend work starts; `0` disables each rate limiter.
+- Admission rejects are exported as `/overview` and `/diagnostic-report` JSON reason maps, CLI overview reason rows, a compatible total counter, and `strataproxy_connections_rejected_total{reason="global_limit|per_address_limit|global_rate_limit|per_address_rate_limit"}` for storm attribution.
 - `network.initialHandshakeTimeoutMillis` prevents idle pre-handshake sockets from holding connection slots indefinitely.
 - Metrics use `LongAdder` and stay off the hot path beyond simple increments.
 - Global connection lifecycle is accounted at admission; per-server lifecycle starts only after backend route/connect succeeds.
@@ -562,7 +602,9 @@ Smoke-tested runtime:
 - verified `/metrics`
 - confirmed listener/admin ports were released after shutdown
 - covered app-level YAML startup smoke: temporary config -> running proxy -> Minecraft status request -> backend -> proxy -> client, with runtime resources closed inside the test
+- covered proxy-level Minecraft server-list status response and Pong without a backend route, including config-loaded favicon and sample player rows
 - covered config-relative registry persistence path resolution at runtime
+- covered TCP and Minecraft status backend health-check modes, including protocol-invalid backends being marked down
 - covered corrupt persisted registry quarantine plus successful runtime startup
 - covered environment placeholder expansion in YAML config values
 - covered installed distribution validation of both default and production-oriented packaged configs
@@ -577,6 +619,8 @@ Smoke-tested runtime:
 - covered idempotent runtime close, shutdown waiter release, and listener port release
 - covered active player session tracking from split Login Start frames plus Prometheus, direct Admin API, Admin CLI, and diagnostic report export
 - covered a real TCP proxy smoke test in `proxy-network`: client handshake -> proxy -> backend -> proxy -> client, including routed connection count and per-server byte attribution
+- covered HAProxy PROXY protocol v1 parsing over real TCP, including forwarded source address use during routing and stripping the PROXY header before backend relay
+- covered real TCP Minecraft Login Disconnect responses for no-route, oversized pending-login-data, and backend-connect-failure login paths
 - covered a real TCP per-address connection storm test in `proxy-network`: concurrent virtual-thread clients exceed the per-address admission limit and rejected connections are counted
 - covered connection admission rejection reasons from control logic through Netty handler metrics, Prometheus output, Admin API diagnostic JSON, and CLI overview output
 - covered `proxy-query` status protocol encode/decode and a real local status-query exchange
@@ -598,6 +642,5 @@ Smoke-tested runtime:
 
 ## Next Milestones
 
-1. Broaden optional deep payload diagnostics for Forge/Fabric login and configuration phases beyond bounded channel/kind/byte counters.
-2. Run and publish actual acceptance profile results on a dedicated Linux host with native transport enabled.
-3. Add native-image or jlink runtime experiments only if profiling shows startup/runtime packaging pressure is worth the added release complexity.
+1. Run and publish actual acceptance profile results on a dedicated Linux host with native transport enabled.
+2. Add native-image or jlink runtime experiments only if profiling shows startup/runtime packaging pressure is worth the added release complexity.

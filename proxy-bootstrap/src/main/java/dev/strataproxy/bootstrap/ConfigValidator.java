@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.UUID;
 
 public final class ConfigValidator {
     private static final int MIN_SAFE_MAX_FRAME_BYTES = 1_024;
@@ -71,6 +72,12 @@ public final class ConfigValidator {
         if (network.maxConnectionsPerAddress() > network.maxConnections()) {
             errors.add("network.maxConnectionsPerAddress must be <= network.maxConnections");
         }
+        if (network.maxNewConnectionsPerSecond() < 0) {
+            errors.add("network.maxNewConnectionsPerSecond must be >= 0");
+        }
+        if (network.maxNewConnectionsPerAddressPerSecond() < 0) {
+            errors.add("network.maxNewConnectionsPerAddressPerSecond must be >= 0");
+        }
         if (network.initialHandshakeTimeoutMillis() <= 0) {
             errors.add("network.initialHandshakeTimeoutMillis must be positive");
         }
@@ -81,6 +88,10 @@ public final class ConfigValidator {
         }
         validatePositive("registry.healthCheckInterval", registry.healthCheckInterval(), errors);
         validatePositive("registry.healthCheckTimeout", registry.healthCheckTimeout(), errors);
+        var healthCheckMode = registry.healthCheckMode().trim().toLowerCase(Locale.ROOT);
+        if (!healthCheckMode.equals("tcp") && !healthCheckMode.equals("minecraft-status")) {
+            errors.add("registry.healthCheckMode must be one of: tcp, minecraft-status");
+        }
         if (registry.healthCheckTimeout().compareTo(registry.healthCheckInterval()) > 0) {
             warnings.add("registry.healthCheckTimeout is greater than healthCheckInterval");
         }
@@ -140,6 +151,7 @@ public final class ConfigValidator {
         validatePositive("observability.flushInterval", observability.flushInterval(), errors);
 
         validateAuth(config.auth(), errors, warnings);
+        validateStatus(config.status(), errors);
         validateForwarding(config.forwarding(), errors);
         validateNative(config.nativeRuntime(), errors, warnings);
 
@@ -176,16 +188,57 @@ public final class ConfigValidator {
         }
     }
 
+    private static void validateStatus(ProxyConfig.StatusConfig status, ArrayList<String> errors) {
+        if (status == null) {
+            return;
+        }
+        if (status.protocolVersion() < -1) {
+            errors.add("status.protocolVersion must be >= -1");
+        }
+        if (status.maxPlayers() < 0) {
+            errors.add("status.maxPlayers must be >= 0");
+        }
+        if (!status.favicon().isBlank() && !status.favicon().startsWith("data:image/png;base64,")) {
+            errors.add("status.favicon must be a data:image/png;base64 data URI");
+        }
+        if (status.favicon().length() > 128 * 1024) {
+            errors.add("status.favicon must be <= 128kb after base64 encoding");
+        }
+        if (status.samplePlayers().size() > 12) {
+            errors.add("status.samplePlayers must contain at most 12 entries");
+        }
+        for (var index = 0; index < status.samplePlayers().size(); index++) {
+            var player = status.samplePlayers().get(index);
+            if (player.name().isBlank()) {
+                errors.add("status.samplePlayers[" + index + "].name must not be blank");
+            }
+            if (player.name().length() > 64) {
+                errors.add("status.samplePlayers[" + index + "].name must be <= 64 characters");
+            }
+            try {
+                UUID.fromString(player.id());
+            } catch (RuntimeException exception) {
+                errors.add("status.samplePlayers[" + index + "].id must be a UUID");
+            }
+        }
+    }
+
     private static void validateForwarding(ProxyConfig.ForwardingConfig forwarding, ArrayList<String> errors) {
         if (forwarding == null) {
             return;
         }
         var mode = forwarding.mode() == null ? "" : forwarding.mode().trim().toLowerCase(Locale.ROOT);
-        if (!mode.equals("none") && !mode.equals("velocity-modern")) {
-            errors.add("forwarding.mode must be one of: none, velocity-modern");
+        if (!mode.equals("none")
+                && !mode.equals("velocity-modern")
+                && !mode.equals("bungee-legacy")
+                && !mode.equals("bungee-guard")) {
+            errors.add("forwarding.mode must be one of: none, velocity-modern, bungee-legacy, bungee-guard");
         }
         if (mode.equals("velocity-modern") && forwarding.secret().isBlank()) {
             errors.add("forwarding.secret must not be blank when forwarding.mode is velocity-modern");
+        }
+        if (mode.equals("bungee-guard") && forwarding.secret().isBlank()) {
+            errors.add("forwarding.secret must not be blank when forwarding.mode is bungee-guard");
         }
     }
 

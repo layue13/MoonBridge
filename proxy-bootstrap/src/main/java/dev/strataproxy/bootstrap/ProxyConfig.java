@@ -2,6 +2,7 @@ package dev.strataproxy.bootstrap;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 public record ProxyConfig(
@@ -14,6 +15,7 @@ public record ProxyConfig(
         PacketAnalysisConfig packetAnalysis,
         ObservabilityConfig observability,
         AdminConfig admin,
+        StatusConfig status,
         AuthConfig auth,
         ForwardingConfig forwarding,
         NativeConfig nativeRuntime) {
@@ -37,6 +39,7 @@ public record ProxyConfig(
                 packetAnalysis,
                 observability,
                 admin,
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
                 NativeConfig.defaults());
@@ -63,8 +66,38 @@ public record ProxyConfig(
                 packetAnalysis,
                 observability,
                 admin,
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
+                nativeRuntime);
+    }
+
+    public ProxyConfig(
+            InetSocketAddress bindAddress,
+            int workerThreads,
+            boolean nativeTransport,
+            NetworkConfig network,
+            RegistryConfig registry,
+            CompressionConfig compression,
+            PacketAnalysisConfig packetAnalysis,
+            ObservabilityConfig observability,
+            AdminConfig admin,
+            AuthConfig auth,
+            ForwardingConfig forwarding,
+            NativeConfig nativeRuntime) {
+        this(
+                bindAddress,
+                workerThreads,
+                nativeTransport,
+                network,
+                registry,
+                compression,
+                packetAnalysis,
+                observability,
+                admin,
+                StatusConfig.defaults(),
+                auth,
+                forwarding,
                 nativeRuntime);
     }
 
@@ -78,6 +111,7 @@ public record ProxyConfig(
         packetAnalysis = packetAnalysis == null ? PacketAnalysisConfig.defaults() : packetAnalysis;
         observability = observability == null ? ObservabilityConfig.defaults() : observability;
         admin = admin == null ? AdminConfig.defaults() : admin;
+        status = status == null ? StatusConfig.defaults() : status;
         auth = auth == null ? AuthConfig.defaults() : auth;
         forwarding = forwarding == null ? ForwardingConfig.defaults() : forwarding;
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
@@ -98,9 +132,41 @@ public record ProxyConfig(
                 PacketAnalysisConfig.defaults(),
                 ObservabilityConfig.defaults(),
                 AdminConfig.defaults(),
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
                 NativeConfig.defaults());
+    }
+
+    public record StatusConfig(
+            boolean enabled,
+            String motd,
+            String protocolName,
+            int protocolVersion,
+            int maxPlayers,
+            String favicon,
+            List<StatusSamplePlayer> samplePlayers) {
+        public StatusConfig(boolean enabled, String motd, String protocolName, int protocolVersion, int maxPlayers) {
+            this(enabled, motd, protocolName, protocolVersion, maxPlayers, "", List.of());
+        }
+
+        public StatusConfig {
+            motd = motd == null || motd.isBlank() ? "StrataProxy" : motd;
+            protocolName = protocolName == null || protocolName.isBlank() ? "StrataProxy" : protocolName;
+            favicon = favicon == null ? "" : favicon;
+            samplePlayers = samplePlayers == null ? List.of() : List.copyOf(samplePlayers);
+        }
+
+        public static StatusConfig defaults() {
+            return new StatusConfig(true, "StrataProxy", "StrataProxy", -1, 1000, "", List.of());
+        }
+    }
+
+    public record StatusSamplePlayer(String name, String id) {
+        public StatusSamplePlayer {
+            name = name == null ? "" : name;
+            id = id == null || id.isBlank() ? "00000000-0000-0000-0000-000000000000" : id;
+        }
     }
 
     public record AuthConfig(
@@ -155,9 +221,65 @@ public record ProxyConfig(
             int writeBufferHighBytes,
             int maxConnections,
             int maxConnectionsPerAddress,
-            int initialHandshakeTimeoutMillis) {
+            int maxNewConnectionsPerSecond,
+            int maxNewConnectionsPerAddressPerSecond,
+            int initialHandshakeTimeoutMillis,
+            boolean proxyProtocol) {
+        public NetworkConfig(
+                int maxFrameBytes,
+                int connectTimeoutMillis,
+                int writeBufferLowBytes,
+                int writeBufferHighBytes,
+                int maxConnections,
+                int maxConnectionsPerAddress,
+                int initialHandshakeTimeoutMillis) {
+            this(
+                    maxFrameBytes,
+                    connectTimeoutMillis,
+                    writeBufferLowBytes,
+                    writeBufferHighBytes,
+                    maxConnections,
+                    maxConnectionsPerAddress,
+                    0,
+                    0,
+                    initialHandshakeTimeoutMillis,
+                    false);
+        }
+
+        public NetworkConfig(
+                int maxFrameBytes,
+                int connectTimeoutMillis,
+                int writeBufferLowBytes,
+                int writeBufferHighBytes,
+                int maxConnections,
+                int maxConnectionsPerAddress,
+                int initialHandshakeTimeoutMillis,
+                boolean proxyProtocol) {
+            this(
+                    maxFrameBytes,
+                    connectTimeoutMillis,
+                    writeBufferLowBytes,
+                    writeBufferHighBytes,
+                    maxConnections,
+                    maxConnectionsPerAddress,
+                    0,
+                    0,
+                    initialHandshakeTimeoutMillis,
+                    proxyProtocol);
+        }
+
         public static NetworkConfig defaults() {
-            return new NetworkConfig(8 * 1024 * 1024, 5_000, 4 * 1024 * 1024, 16 * 1024 * 1024, 10_000, 200, 5_000);
+            return new NetworkConfig(
+                    8 * 1024 * 1024,
+                    5_000,
+                    4 * 1024 * 1024,
+                    16 * 1024 * 1024,
+                    10_000,
+                    200,
+                    0,
+                    0,
+                    5_000,
+                    false);
         }
     }
 
@@ -167,15 +289,27 @@ public record ProxyConfig(
             String persistencePath,
             boolean healthCheckEnabled,
             Duration healthCheckInterval,
-            Duration healthCheckTimeout) {
+            Duration healthCheckTimeout,
+            String healthCheckMode) {
+        public RegistryConfig(
+                boolean staticServers,
+                boolean persistenceEnabled,
+                String persistencePath,
+                boolean healthCheckEnabled,
+                Duration healthCheckInterval,
+                Duration healthCheckTimeout) {
+            this(staticServers, persistenceEnabled, persistencePath, healthCheckEnabled, healthCheckInterval, healthCheckTimeout, "tcp");
+        }
+
         public RegistryConfig {
             persistencePath = persistencePath == null ? "" : persistencePath;
             healthCheckInterval = healthCheckInterval == null ? Duration.ofSeconds(5) : healthCheckInterval;
             healthCheckTimeout = healthCheckTimeout == null ? Duration.ofSeconds(2) : healthCheckTimeout;
+            healthCheckMode = healthCheckMode == null || healthCheckMode.isBlank() ? "tcp" : healthCheckMode;
         }
 
         public static RegistryConfig defaults() {
-            return new RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2));
+            return new RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2), "tcp");
         }
     }
 

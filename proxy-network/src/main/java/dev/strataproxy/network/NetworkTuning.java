@@ -7,7 +7,53 @@ public record NetworkTuning(
         int writeBufferHighBytes,
         int maxConnections,
         int maxConnectionsPerAddress,
-        int initialHandshakeTimeoutMillis) {
+        int maxNewConnectionsPerSecond,
+        int maxNewConnectionsPerAddressPerSecond,
+        int initialHandshakeTimeoutMillis,
+        boolean proxyProtocol) {
+    public NetworkTuning(
+            int maxFrameBytes,
+            int connectTimeoutMillis,
+            int writeBufferLowBytes,
+            int writeBufferHighBytes,
+            int maxConnections,
+            int maxConnectionsPerAddress,
+            int initialHandshakeTimeoutMillis) {
+        this(
+                maxFrameBytes,
+                connectTimeoutMillis,
+                writeBufferLowBytes,
+                writeBufferHighBytes,
+                maxConnections,
+                maxConnectionsPerAddress,
+                0,
+                0,
+                initialHandshakeTimeoutMillis,
+                false);
+    }
+
+    public NetworkTuning(
+            int maxFrameBytes,
+            int connectTimeoutMillis,
+            int writeBufferLowBytes,
+            int writeBufferHighBytes,
+            int maxConnections,
+            int maxConnectionsPerAddress,
+            int initialHandshakeTimeoutMillis,
+            boolean proxyProtocol) {
+        this(
+                maxFrameBytes,
+                connectTimeoutMillis,
+                writeBufferLowBytes,
+                writeBufferHighBytes,
+                maxConnections,
+                maxConnectionsPerAddress,
+                0,
+                0,
+                initialHandshakeTimeoutMillis,
+                proxyProtocol);
+    }
+
     public NetworkTuning {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
@@ -21,12 +67,25 @@ public record NetworkTuning(
         if (maxConnections <= 0 || maxConnectionsPerAddress <= 0) {
             throw new IllegalArgumentException("connection limits must be positive");
         }
+        if (maxNewConnectionsPerSecond < 0 || maxNewConnectionsPerAddressPerSecond < 0) {
+            throw new IllegalArgumentException("connection rate limits must be >= 0");
+        }
         if (initialHandshakeTimeoutMillis <= 0) {
             throw new IllegalArgumentException("initialHandshakeTimeoutMillis must be positive");
         }
     }
 
     public static NetworkTuning defaults() {
-        return new NetworkTuning(8 * 1024 * 1024, 5_000, 4 * 1024 * 1024, 16 * 1024 * 1024, 10_000, 200, 5_000);
+        return new NetworkTuning(
+                8 * 1024 * 1024,
+                5_000,
+                4 * 1024 * 1024,
+                16 * 1024 * 1024,
+                10_000,
+                200,
+                0,
+                0,
+                5_000,
+                false);
     }
 }

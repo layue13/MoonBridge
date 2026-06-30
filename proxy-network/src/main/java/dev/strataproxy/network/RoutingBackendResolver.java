@@ -20,8 +20,9 @@ public final class RoutingBackendResolver implements BackendResolver {
     @Override
     public Optional<RegisteredServer> resolve(MinecraftHandshake handshake, SocketAddress remoteAddress) {
         var inetRemote = remoteAddress instanceof InetSocketAddress inet ? inet : InetSocketAddress.createUnresolved("unknown", 0);
+        var route = normalizeRouteHost(handshake.requestedHost());
         var hostSpecific = new RoutingRequest(
-                handshake.requestedHost(),
+                route,
                 Set.of(),
                 Set.of(),
                 handshake.protocolVersion(),
@@ -43,5 +44,20 @@ public final class RoutingBackendResolver implements BackendResolver {
             case RoutingDecision.Selected selected -> Optional.of(selected.server());
             case RoutingDecision.Rejected ignored -> Optional.empty();
         };
+    }
+
+    static String normalizeRouteHost(String requestedHost) {
+        if (requestedHost == null || requestedHost.isBlank()) {
+            return "";
+        }
+        var host = requestedHost.strip();
+        var nul = host.indexOf('\0');
+        if (nul >= 0) {
+            host = host.substring(0, nul);
+        }
+        while (host.endsWith(".")) {
+            host = host.substring(0, host.length() - 1);
+        }
+        return host;
     }
 }

@@ -521,6 +521,8 @@ abstract class PerformanceProfilesAuditTask : DefaultTask() {
         val runnerText = runner.readText()
         require(runnerText.contains("evaluate_gates")) { "performance profile runner must evaluate gates" }
         require(runnerText.contains("/native-capabilities")) { "performance profile runner must capture native capabilities" }
+        require(runnerText.contains("--start-echo-backend")) { "performance profile runner must support managed echo backend" }
+        require(runnerText.contains("start_echo_backend")) { "performance profile runner must start echo backend" }
         val files = profileFiles.files.sortedBy { it.name }
         require(files.size >= 4) { "expected performance profiles and result template" }
         val parser = JsonSlurper()
@@ -532,6 +534,9 @@ abstract class PerformanceProfilesAuditTask : DefaultTask() {
                 require(parsed.containsKey("observations")) { "profile result template missing observations" }
                 val observations = parsed["observations"] as? Map<*, *>
                 require(observations?.containsKey("nativeRuntimeJson") == true) { "profile result template missing nativeRuntimeJson" }
+                require(parsed.containsKey("setup")) { "profile result template missing setup" }
+                val setup = parsed["setup"] as? Map<*, *>
+                require((setup?.get("echoBackend") as? Map<*, *>)?.containsKey("ready") == true) { "profile result template missing echoBackend readiness" }
                 continue
             }
             val id = parsed["id"] as? String

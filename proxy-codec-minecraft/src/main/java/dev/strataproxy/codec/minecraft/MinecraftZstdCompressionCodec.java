@@ -1,6 +1,7 @@
 package dev.strataproxy.codec.minecraft;
 
 import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdException;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 
@@ -86,9 +87,14 @@ public final class MinecraftZstdCompressionCodec {
             throw new MinecraftCodecException("zstd compressed packet bound exceeds maximum integer size");
         }
         var compressed = new byte[(int) maxCompressedBytes];
-        var compressedBytes = dictionary == null
-                ? Zstd.compress(compressed, source, level)
-                : Zstd.compress(compressed, source, dictionary, level);
+        long compressedBytes;
+        try {
+            compressedBytes = dictionary == null
+                    ? Zstd.compress(compressed, source, level)
+                    : Zstd.compress(compressed, source, dictionary, level);
+        } catch (ZstdException exception) {
+            throw new MinecraftCodecException("zstd compression failed", exception);
+        }
         if (Zstd.isError(compressedBytes)) {
             throw new MinecraftCodecException("zstd compression failed: " + Zstd.getErrorName(compressedBytes));
         }
@@ -104,9 +110,14 @@ public final class MinecraftZstdCompressionCodec {
     private ByteBuf decompress(ByteBufAllocator allocator, ByteBuf compressedFrame, int dataLength) {
         var compressed = toBytes(compressedFrame);
         var decompressed = new byte[dataLength];
-        var decompressedBytes = dictionary == null
-                ? Zstd.decompress(decompressed, compressed)
-                : Zstd.decompressUsingDict(decompressed, 0, compressed, 0, compressed.length, dictionary);
+        long decompressedBytes;
+        try {
+            decompressedBytes = dictionary == null
+                    ? Zstd.decompress(decompressed, compressed)
+                    : Zstd.decompressUsingDict(decompressed, 0, compressed, 0, compressed.length, dictionary);
+        } catch (ZstdException exception) {
+            throw new MinecraftCodecException("zstd decompression failed", exception);
+        }
         if (Zstd.isError(decompressedBytes)) {
             throw new MinecraftCodecException("zstd decompression failed: " + Zstd.getErrorName(decompressedBytes));
         }

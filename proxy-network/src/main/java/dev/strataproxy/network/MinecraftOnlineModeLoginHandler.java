@@ -131,7 +131,7 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
 
     private void verifySession(ChannelHandlerContext context, byte[] sharedSecret) {
         var serverHash = MinecraftEncryption.serverHash("", sharedSecret, keyPair.getPublic());
-        sessionVerifier.verify(username, serverHash, context.channel().remoteAddress())
+        sessionVerifier.verify(username, serverHash, ClientAddress.socketAddress(context.channel()))
                 .whenComplete((result, throwable) -> context.executor().execute(() -> {
                     if (throwable != null) {
                         context.fireExceptionCaught(throwable);

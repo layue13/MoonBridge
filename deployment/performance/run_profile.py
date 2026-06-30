@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,11 @@ def main() -> int:
     parser.add_argument("--host", default="", help="Override strataproxy-query --host arguments.")
     parser.add_argument("--port", default="", help="Override strataproxy-query --port arguments.")
     parser.add_argument("--timeout-seconds", type=int, default=0, help="Per-command timeout. 0 disables timeout.")
+    parser.add_argument("--start-echo-backend", action="store_true", help="Start a bundled slow-sink echo backend for latency profiles and stop it when the run ends.")
+    parser.add_argument("--echo-backend-host", default="127.0.0.1", help="Bind host for --start-echo-backend.")
+    parser.add_argument("--echo-backend-port", default="25565", help="Bind port for --start-echo-backend.")
+    parser.add_argument("--echo-backend-duration-ms", default="900000", help="Maximum echo backend lifetime in milliseconds.")
+    parser.add_argument("--echo-backend-start-timeout-seconds", type=int, default=10, help="Seconds to wait for the echo backend port to accept connections.")
     parser.add_argument("--dry-run", action="store_true", help="Write the planned result skeleton without executing commands.")
     args = parser.parse_args()
 
@@ -51,8 +57,26 @@ def main() -> int:
     }
     commands = []
     started = time.monotonic()
-    for command in profile.get("commands", []):
-        commands.append(run_profile_command(command, tool_paths, args))
+    managed_processes = []
+    setup = {
+        "echoBackend": {
+            "enabled": False,
+            "argv": [],
+            "host": "",
+            "port": 0,
+            "ready": False,
+        }
+    }
+    try:
+        if args.start_echo_backend:
+            echo = start_echo_backend(tool_paths["strataproxy-query"], args)
+            setup["echoBackend"] = echo["metadata"]
+            if echo.get("process") is not None:
+                managed_processes.append(echo["process"])
+        for command in profile.get("commands", []):
+            commands.append(run_profile_command(command, tool_paths, args))
+    finally:
+        stop_processes(managed_processes)
 
     observations = collect_observations(args.admin_url)
     gate_results = [] if args.dry_run else evaluate_gates(profile.get("gates", {}), commands, observations)
@@ -70,6 +94,7 @@ def main() -> int:
             "nativeTransport": native_transport(observations.get("overviewJson", {})),
             "configSha256": sha256_file(Path(args.config)) if args.config else "",
         },
+        "setup": setup,
         "profile": profile,
         "commands": commands,
         "observations": observations,
@@ -150,6 +175,89 @@ def run_profile_command(command: dict[str, Any], tool_paths: dict[str, str], arg
         "stderr": completed.stderr.strip(),
         "elapsedMillis": int((time.monotonic() - started) * 1000),
     }
+
+
+def start_echo_backend(query_bin: str, args: argparse.Namespace) -> dict[str, Any]:
+    argv = [
+        query_bin,
+        "slow-sink",
+        "--bind-host", args.echo_backend_host,
+        "--port", args.echo_backend_port,
+        "--duration-ms", args.echo_backend_duration_ms,
+        "--read-chunk-bytes", "8192",
+        "--read-delay-ms", "0",
+        "--echo",
+    ]
+    metadata = {
+        "enabled": True,
+        "argv": argv,
+        "host": args.echo_backend_host,
+        "port": int(args.echo_backend_port),
+        "ready": False,
+    }
+    if args.dry_run:
+        metadata["ready"] = True
+        return {"metadata": metadata, "process": None}
+    popen_kwargs = {
+        "text": True,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    process = subprocess.Popen(
+        argv,
+        **popen_kwargs,
+    )
+    try:
+        wait_for_tcp(args.echo_backend_host, int(args.echo_backend_port), args.echo_backend_start_timeout_seconds)
+        metadata["ready"] = True
+        return {"metadata": metadata, "process": process}
+    except Exception as exception:
+        stop_processes([process])
+        metadata["error"] = str(exception)
+        raise SystemExit(f"echo backend failed to start: {exception}") from exception
+
+
+def wait_for_tcp(host: str, port: int, timeout_seconds: int) -> None:
+    import socket
+
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return
+        except OSError as exception:
+            last_error = exception
+            time.sleep(0.1)
+    raise TimeoutError(f"{host}:{port} did not accept TCP connections within {timeout_seconds}s: {last_error}")
+
+
+def stop_processes(processes: list[subprocess.Popen[str]]) -> None:
+    for process in reversed(processes):
+        if process.poll() is not None:
+            continue
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
 
 
 def rewrite_args(values: list[str], args: argparse.Namespace) -> list[str]:

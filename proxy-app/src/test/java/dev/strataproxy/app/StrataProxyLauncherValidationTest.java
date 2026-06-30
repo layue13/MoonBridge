@@ -257,6 +257,8 @@ final class StrataProxyLauncherValidationTest {
                       enabled: false
                     observability:
                       flushIntervalSeconds: 1
+                    status:
+                      enabled: false
                     servers:
                       - name: "smoke-backend"
                         address: "127.0.0.1:%d"
@@ -286,6 +288,68 @@ final class StrataProxyLauncherValidationTest {
             backendFuture.get(5, TimeUnit.SECONDS);
         } finally {
             backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    void startsRuntimeAndRespondsToMinecraftStatusWithoutBackend(@TempDir Path tempDir) throws Exception {
+        var proxyPort = freePort();
+        Files.write(tempDir.resolve("favicon.png"), new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47});
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                network:
+                  bind: "127.0.0.1:%d"
+                  workerThreads: 1
+                  nativeTransport: false
+                registry:
+                  staticServers: false
+                  persistenceEnabled: false
+                  healthCheckEnabled: false
+                admin:
+                  enabled: false
+                observability:
+                  flushIntervalSeconds: 1
+                status:
+                  enabled: true
+                  motd: "Maintenance window"
+                  protocolName: "StrataProxy Ready"
+                  protocolVersion: 763
+                  maxPlayers: 500
+                  faviconPath: "favicon.png"
+                  samplePlayers:
+                    - name: "Survival"
+                      id: "00000000-0000-0000-0000-000000000001"
+                    - name: "Modded"
+                      id: "00000000-0000-0000-0000-000000000002"
+                servers: []
+                """.formatted(proxyPort));
+        var loaded = new ConfigLoader().load(config);
+
+        try (var runtime = StrataProxyLauncher.startRuntime(
+                loaded,
+                config,
+                new PrintStream(ByteArrayOutputStream.nullOutputStream(), true, StandardCharsets.UTF_8),
+                false)) {
+            try (var client = new Socket()) {
+                client.connect(runtime.bindAddress(), 5_000);
+                client.setSoTimeout(5_000);
+                client.getOutputStream().write(statusHandshake(763, "play.example.net", proxyPort));
+                client.getOutputStream().write(statusRequest());
+                client.getOutputStream().flush();
+
+                var response = readStatusResponse(client.getInputStream());
+                assertTrue(response.contains("\"name\":\"StrataProxy Ready\""));
+                assertTrue(response.contains("\"protocol\":763"));
+                assertTrue(response.contains("\"online\":0"));
+                assertTrue(response.contains("\"max\":500"));
+                assertTrue(response.contains("Maintenance window"));
+                assertTrue(response.contains("\"favicon\":\"data:image/png;base64,iVBORw==\""));
+                assertTrue(response.contains("\"sample\":[{\"name\":\"Survival\",\"id\":\"00000000-0000-0000-0000-000000000001\"},{\"name\":\"Modded\",\"id\":\"00000000-0000-0000-0000-000000000002\"}]"));
+
+                client.getOutputStream().write(pingRequest(123456789L));
+                client.getOutputStream().flush();
+                assertEquals(123456789L, readPong(client.getInputStream()));
+            }
         }
     }
 
@@ -452,6 +516,15 @@ final class StrataProxyLauncherValidationTest {
         return frame(payload.toByteArray());
     }
 
+    private static byte[] pingRequest(long value) {
+        var payload = new ByteArrayOutputStream();
+        writeVarInt(payload, 1);
+        for (var shift = 56; shift >= 0; shift -= 8) {
+            payload.write((int) ((value >>> shift) & 0xFF));
+        }
+        return frame(payload.toByteArray());
+    }
+
     private static byte[] statusResponse(String json) {
         var payload = new ByteArrayOutputStream();
         writeVarInt(payload, 0);
@@ -466,6 +539,14 @@ final class StrataProxyLauncherValidationTest {
         assertEquals(0, readVarInt(packet));
         var jsonBytes = packet.readNBytes(readVarInt(packet));
         return new String(jsonBytes, StandardCharsets.UTF_8);
+    }
+
+    private static long readPong(java.io.InputStream input) throws Exception {
+        var data = new DataInputStream(input);
+        var frame = data.readNBytes(readVarInt(data));
+        var packet = new DataInputStream(new java.io.ByteArrayInputStream(frame));
+        assertEquals(1, readVarInt(packet));
+        return packet.readLong();
     }
 
     private static byte[] frame(byte[] payload) {

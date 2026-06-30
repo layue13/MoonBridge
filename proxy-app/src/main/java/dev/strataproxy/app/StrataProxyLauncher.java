@@ -13,6 +13,7 @@ import dev.strataproxy.bootstrap.ProxyConfig;
 import dev.strataproxy.compression.CompressionStrategies;
 import dev.strataproxy.network.MinecraftForwardingRuntime;
 import dev.strataproxy.network.MinecraftAuthRuntime;
+import dev.strataproxy.network.MinecraftStatusRuntime;
 import dev.strataproxy.network.NettyProxyNetworkServer;
 import dev.strataproxy.network.NetworkTuning;
 import dev.strataproxy.network.RoutingBackendResolver;
@@ -178,6 +179,9 @@ public final class StrataProxyLauncher {
                     + " rsaKeyBits=" + config.auth().rsaKeyBits()
                     + " sessionVerificationTimeout=" + config.auth().sessionVerificationTimeout());
             out.println("StrataProxy forwarding: mode=" + config.forwarding().mode());
+            out.println("StrataProxy status: enabled=" + config.status().enabled()
+                    + " protocol=" + config.status().protocolName() + "/" + config.status().protocolVersion()
+                    + " maxPlayers=" + config.status().maxPlayers());
             out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
                     + " os=" + nativeDecision.capabilities().os()
                     + " arch=" + nativeDecision.capabilities().arch()
@@ -187,16 +191,21 @@ public final class StrataProxyLauncher {
                     + " preferNativeTransport=" + nativeDecision.preferNativeTransport()
                     + " requireNativeTransport=" + nativeDecision.requireNativeTransport()
                     + " features=" + nativeDecision.enabledFeatures().stream().map(NativeFeature::label).sorted().toList());
-            out.println("StrataProxy starting on " + config.bindAddress() + " with " + config.resolvedWorkerThreads() + " worker threads");
+            out.println("StrataProxy starting on " + config.bindAddress() + " with " + config.resolvedWorkerThreads()
+                    + " worker threads; proxyProtocol=" + config.network().proxyProtocol()
+                    + " maxNewConnectionsPerSecond=" + config.network().maxNewConnectionsPerSecond()
+                    + " maxNewConnectionsPerAddressPerSecond=" + config.network().maxNewConnectionsPerAddressPerSecond());
 
             if (config.registry().healthCheckEnabled()) {
                 var healthChecker = new TcpServerHealthChecker(
                         registry,
                         config.registry().healthCheckInterval(),
-                        config.registry().healthCheckTimeout());
+                        config.registry().healthCheckTimeout(),
+                        config.registry().healthCheckMode());
                 healthChecker.start();
                 started.add(healthChecker);
-                out.println("StrataProxy health checks every " + config.registry().healthCheckInterval());
+                out.println("StrataProxy health checks every " + config.registry().healthCheckInterval()
+                        + " using " + config.registry().healthCheckMode());
             }
 
             if (config.admin().enabled()) {
@@ -234,7 +243,10 @@ public final class StrataProxyLauncher {
                             config.network().writeBufferHighBytes(),
                             config.network().maxConnections(),
                             config.network().maxConnectionsPerAddress(),
-                            config.network().initialHandshakeTimeoutMillis()),
+                            config.network().maxNewConnectionsPerSecond(),
+                            config.network().maxNewConnectionsPerAddressPerSecond(),
+                            config.network().initialHandshakeTimeoutMillis(),
+                            config.network().proxyProtocol()),
                     config.nativeTransport() && nativeDecision.preferNativeTransport(),
                     compressionStrategy,
                     config.compression().minThreshold(),
@@ -243,6 +255,7 @@ public final class StrataProxyLauncher {
                     customPayloadPolicy,
                     authRuntime(config.auth()),
                     forwardingRuntime(config.forwarding()),
+                    statusRuntime(config.status(), metrics),
                     config.compression().rewriteEnabled(),
                     config.compression().rewriteMaxEventLoopDelayMillis());
             started.add(server);
@@ -365,7 +378,8 @@ public final class StrataProxyLauncher {
                         : resolveConfigRelativePath(configPath, registry.persistencePath()).toString(),
                 registry.healthCheckEnabled(),
                 registry.healthCheckInterval(),
-                registry.healthCheckTimeout());
+                registry.healthCheckTimeout(),
+                registry.healthCheckMode());
 
         var admin = config.admin();
         var tls = admin.tls();
@@ -397,6 +411,7 @@ public final class StrataProxyLauncher {
                 config.packetAnalysis(),
                 config.observability(),
                 resolvedAdmin,
+                config.status(),
                 config.auth(),
                 config.forwarding(),
                 config.nativeRuntime());
@@ -431,6 +446,21 @@ public final class StrataProxyLauncher {
     private static MinecraftForwardingRuntime forwardingRuntime(ProxyConfig.ForwardingConfig config) {
         var forwarding = config == null ? ProxyConfig.ForwardingConfig.defaults() : config;
         return new MinecraftForwardingRuntime(forwarding.mode(), forwarding.secret());
+    }
+
+    private static MinecraftStatusRuntime statusRuntime(ProxyConfig.StatusConfig config, ProxyMetrics metrics) {
+        var status = config == null ? ProxyConfig.StatusConfig.defaults() : config;
+        return new MinecraftStatusRuntime(
+                status.enabled(),
+                status.motd(),
+                status.protocolName(),
+                status.protocolVersion(),
+                status.maxPlayers(),
+                status.favicon(),
+                status.samplePlayers().stream()
+                        .map(player -> new MinecraftStatusRuntime.SamplePlayer(player.name(), player.id()))
+                        .toList(),
+                () -> metrics.snapshot().playerSessions().size());
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

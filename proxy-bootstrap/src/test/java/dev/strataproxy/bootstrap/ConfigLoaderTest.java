@@ -37,6 +37,26 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesProxyProtocolFlag() throws Exception {
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                network:
+                  proxyProtocol: true
+                  maxNewConnectionsPerSecond: 1500
+                  maxNewConnectionsPerAddressPerSecond: 30
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertTrue(loaded.proxy().network().proxyProtocol());
+        assertEquals(1500, loaded.proxy().network().maxNewConnectionsPerSecond());
+        assertEquals(30, loaded.proxy().network().maxNewConnectionsPerAddressPerSecond());
+    }
+
+    @Test
     void parsesPacketAnalysisThresholds() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """
@@ -63,6 +83,22 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesRegistryHealthCheckMode() throws Exception {
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                registry:
+                  healthCheckMode: "minecraft-status"
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertEquals("minecraft-status", loaded.proxy().registry().healthCheckMode());
+    }
+
+    @Test
     void parsesCompressionRewriteFlag() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """
@@ -85,6 +121,33 @@ final class ConfigLoaderTest {
         assertEquals(1024, loaded.proxy().compression().maxThreshold());
         assertTrue(loaded.proxy().compression().rewriteEnabled());
         assertEquals(7, loaded.proxy().compression().rewriteMaxEventLoopDelayMillis());
+    }
+
+    @Test
+    void parsesStatusFaviconPathAndSamplePlayers() throws Exception {
+        var favicon = tempDir.resolve("favicon.png");
+        Files.write(favicon, new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47});
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                status:
+                  motd: "Maintenance"
+                  faviconPath: "favicon.png"
+                  samplePlayers:
+                    - name: "Survival"
+                      id: "00000000-0000-0000-0000-000000000001"
+                    - name: "Modded"
+                      id: "00000000-0000-0000-0000-000000000002"
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertEquals("data:image/png;base64,iVBORw==", loaded.proxy().status().favicon());
+        assertEquals(2, loaded.proxy().status().samplePlayers().size());
+        assertEquals("Survival", loaded.proxy().status().samplePlayers().getFirst().name());
+        assertEquals("00000000-0000-0000-0000-000000000001", loaded.proxy().status().samplePlayers().getFirst().id());
     }
 
     @Test

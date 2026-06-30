@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 
 public final class ProxyMetrics {
     private static final int RECENT_PACKET_ANOMALY_CAPACITY = 256;
+    private static final int RECENT_CUSTOM_PAYLOAD_CAPACITY = 256;
 
     private final LongAdder acceptedConnections = new LongAdder();
     private final AtomicLong activeConnections = new AtomicLong();
@@ -31,6 +32,9 @@ public final class ProxyMetrics {
     private final AtomicLong packetAnomalySequence = new AtomicLong();
     private final AtomicReferenceArray<PacketAnomalySample> recentPacketAnomalies =
             new AtomicReferenceArray<>(RECENT_PACKET_ANOMALY_CAPACITY);
+    private final AtomicLong customPayloadSequence = new AtomicLong();
+    private final AtomicReferenceArray<CustomPayloadSample> recentCustomPayloads =
+            new AtomicReferenceArray<>(RECENT_CUSTOM_PAYLOAD_CAPACITY);
     private final boolean packetAnomalySampling;
     private final ConcurrentHashMap<String, LongAdder> packetAnomalies = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ServerTrafficCounters> serverTraffic = new ConcurrentHashMap<>();
@@ -206,6 +210,20 @@ public final class ProxyMetrics {
             String channel,
             long payloadBytes,
             long compressedBytes) {
+        customPayload(server, direction, kind, channel, payloadBytes, compressedBytes, "", "", "CONFIGURATION", -1);
+    }
+
+    public void customPayload(
+            String server,
+            CompressionDirection direction,
+            String kind,
+            String channel,
+            long payloadBytes,
+            long compressedBytes,
+            String player,
+            String remoteAddress,
+            String protocolState,
+            int packetId) {
         if (server == null || server.isBlank()) {
             throw new IllegalArgumentException("server must not be blank");
         }
@@ -219,9 +237,25 @@ public final class ProxyMetrics {
             throw new IllegalArgumentException("custom payload byte values must be non-negative");
         }
         var normalizedKind = sanitize(kind.trim());
+        var normalizedChannel = normalizedChannel(normalizedKind, channel);
         customPayloads.computeIfAbsent(
-                new CustomPayloadKey(server, direction, normalizedKind, normalizedChannel(normalizedKind, channel)),
+                new CustomPayloadKey(server, direction, normalizedKind, normalizedChannel),
                 ignored -> new CustomPayloadCounters()).add(payloadBytes, compressedBytes);
+        var sequence = customPayloadSequence.incrementAndGet();
+        var index = (int) ((sequence - 1) % RECENT_CUSTOM_PAYLOAD_CAPACITY);
+        recentCustomPayloads.set(index, new CustomPayloadSample(
+                sequence,
+                sanitize(server),
+                direction,
+                normalizedKind,
+                normalizedChannel,
+                Math.max(0, payloadBytes),
+                Math.max(0, compressedBytes),
+                sanitize(player),
+                sanitize(remoteAddress),
+                sanitize(protocolState),
+                packetId,
+                Instant.now()));
     }
 
     public void relayBackpressure(String server, CompressionDirection direction, long bytesBeforeWritable) {
@@ -479,6 +513,7 @@ public final class ProxyMetrics {
                         .collect(Collectors.toUnmodifiableMap(
                                 Map.Entry::getKey,
                                 entry -> entry.getValue().snapshot())),
+                recentCustomPayloadSamples(),
                 relayBackpressure.entrySet().stream()
                         .collect(Collectors.toUnmodifiableMap(
                                 Map.Entry::getKey,
@@ -529,6 +564,18 @@ public final class ProxyMetrics {
             }
         }
         samples.sort(Comparator.comparingLong(PacketAnomalySample::sequence).reversed());
+        return List.copyOf(samples);
+    }
+
+    private List<CustomPayloadSample> recentCustomPayloadSamples() {
+        var samples = new ArrayList<CustomPayloadSample>(RECENT_CUSTOM_PAYLOAD_CAPACITY);
+        for (var i = 0; i < recentCustomPayloads.length(); i++) {
+            var sample = recentCustomPayloads.get(i);
+            if (sample != null) {
+                samples.add(sample);
+            }
+        }
+        samples.sort(Comparator.comparingLong(CustomPayloadSample::sequence).reversed());
         return List.copyOf(samples);
     }
 
@@ -681,6 +728,21 @@ public final class ProxyMetrics {
             long maxCompressedBytes,
             Instant firstSeen,
             Instant lastSeen) {
+    }
+
+    public record CustomPayloadSample(
+            long sequence,
+            String server,
+            CompressionDirection direction,
+            String kind,
+            String channel,
+            long payloadBytes,
+            long compressedBytes,
+            String player,
+            String remoteAddress,
+            String protocolState,
+            int packetId,
+            Instant timestamp) {
     }
 
     private static final class RelayBackpressureCounters {
@@ -919,6 +981,7 @@ public final class ProxyMetrics {
             Map<String, PlayerSession> playerSessions,
             Map<PacketTrafficKey, PacketTraffic> packetTraffic,
             Map<CustomPayloadKey, CustomPayloadTraffic> customPayloads,
+            List<CustomPayloadSample> recentCustomPayloads,
             Map<RelayBackpressureKey, RelayBackpressure> relayBackpressure,
             CompressionAudit compression,
             Map<String, CompressionAudit> serverCompression,

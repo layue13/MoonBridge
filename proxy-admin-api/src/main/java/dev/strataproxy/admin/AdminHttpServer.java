@@ -429,7 +429,10 @@ public final class AdminHttpServer implements AutoCloseable {
         var totalPackets = snapshot.customPayloads().values().stream().mapToLong(ProxyMetrics.CustomPayloadTraffic::packets).sum();
         var totalPayloadBytes = snapshot.customPayloads().values().stream().mapToLong(ProxyMetrics.CustomPayloadTraffic::payloadBytes).sum();
         var totalCompressedBytes = snapshot.customPayloads().values().stream().mapToLong(ProxyMetrics.CustomPayloadTraffic::compressedBytes).sum();
-        return new CustomPayloadReport(totalPackets, totalPayloadBytes, totalCompressedBytes, rows);
+        var samples = snapshot.recentCustomPayloads().stream()
+                .map(CustomPayloadSampleView::from)
+                .toList();
+        return new CustomPayloadReport(totalPackets, totalPayloadBytes, totalCompressedBytes, rows, samples);
     }
 
     private CompressionReport compressionReport(ProxyMetrics.Snapshot snapshot) {
@@ -1419,7 +1422,8 @@ public final class AdminHttpServer implements AutoCloseable {
             long totalPackets,
             long totalPayloadBytes,
             long totalCompressedBytes,
-            List<CustomPayloadView> top) {
+            List<CustomPayloadView> top,
+            List<CustomPayloadSampleView> recentSamples) {
     }
 
     public record CustomPayloadView(
@@ -1447,6 +1451,36 @@ public final class AdminHttpServer implements AutoCloseable {
                     traffic.maxCompressedBytes(),
                     traffic.firstSeen() == null ? "" : traffic.firstSeen().toString(),
                     traffic.lastSeen() == null ? "" : traffic.lastSeen().toString());
+        }
+    }
+
+    public record CustomPayloadSampleView(
+            long sequence,
+            String server,
+            String direction,
+            String kind,
+            String channel,
+            long payloadBytes,
+            long compressedBytes,
+            String player,
+            String remoteAddress,
+            String protocolState,
+            int packetId,
+            String timestamp) {
+        static CustomPayloadSampleView from(ProxyMetrics.CustomPayloadSample sample) {
+            return new CustomPayloadSampleView(
+                    sample.sequence(),
+                    sample.server(),
+                    sample.direction().label(),
+                    sample.kind(),
+                    sample.channel(),
+                    sample.payloadBytes(),
+                    sample.compressedBytes(),
+                    sample.player(),
+                    sample.remoteAddress(),
+                    sample.protocolState(),
+                    sample.packetId(),
+                    sample.timestamp().toString());
         }
     }
 

@@ -116,6 +116,53 @@ final class RelayTrafficMetricsTest {
     }
 
     @Test
+    void recordsBackendLoginPluginRequestPayloadDiagnosticsWithoutChangingForwardedBytes() {
+        var metrics = new ProxyMetrics();
+        var frontend = new EmbeddedChannel();
+        var identity = new RelaySessionIdentity("127.0.0.1:50000");
+        identity.playerName("Steve");
+        var backend = new EmbeddedChannel(new BackendRelayHandler(
+                frontend,
+                metrics,
+                "survival-1",
+                4096,
+                new MinecraftCompressionAuditState(4096),
+                CompressionRuntime.defaults(),
+                identity));
+        var frame = loginPluginRequestFrame(0x04, 7, "fml:handshake", 96);
+
+        backend.writeInbound(frame.retainedDuplicate());
+
+        var forwarded = (ByteBuf) frontend.readOutbound();
+        try {
+            assertEquals(frame.readableBytes(), forwarded.readableBytes());
+            var snapshot = metrics.snapshot();
+            var payload = snapshot.customPayloads().get(new ProxyMetrics.CustomPayloadKey(
+                    "survival-1",
+                    ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND,
+                    "FORGE_HANDSHAKE",
+                    "fml:handshake"));
+            assertEquals(1, payload.packets());
+            assertEquals(96, payload.payloadBytes());
+            assertTrue(snapshot.recentCustomPayloads().stream()
+                    .anyMatch(sample -> sample.server().equals("survival-1")
+                            && sample.direction() == ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND
+                            && sample.kind().equals("FORGE_HANDSHAKE")
+                            && sample.channel().equals("fml:handshake")
+                            && sample.protocolState().equals("LOGIN")
+                            && sample.packetId() == 0x04
+                            && sample.player().equals("Steve")
+                            && sample.remoteAddress().equals("127.0.0.1:50000")));
+        } finally {
+            release(forwarded);
+            frame.release();
+        }
+
+        backend.finishAndReleaseAll();
+        frontend.finishAndReleaseAll();
+    }
+
+    @Test
     void capturesBackendPayloadPrefixesWithConnectionIdentity() {
         var metrics = new ProxyMetrics();
         metrics.startPayloadCapture(
@@ -1053,6 +1100,22 @@ final class RelayTrafficMetricsTest {
         payload.writeBytes(channelBytes);
         payload.writeZero(payloadBytes);
         return payload;
+    }
+
+    private static ByteBuf loginPluginRequestFrame(int packetId, int messageId, String channel, int payloadBytes) {
+        var payload = Unpooled.buffer();
+        MinecraftVarInts.write(payload, packetId);
+        MinecraftVarInts.write(payload, messageId);
+        var channelBytes = channel.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        MinecraftVarInts.write(payload, channelBytes.length);
+        payload.writeBytes(channelBytes);
+        payload.writeZero(payloadBytes);
+
+        var frame = Unpooled.buffer();
+        MinecraftVarInts.write(frame, payload.readableBytes());
+        frame.writeBytes(payload);
+        payload.release();
+        return frame;
     }
 
     private static final class UnpooledByteBufAllocatorHolder {

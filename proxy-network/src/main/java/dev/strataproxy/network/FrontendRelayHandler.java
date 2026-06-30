@@ -407,7 +407,11 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 classification.kind().name(),
                 classification.channel(),
                 classification.payloadBytes(),
-                Math.max(0, compressedSize));
+                Math.max(0, compressedSize),
+                identity.playerName(),
+                identity.remoteAddress(),
+                "CONFIGURATION",
+                classification.packetId());
     }
 
     private void recordBackpressureIfNeeded(Channel target, CompressionDirection direction) {
@@ -434,8 +438,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private static String remoteAddress(ChannelHandlerContext context) {
-        var address = context.channel().remoteAddress();
-        return address == null ? "" : address.toString();
+        return ClientAddress.text(context.channel());
     }
 
     private static double ratio(MinecraftCompressedFrameAuditSampler.CompressionFrameSample sample) {

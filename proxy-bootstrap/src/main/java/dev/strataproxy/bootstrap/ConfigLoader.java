@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -32,7 +33,7 @@ public final class ConfigLoader {
         }
         var yaml = expandEnvironment(Files.readString(path), environment);
         var file = mapper.readValue(yaml, ConfigFile.class);
-        return file.toLoadedConfig();
+        return file.toLoadedConfig(path.toAbsolutePath().getParent());
     }
 
     public record LoadedProxyConfig(ProxyConfig proxy, List<ServerDescriptor> servers) {
@@ -62,14 +63,16 @@ public final class ConfigLoader {
         public PacketAnalysisFile packetAnalysis = new PacketAnalysisFile();
         public ObservabilityFile observability = new ObservabilityFile();
         public AdminFile admin = new AdminFile();
+        public StatusFile status = new StatusFile();
         public AuthFile auth = new AuthFile();
         public ForwardingFile forwarding = new ForwardingFile();
         @JsonProperty("native")
         public NativeFile nativeRuntime = new NativeFile();
         public List<ServerFile> servers = List.of();
 
-        LoadedProxyConfig toLoadedConfig() {
+        LoadedProxyConfig toLoadedConfig(Path configDirectory) {
             var nativeFile = nativeRuntime == null ? new NativeFile() : nativeRuntime;
+            var statusFile = status == null ? new StatusFile() : status;
             var bind = parseAddress(network.bind, 25577);
             var proxy = new ProxyConfig(
                     bind,
@@ -82,14 +85,18 @@ public final class ConfigLoader {
                             parseBytes(network.writeBufferHigh, 16 * 1024 * 1024),
                             network.maxConnections,
                             network.maxConnectionsPerAddress,
-                            network.initialHandshakeTimeoutMillis),
+                            network.maxNewConnectionsPerSecond,
+                            network.maxNewConnectionsPerAddressPerSecond,
+                            network.initialHandshakeTimeoutMillis,
+                            network.proxyProtocol),
                     new ProxyConfig.RegistryConfig(
                             registry.staticServers,
                             registry.persistenceEnabled,
                             registry.persistencePath,
                             registry.healthCheckEnabled,
                             java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckInterval, 5_000)),
-                            java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckTimeout, 2_000))),
+                            java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckTimeout, 2_000)),
+                            registry.healthCheckMode),
                     new ProxyConfig.CompressionConfig(
                             compression.mode,
                             compression.minThreshold,
@@ -120,6 +127,16 @@ public final class ConfigLoader {
                                     admin.tls.trustStorePassword,
                                     admin.tls.trustStoreType,
                                     admin.tls.clientAuth)),
+                    new ProxyConfig.StatusConfig(
+                            statusFile.enabled,
+                            statusFile.motd,
+                            statusFile.protocolName,
+                            statusFile.protocolVersion,
+                            statusFile.maxPlayers,
+                            resolveStatusFavicon(statusFile, configDirectory),
+                            statusSamplePlayers(statusFile).stream()
+                                    .map(player -> new ProxyConfig.StatusSamplePlayer(player.name, player.id))
+                                    .toList()),
                     new ProxyConfig.AuthConfig(
                             auth.onlineMode,
                             auth.rsaKeyBits,
@@ -143,6 +160,28 @@ public final class ConfigLoader {
                     : List.<ServerDescriptor>of();
             return new LoadedProxyConfig(proxy, descriptors);
         }
+
+        private static List<StatusSamplePlayerFile> statusSamplePlayers(StatusFile status) {
+            return status.samplePlayers == null ? List.of() : status.samplePlayers;
+        }
+
+        private static String resolveStatusFavicon(StatusFile status, Path configDirectory) {
+            if (status.favicon != null && !status.favicon.isBlank()) {
+                return status.favicon;
+            }
+            if (status.faviconPath == null || status.faviconPath.isBlank()) {
+                return "";
+            }
+            var path = Path.of(status.faviconPath);
+            if (!path.isAbsolute() && configDirectory != null) {
+                path = configDirectory.resolve(path);
+            }
+            try {
+                return "data:image/png;base64," + Base64.getEncoder().encodeToString(Files.readAllBytes(path));
+            } catch (IOException exception) {
+                throw new IllegalArgumentException("failed to read status.faviconPath: " + path, exception);
+            }
+        }
     }
 
     public static final class NetworkFile {
@@ -155,7 +194,10 @@ public final class ConfigLoader {
         public String writeBufferHigh = "16mb";
         public int maxConnections = 10_000;
         public int maxConnectionsPerAddress = 200;
+        public int maxNewConnectionsPerSecond = 0;
+        public int maxNewConnectionsPerAddressPerSecond = 0;
         public int initialHandshakeTimeoutMillis = 5_000;
+        public boolean proxyProtocol = false;
     }
 
     public static final class RegistryFile {
@@ -165,6 +207,7 @@ public final class ConfigLoader {
         public boolean healthCheckEnabled = true;
         public String healthCheckInterval = "5s";
         public String healthCheckTimeout = "2s";
+        public String healthCheckMode = "tcp";
     }
 
     public static final class CompressionFile {
@@ -211,6 +254,22 @@ public final class ConfigLoader {
         public int verifyTokenBytes = 4;
         public boolean sessionVerification = false;
         public String sessionVerificationTimeout = "5s";
+    }
+
+    public static final class StatusFile {
+        public boolean enabled = true;
+        public String motd = "StrataProxy";
+        public String protocolName = "StrataProxy";
+        public int protocolVersion = -1;
+        public int maxPlayers = 1000;
+        public String favicon = "";
+        public String faviconPath = "";
+        public List<StatusSamplePlayerFile> samplePlayers = List.of();
+    }
+
+    public static final class StatusSamplePlayerFile {
+        public String name = "";
+        public String id = "00000000-0000-0000-0000-000000000000";
     }
 
     public static final class ForwardingFile {
