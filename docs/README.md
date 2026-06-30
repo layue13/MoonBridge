@@ -1,24 +1,38 @@
 # StrataProxy Documentation
 
-This directory contains operator-facing documentation. Start with the operations manual when deploying or maintaining a StrataProxy instance.
-
-## Recommended Reading Order
-
-1. [Operations Manual](operations-manual.md): end-to-end setup, configuration, startup, Admin CLI, routing, observability, deployment, and troubleshooting.
-2. [Zstd Compression Tuning](compression-zstd.md): optional modded-client Zstd codec, sample collection, dictionary training, and rollout guidance.
-3. [Deployment Notes](../deployment/README.md): systemd, container, JVM sizing, and production runtime assets.
-4. [Performance Profiles](../deployment/performance/README.md): repeatable smoke and acceptance profiles.
-5. [Prometheus Assets](../deployment/observability/prometheus/README.md): alert rules and Prometheus integration.
-6. [Grafana Assets](../deployment/observability/grafana/README.md): dashboard packaging notes.
+This is the user-facing documentation index. If you have used BungeeCord, Waterfall, or Velocity before, start with the short path below: install, edit YAML, start the proxy, then manage servers with the Admin CLI.
 
 Chinese documentation is under [zh-CN](zh-CN/README.md).
 
-## Document Purpose
+## Start Here
 
-| Document | Audience | Purpose |
-| --- | --- | --- |
-| `README.md` at repository root | Developers and reviewers | Project overview, module list, key feature notes, verification evidence |
-| `docs/operations-manual.md` | Operators | How to configure, start, operate, observe, and troubleshoot the proxy |
-| `docs/compression-zstd.md` | Operators tuning modded traffic | How to collect samples, train dictionaries, and evaluate Zstd |
-| `deployment/README.md` | Production deployers | Host/container/service setup and JVM sizing |
-| `deployment/performance/README.md` | Performance testers | How to run and record acceptance evidence |
+1. [Quick Start](quick-start.md): build the proxy, edit the first backend, start it, and check that it answers.
+2. [Configuration Guide](configuration.md): every important YAML section explained with copyable examples.
+3. [Command Reference](commands.md): Admin CLI and query/load-test commands grouped by task.
+4. [Zstd Compression Tuning](compression-zstd.md): optional modded-client Zstd codec, sample collection, dictionary training, and rollout guidance.
+5. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
+
+## Common Tasks
+
+| I want to... | Read |
+| --- | --- |
+| Run one proxy in front of one backend | [Quick Start](quick-start.md) |
+| Add or remove backend servers while the proxy is running | [Command Reference: Backend Servers](commands.md#backend-servers) |
+| Understand what each config key does | [Configuration Guide](configuration.md) |
+| Use Velocity or Bungee-style IP forwarding | [Configuration Guide: Forwarding](configuration.md#forwarding) |
+| Expose the Admin API safely | [Configuration Guide: Admin API](configuration.md#admin-api) |
+| Tune compression for modded traffic | [Zstd Compression Tuning](compression-zstd.md) |
+| Deploy with systemd or a container | [Deployment Notes](../deployment/README.md) |
+| Run smoke or acceptance load checks | [Performance Profiles](../deployment/performance/README.md) |
+| Add Prometheus or Grafana | [Prometheus](../deployment/observability/prometheus/README.md) and [Grafana](../deployment/observability/grafana/README.md) |
+
+## Document Map
+
+| Document | Purpose |
+| --- | --- |
+| [Quick Start](quick-start.md) | First successful local or staging run |
+| [Configuration Guide](configuration.md) | Practical YAML configuration reference |
+| [Command Reference](commands.md) | Operator command cookbook |
+| [Operations Manual](operations-manual.md) | Complete production runbook |
+| [Zstd Compression Tuning](compression-zstd.md) | Minecraft-specific Zstd and dictionary workflow |
+| [Deployment Notes](../deployment/README.md) | Linux service, container, JVM, and release bundle notes |

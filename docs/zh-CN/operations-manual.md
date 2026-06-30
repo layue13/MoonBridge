@@ -2,6 +2,8 @@
 
 这份说明书面向 StrataProxy 的部署、配置、运行、观测和故障处理。
 
+如果是第一次部署，先看 [快速开始](quick-start.md)，再看 [配置说明](configuration.md) 和 [命令速查](commands.md)。本文是完整生产运维手册。
+
 StrataProxy 是 Java 25 Minecraft 代理，主要面向大型模组服网络。路由依据是后端能力、标签、协议范围、健康状态、负载、drain 状态和 metadata。它不是 BungeeCord 或 HexaCord 的兼容重写，但支持部分后端身份转发模式。
 
 ## 1. 前置要求

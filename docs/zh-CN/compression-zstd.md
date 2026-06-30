@@ -51,7 +51,7 @@ compression:
 打包应用启动时使用同一份配置：
 
 ```powershell
-.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\config\strataproxy.yml
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat .\config\strataproxy.yml
 ```
 
 采集或训练样本前先构建 Admin CLI：

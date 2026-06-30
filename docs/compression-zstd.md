@@ -51,7 +51,7 @@ compression:
 For the packaged app, start StrataProxy with the same config file you edited:
 
 ```powershell
-.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\config\strataproxy.yml
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat .\config\strataproxy.yml
 ```
 
 Build the admin CLI before collecting or training samples:

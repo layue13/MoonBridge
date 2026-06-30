@@ -4,13 +4,16 @@ StrataProxy is a new Java 25 Minecraft proxy project for large modded networks. 
 
 The core model intentionally does not contain `modpackId`. Routing decisions are based on capabilities, tags, protocol range, load, health, drain state, and metadata. Pack identity can be stored in `metadata` when operators need it.
 
-Documentation entry points:
+User documentation:
 
+- [Quick start](docs/quick-start.md)
+- [Configuration guide](docs/configuration.md)
+- [Command reference](docs/commands.md)
 - [Documentation map](docs/README.md)
-- [Operations manual](docs/operations-manual.md)
 - [Zstd compression tuning](docs/compression-zstd.md)
 - [Chinese documentation](docs/zh-CN/README.md)
-- [Chinese operations manual](docs/zh-CN/operations-manual.md)
+
+This repository README is a developer overview and verification log. New operators should start with the quick start instead of reading this file top to bottom.
 
 ## Technical Baseline
 

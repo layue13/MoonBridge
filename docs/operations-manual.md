@@ -2,6 +2,8 @@
 
 This manual is the operator guide for installing, configuring, running, observing, and troubleshooting StrataProxy.
 
+If this is your first deployment, start with [Quick Start](quick-start.md), then use [Configuration Guide](configuration.md) and [Command Reference](commands.md). This manual is the full production runbook.
+
 StrataProxy is a Java 25 Minecraft proxy for large modded networks. It routes by server capability, tag, protocol range, health, load, drain state, and metadata. It is not a BungeeCord or HexaCord compatibility rewrite, although it supports selected backend forwarding modes.
 
 ## 1. Prerequisites
