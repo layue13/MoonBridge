@@ -37,6 +37,22 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesProxyProtocolFlag() throws Exception {
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                network:
+                  proxyProtocol: true
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertTrue(loaded.proxy().network().proxyProtocol());
+    }
+
+    @Test
     void parsesPacketAnalysisThresholds() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """

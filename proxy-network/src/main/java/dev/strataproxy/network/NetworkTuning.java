@@ -7,7 +7,27 @@ public record NetworkTuning(
         int writeBufferHighBytes,
         int maxConnections,
         int maxConnectionsPerAddress,
-        int initialHandshakeTimeoutMillis) {
+        int initialHandshakeTimeoutMillis,
+        boolean proxyProtocol) {
+    public NetworkTuning(
+            int maxFrameBytes,
+            int connectTimeoutMillis,
+            int writeBufferLowBytes,
+            int writeBufferHighBytes,
+            int maxConnections,
+            int maxConnectionsPerAddress,
+            int initialHandshakeTimeoutMillis) {
+        this(
+                maxFrameBytes,
+                connectTimeoutMillis,
+                writeBufferLowBytes,
+                writeBufferHighBytes,
+                maxConnections,
+                maxConnectionsPerAddress,
+                initialHandshakeTimeoutMillis,
+                false);
+    }
+
     public NetworkTuning {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
@@ -27,6 +47,6 @@ public record NetworkTuning(
     }
 
     public static NetworkTuning defaults() {
-        return new NetworkTuning(8 * 1024 * 1024, 5_000, 4 * 1024 * 1024, 16 * 1024 * 1024, 10_000, 200, 5_000);
+        return new NetworkTuning(8 * 1024 * 1024, 5_000, 4 * 1024 * 1024, 16 * 1024 * 1024, 10_000, 200, 5_000, false);
     }
 }

@@ -176,6 +176,54 @@ final class NettyProxyNetworkServerSmokeTest {
     }
 
     @Test
+    void acceptsProxyProtocolV1AndRoutesWithForwardedAddressOverRealTcp() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var backendExecutor = Executors.newSingleThreadExecutor();
+        var resolverAddress = new java.util.concurrent.atomic.AtomicReference<java.net.SocketAddress>();
+
+        try (var backendSocket = new ServerSocket(0)) {
+            backendSocket.setSoTimeout(5_000);
+            var backendPort = backendSocket.getLocalPort();
+            var backendRead = backendExecutor.submit(() -> {
+                try (var accepted = backendSocket.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    return readMinecraftFrame(accepted.getInputStream());
+                }
+            });
+
+            var selected = server("survival-1", backendPort);
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(1024, 1_000, 128, 1024, 100, 100, 5_000, true);
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    (request, remoteAddress) -> {
+                        resolverAddress.set(remoteAddress);
+                        return java.util.Optional.of(selected);
+                    },
+                    metrics,
+                    tuning)) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write("PROXY TCP4 203.0.113.7 198.51.100.10 41000 25577\r\n".getBytes(StandardCharsets.US_ASCII));
+                    client.getOutputStream().write(handshake);
+                    client.getOutputStream().flush();
+                }
+
+                assertArrayEquals(handshake, backendRead.get(5, TimeUnit.SECONDS));
+                assertEquals("203.0.113.7", ((InetSocketAddress) resolverAddress.get()).getHostString());
+                assertEquals(41000, ((InetSocketAddress) resolverAddress.get()).getPort());
+            }
+        } finally {
+            backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
     void rewritesSplitLoginHandshakeForBungeeLegacyForwardingOverRealTcp() throws Exception {
         var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
         var loginStart = loginStartFrame("OfflineName");

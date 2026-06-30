@@ -346,7 +346,10 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                     @Override
                     protected void initChannel(Channel channel) {
                         channel.config().setAutoRead(true);
-                        channel.pipeline().addLast("connection-admission", new ConnectionAdmissionHandler(admissionControl, metrics));
+                        if (tuning.proxyProtocol()) {
+                            channel.pipeline().addLast("proxy-protocol-v1", new ProxyProtocolV1Handler());
+                        }
+                        channel.pipeline().addLast("connection-admission", new ConnectionAdmissionHandler(admissionControl, metrics, tuning.proxyProtocol()));
                         channel.pipeline().addLast("initial-handshake-timeout", new InitialHandshakeTimeoutHandler(
                                 tuning.initialHandshakeTimeoutMillis(),
                                 metrics));

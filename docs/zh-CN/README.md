@@ -64,6 +64,15 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 默认配置位于 `proxy-app/src/main/resources/config/strataproxy.yml`，生产参考配置位于 `proxy-app/src/main/resources/config/strataproxy-production.yml`。
 
+如果 StrataProxy 部署在可信 TCP 负载均衡后面，可以启用 HAProxy PROXY protocol v1，让连接限流、路由、审计和后端身份转发使用真实玩家地址：
+
+```yaml
+network:
+  proxyProtocol: true
+```
+
+只应在玩家不能直连的监听入口启用。启用后，每条连接都必须先发送合法 PROXY v1 头，再发送 Minecraft 握手。
+
 registry 健康检查支持两种模式：
 
 ```yaml

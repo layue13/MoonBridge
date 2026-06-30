@@ -85,7 +85,8 @@ public final class ConfigLoader {
                             parseBytes(network.writeBufferHigh, 16 * 1024 * 1024),
                             network.maxConnections,
                             network.maxConnectionsPerAddress,
-                            network.initialHandshakeTimeoutMillis),
+                            network.initialHandshakeTimeoutMillis,
+                            network.proxyProtocol),
                     new ProxyConfig.RegistryConfig(
                             registry.staticServers,
                             registry.persistenceEnabled,
@@ -189,6 +190,7 @@ public final class ConfigLoader {
         public int maxConnections = 10_000;
         public int maxConnectionsPerAddress = 200;
         public int initialHandshakeTimeoutMillis = 5_000;
+        public boolean proxyProtocol = false;
     }
 
     public static final class RegistryFile {

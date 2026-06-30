@@ -434,8 +434,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private static String remoteAddress(ChannelHandlerContext context) {
-        var address = context.channel().remoteAddress();
-        return address == null ? "" : address.toString();
+        return ClientAddress.text(context.channel());
     }
 
     private static double ratio(MinecraftCompressedFrameAuditSampler.CompressionFrameSample sample) {

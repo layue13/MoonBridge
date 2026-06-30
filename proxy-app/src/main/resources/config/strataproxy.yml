@@ -9,6 +9,8 @@ network:
   maxConnections: 10000
   maxConnectionsPerAddress: 200
   initialHandshakeTimeoutMillis: 5000
+  # Enable only behind a trusted HAProxy/Load Balancer that sends PROXY protocol v1.
+  proxyProtocol: false
 
 registry:
   staticServers: true

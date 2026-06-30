@@ -68,6 +68,15 @@ The packaged example config is available in `proxy-app/src/main/resources/config
 The packaged production-oriented config is available in `proxy-app/src/main/resources/config/strataproxy-production.yml` and is included in the installed distribution as `config/strataproxy-production.yml`.
 String config values support environment placeholders in the form `${NAME}` and `${NAME:default}`, which is useful for secrets such as `STRATAPROXY_ADMIN_TOKEN`.
 
+When StrataProxy runs behind a trusted TCP load balancer, enable HAProxy PROXY protocol v1 parsing so admission limits, routing, audit logs, and backend forwarding use the real client address:
+
+```yaml
+network:
+  proxyProtocol: true
+```
+
+Only enable this on listeners that are not reachable directly by players. When enabled, every accepted connection must start with a valid PROXY v1 header before the Minecraft handshake.
+
 Build a complete release bundle with checksums:
 
 ```powershell
@@ -322,6 +331,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Uses Netty with manual read backpressure: both frontend and backend channels keep `AUTO_READ=false` during relay and only read after writes complete.
 - Applies configured backend connect timeout and write-buffer watermarks to frontend/backend channels.
 - Enforces global and per-address connection admission limits before handshake routing to reduce connection storm impact.
+- Supports optional HAProxy PROXY protocol v1 parsing on trusted listener deployments, so per-address limits, routing, player attribution, and Bungee/Velocity forwarding use the forwarded client address.
 - Attributes admission rejections by low-cardinality reason (`global_limit` or `per_address_limit`) so operators can distinguish total saturation from one-address storms without high-cardinality client labels.
 - Closes connections that do not send the initial Minecraft handshake within `network.initialHandshakeTimeoutMillis`.
 - Uses Netty pooled `ByteBuf` allocation for listener and backend connections.
@@ -598,6 +608,7 @@ Smoke-tested runtime:
 - covered idempotent runtime close, shutdown waiter release, and listener port release
 - covered active player session tracking from split Login Start frames plus Prometheus, direct Admin API, Admin CLI, and diagnostic report export
 - covered a real TCP proxy smoke test in `proxy-network`: client handshake -> proxy -> backend -> proxy -> client, including routed connection count and per-server byte attribution
+- covered HAProxy PROXY protocol v1 parsing over real TCP, including forwarded source address use during routing and stripping the PROXY header before backend relay
 - covered real TCP Minecraft Login Disconnect responses for no-route, oversized pending-login-data, and backend-connect-failure login paths
 - covered a real TCP per-address connection storm test in `proxy-network`: concurrent virtual-thread clients exceed the per-address admission limit and rejected connections are counted
 - covered connection admission rejection reasons from control logic through Netty handler metrics, Prometheus output, Admin API diagnostic JSON, and CLI overview output

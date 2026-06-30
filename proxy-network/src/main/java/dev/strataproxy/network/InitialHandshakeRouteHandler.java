@@ -15,7 +15,6 @@ import io.netty.channel.WriteBufferWaterMark;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.util.ReferenceCountUtil;
 
-import java.net.SocketAddress;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -135,7 +134,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         } catch (RuntimeException exception) {
             metrics.packetAnomaly(
                     RULE_MALFORMED_FRAME,
-                    remoteAddress(context.channel().remoteAddress()),
+                    ClientAddress.text(context.channel()),
                     "",
                     "frontend_to_backend",
                     "HANDSHAKE",
@@ -162,7 +161,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         } catch (RuntimeException exception) {
             metrics.packetAnomaly(
                     RULE_MALFORMED_HANDSHAKE,
-                    remoteAddress(frontend.remoteAddress()),
+                    ClientAddress.text(frontend),
                     "",
                     "frontend_to_backend",
                     "HANDSHAKE",
@@ -185,11 +184,11 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
 
         RegisteredServer selected;
         try {
-            selected = backendResolver.resolve(handshake, frontend.remoteAddress()).orElse(null);
+            selected = backendResolver.resolve(handshake, ClientAddress.socketAddress(frontend)).orElse(null);
         } catch (RuntimeException exception) {
             metrics.packetAnomaly(
                     RULE_MALFORMED_HANDSHAKE,
-                    remoteAddress(frontend.remoteAddress()),
+                    ClientAddress.text(frontend),
                     "",
                     "frontend_to_backend",
                     "HANDSHAKE",
@@ -208,7 +207,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             var pendingBytes = input.isReadable() ? input.readRetainedSlice(input.readableBytes()) : null;
             metrics.packetAnomaly(
                     RULE_NO_ROUTE,
-                    remoteAddress(frontend.remoteAddress()),
+                    ClientAddress.text(frontend),
                     "",
                     "frontend_to_backend",
                     "HANDSHAKE",
@@ -226,7 +225,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         if (input.readableBytes() > tuning.maxFrameBytes()) {
             metrics.packetAnomaly(
                     RULE_PENDING_TOO_LARGE,
-                    remoteAddress(frontend.remoteAddress()),
+                    ClientAddress.text(frontend),
                     selected.descriptor().name(),
                     "frontend_to_backend",
                     "HANDSHAKE",
@@ -302,7 +301,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             ByteBuf pendingBytes,
             RegisteredServer selected) {
         var consumed = new java.util.concurrent.atomic.AtomicBoolean();
-        var identity = new RelaySessionIdentity(remoteAddress(context.channel().remoteAddress()));
+        var identity = new RelaySessionIdentity(ClientAddress.text(context.channel()));
         context.channel().closeFuture().addListener(ignored -> {
             if (consumed.compareAndSet(false, true)) {
                 release(firstFrame);
@@ -381,7 +380,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         var frontend = frontendContext.channel();
         var serverName = selected.descriptor().name();
         var compressionAudit = new MinecraftCompressionAuditState(tuning.maxFrameBytes());
-        var identity = existingIdentity == null ? new RelaySessionIdentity(remoteAddress(frontend.remoteAddress())) : existingIdentity;
+        var identity = existingIdentity == null ? new RelaySessionIdentity(ClientAddress.text(frontend)) : existingIdentity;
         var bootstrap = new Bootstrap()
                 .group(frontend.eventLoop())
                 .channel(backendChannel)
@@ -514,7 +513,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private MinecraftLoginStart observeInitialLoginStart(io.netty.channel.Channel frontend, String serverName, ByteBuf pendingBytes) {
         try {
             var loginStart = MinecraftLoginStart.read(pendingBytes, tuning.maxFrameBytes());
-            metrics.playerSessionStarted(loginStart.username(), serverName, remoteAddress(frontend.remoteAddress()));
+            metrics.playerSessionStarted(loginStart.username(), serverName, ClientAddress.text(frontend));
             return loginStart;
         } catch (RuntimeException ignored) {
             // Player attribution must never block the initial fast-forward path.
@@ -540,10 +539,6 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
 
     private void scheduleCloseLogin(ChannelHandlerContext context, MinecraftHandshake handshake, String reason) {
         context.executor().execute(() -> closeLogin(context, handshake, reason));
-    }
-
-    private static String remoteAddress(SocketAddress address) {
-        return address == null ? "" : address.toString();
     }
 
     private final class BungeeLegacyLoginStartHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
@@ -583,7 +578,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 var remaining = pending.isReadable() ? pending.readRetainedSlice(pending.readableBytes()) : null;
                 var outboundPending = combine(context, loginStartFrame, remaining);
                 var loginStart = loginStart(outboundPending);
-                var identity = new RelaySessionIdentity(remoteAddress(context.channel().remoteAddress()));
+                var identity = new RelaySessionIdentity(ClientAddress.text(context.channel()));
                 loginStart.ifPresent(value -> {
                     identity.playerName(value.username());
                     value.chatSessionKey().ifPresent(identity::chatSessionKey);
@@ -594,7 +589,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             } catch (RuntimeException exception) {
                 metrics.packetAnomaly(
                         RULE_MALFORMED_HANDSHAKE,
-                        remoteAddress(context.channel().remoteAddress()),
+                        ClientAddress.text(context.channel()),
                         selected.descriptor().name(),
                         "frontend_to_backend",
                         "LOGIN",
