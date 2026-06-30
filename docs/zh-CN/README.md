@@ -231,6 +231,9 @@ forwarding:
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 overview
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 native
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 backpressure
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 zstd-samples start --id registry-train --server survival-1 --direction backend_to_frontend --max-samples 5000 --max-bytes 32768 --duration-ms 300000
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 zstd-samples export registry-train --out samples/registry
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat zstd-samples train --in samples/registry --out data/zstd/registry.zdict --max-dict 16384 --level 1
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 diagnostics
 ```
 

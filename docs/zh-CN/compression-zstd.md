@@ -16,6 +16,8 @@ Minecraft 流量不是同一种数据：
 
 ## 配置
 
+本地开发时改 `proxy-app/src/main/resources/config/strataproxy.yml`；生产部署时改你传给打包应用的外部 YAML 配置文件。
+
 ```yaml
 compression:
   mode: adaptive
@@ -30,6 +32,33 @@ compression:
 ```
 
 正常运行使用 `codec: zlib`。只有在受控 Mod 端点上，且客户端和代理使用同样的 codec、threshold、level 和 dictionary 字节时，才使用 `codec: zstd`。
+
+训练出 dictionary 后，把 `zstdDictionaryPath` 指向生成的 `.zdict` 文件：
+
+```yaml
+compression:
+  mode: adaptive
+  codec: zstd
+  minThreshold: 512
+  maxThreshold: 8192
+  cpuGuard: 0.75
+  rewriteEnabled: false
+  rewriteMaxEventLoopDelayMillis: 25
+  zstdLevel: 1
+  zstdDictionaryPath: "data/zstd/registry.zdict"
+```
+
+打包应用启动时使用同一份配置：
+
+```powershell
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\config\strataproxy.yml
+```
+
+采集或训练样本前先构建 Admin CLI：
+
+```powershell
+.\gradlew.bat --no-daemon :proxy-admin-cli:installDist
+```
 
 `zstdLevel` 支持 `-5` 到 `22`：
 
@@ -67,11 +96,39 @@ Zstd dictionary 最适合“小而相似”的 payload。对 Minecraft 来说，
 4. 客户端、代理、后端必须使用完全相同的 dictionary 字节。
 5. 用 hash 管理 dictionary 版本。握手时 hash 不一致就拒绝 Zstd 或回退。
 
-CLI 示例：
+内置采集和训练流程：
 
 ```powershell
-zstd --train .\samples\nbt\* -o .\data\zstd\nbt.zdict --maxdict=16384
-zstd -D .\data\zstd\nbt.zdict .\validation\nbt\sample.bin -o sample.bin.zst
+# 1. 在一个后端、一个方向上启动有界采集。
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples start `
+  --id registry-train `
+  --server survival-1 `
+  --direction backend_to_frontend `
+  --max-samples 5000 `
+  --max-bytes 32768 `
+  --duration-ms 300000
+
+# 2. 让代表性玩家登录、切维度、打开 Mod UI、加载区块。
+#    然后把保留的 prefix bytes 导出成 .bin 样本。
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples export registry-train `
+  --out .\samples\registry
+
+# 3. 从导出的 .bin 样本训练 dictionary。
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  zstd-samples train `
+  --in .\samples\registry `
+  --out .\data\zstd\registry.zdict `
+  --max-dict 16384 `
+  --level 1
+
+# 4. 完成后停止采集。
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples stop registry-train
 ```
 
 Java helper 示例：
@@ -80,6 +137,19 @@ Java helper 示例：
 var dictionary = MinecraftZstdDictionaryTrainer.train(samples, 16 * 1024, 1);
 Files.write(Path.of("data/zstd/nbt.zdict"), dictionary);
 ```
+
+`zstd-samples export` 会写出 `sample-000001.bin` 这类文件和 `manifest.json`。当前样本来自 relay prefix bytes，所以 `--max-bytes` 要足够大，才能覆盖你想训练的 payload family。训练 dictionary 时，尽量一次只采一个 packet family 或一个 Modded 工作流。
+
+命令层级：
+
+| 命令 | 用途 |
+| --- | --- |
+| `zstd-samples list` | 列出当前活跃的样本采集 |
+| `zstd-samples start` | 用适合 Zstd 的默认值启动有界采集 |
+| `zstd-samples get <id>` | 输出某个采集及其保留样本 |
+| `zstd-samples stop <id>` | 停止并移除某个采集 |
+| `zstd-samples export <id> --out <dir>` | 把 `prefixBase64` 样本解码为 `.bin` 文件和 `manifest.json` |
+| `zstd-samples train --in <dir> --out <file.zdict>` | 从导出的 `.bin` 文件训练 `.zdict` |
 
 ## 阈值怎么调
 

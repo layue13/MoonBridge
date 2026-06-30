@@ -6,6 +6,7 @@ plugins {
 
 dependencies {
     implementation(project(":proxy-admin-api"))
+    implementation(project(":proxy-codec-minecraft"))
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("cli-picocli").get())
     testImplementation(project(":proxy-registry"))

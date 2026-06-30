@@ -16,6 +16,8 @@ The practical goal is not "compress everything". The goal is to spend CPU only w
 
 ## Configuration
 
+Edit `proxy-app/src/main/resources/config/strataproxy.yml` for local development, or the external YAML file you pass to the packaged application in production.
+
 ```yaml
 compression:
   mode: adaptive
@@ -30,6 +32,33 @@ compression:
 ```
 
 Use `codec: zlib` for normal operation. Use `codec: zstd` only for a controlled modded endpoint where the client and proxy use the same codec, threshold, level, and dictionary bytes.
+
+After training a dictionary, point `zstdDictionaryPath` at the generated `.zdict` file:
+
+```yaml
+compression:
+  mode: adaptive
+  codec: zstd
+  minThreshold: 512
+  maxThreshold: 8192
+  cpuGuard: 0.75
+  rewriteEnabled: false
+  rewriteMaxEventLoopDelayMillis: 25
+  zstdLevel: 1
+  zstdDictionaryPath: "data/zstd/registry.zdict"
+```
+
+For the packaged app, start StrataProxy with the same config file you edited:
+
+```powershell
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\config\strataproxy.yml
+```
+
+Build the admin CLI before collecting or training samples:
+
+```powershell
+.\gradlew.bat --no-daemon :proxy-admin-cli:installDist
+```
 
 `zstdLevel` accepts `-5` through `22`:
 
@@ -67,11 +96,39 @@ Recommended process:
 4. Use the same dictionary bytes on every client, proxy, and backend participant.
 5. Version dictionaries by hash. Reject or bypass Zstd if the client dictionary hash does not match.
 
-CLI example:
+Built-in collection and training flow:
 
 ```powershell
-zstd --train .\samples\nbt\* -o .\data\zstd\nbt.zdict --maxdict=16384
-zstd -D .\data\zstd\nbt.zdict .\validation\nbt\sample.bin -o sample.bin.zst
+# 1. Start a bounded capture on one backend and one direction.
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples start `
+  --id registry-train `
+  --server survival-1 `
+  --direction backend_to_frontend `
+  --max-samples 5000 `
+  --max-bytes 32768 `
+  --duration-ms 300000
+
+# 2. Let representative players log in, switch dimensions, open modded UIs,
+#    and load chunks. Then export the retained prefix bytes as .bin samples.
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples export registry-train `
+  --out .\samples\registry
+
+# 3. Train a dictionary from exported .bin samples.
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  zstd-samples train `
+  --in .\samples\registry `
+  --out .\data\zstd\registry.zdict `
+  --max-dict 16384 `
+  --level 1
+
+# 4. Stop the capture when finished.
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat `
+  --base-url http://127.0.0.1:8080 `
+  zstd-samples stop registry-train
 ```
 
 Java helper example:
@@ -80,6 +137,19 @@ Java helper example:
 var dictionary = MinecraftZstdDictionaryTrainer.train(samples, 16 * 1024, 1);
 Files.write(Path.of("data/zstd/nbt.zdict"), dictionary);
 ```
+
+`zstd-samples export` writes `sample-000001.bin` style files plus `manifest.json`. The samples are captured prefix bytes, so choose `--max-bytes` large enough to retain the full payload family you want. For dictionary training, prefer captures from one packet family or one modded workflow at a time.
+
+Command hierarchy:
+
+| Command | Purpose |
+| --- | --- |
+| `zstd-samples list` | List active sample capture sessions |
+| `zstd-samples start` | Start a bounded capture with Zstd-friendly defaults |
+| `zstd-samples get <id>` | Print one capture and its retained samples |
+| `zstd-samples stop <id>` | Stop and remove a capture |
+| `zstd-samples export <id> --out <dir>` | Decode `prefixBase64` samples into `.bin` files and `manifest.json` |
+| `zstd-samples train --in <dir> --out <file.zdict>` | Train a `.zdict` from exported `.bin` files |
 
 ## Threshold Selection
 

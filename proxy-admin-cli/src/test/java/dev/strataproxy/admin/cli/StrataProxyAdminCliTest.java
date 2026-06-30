@@ -677,6 +677,66 @@ final class StrataProxyAdminCliTest {
     }
 
     @Test
+    void exportsAndTrainsZstdSamples() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        var directory = Files.createTempDirectory("strataproxy-zstd-samples");
+        try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
+            admin.start();
+            var baseUrl = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+
+            var start = execute(
+                    "--base-url", baseUrl,
+                    "zstd-samples", "start",
+                    "--id", "zstd-1",
+                    "--server", "survival-1",
+                    "--direction", "backend_to_frontend",
+                    "--max-samples", "64",
+                    "--max-bytes", "1024",
+                    "--duration-ms", "30000");
+
+            assertEquals(0, start.exitCode());
+            assertTrue(start.output().contains("zstd-1 survival-1 backend_to_frontend 64 1024 "));
+
+            for (var i = 0; i < 64; i++) {
+                var bytes = ("chunk-palette:stone,dirt,grass;nbt:{x:" + i + ",section:" + (i % 16) + "}").getBytes(StandardCharsets.UTF_8);
+                metrics.payloadCaptured(
+                        "survival-1",
+                        ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND,
+                        bytes.length,
+                        -1,
+                        bytes,
+                        "Steve",
+                        "127.0.0.1:50000");
+            }
+
+            var sampleDirectory = directory.resolve("samples");
+            var export = execute(
+                    "--base-url", baseUrl,
+                    "zstd-samples", "export",
+                    "zstd-1",
+                    "--out", sampleDirectory.toString());
+
+            assertEquals(0, export.exitCode());
+            assertTrue(export.output().contains("wrote_samples 64"));
+            assertTrue(Files.exists(sampleDirectory.resolve("manifest.json")));
+            assertTrue(Files.exists(sampleDirectory.resolve("sample-000001.bin")));
+
+            var dictionary = directory.resolve("chunk-palette.zdict");
+            var train = execute(
+                    "zstd-samples", "train",
+                    "--in", sampleDirectory.toString(),
+                    "--out", dictionary.toString(),
+                    "--max-dict", "1024",
+                    "--level", "1");
+
+            assertEquals(0, train.exitCode(), train.output());
+            assertTrue(train.output().contains("trained_samples 64"));
+            assertTrue(Files.size(dictionary) > 0);
+        }
+    }
+
+    @Test
     void exportsDiagnosticReportJson() throws Exception {
         var registry = new InMemoryServerRegistry();
         registry.register(new ServerDescriptor(

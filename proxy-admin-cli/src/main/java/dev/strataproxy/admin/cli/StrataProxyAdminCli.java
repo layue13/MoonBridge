@@ -2,6 +2,7 @@ package dev.strataproxy.admin.cli;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import dev.strataproxy.codec.minecraft.MinecraftZstdDictionaryTrainer;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -21,6 +22,7 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,6 +54,7 @@ import javax.net.ssl.TrustManagerFactory;
                 StrataProxyAdminCli.AnomaliesCommand.class,
                 StrataProxyAdminCli.BackpressureCommand.class,
                 StrataProxyAdminCli.CapturesCommand.class,
+                StrataProxyAdminCli.ZstdSamplesCommand.class,
                 StrataProxyAdminCli.RoutesCommand.class,
                 StrataProxyAdminCli.ServersCommand.class
         })
@@ -590,6 +593,174 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             @Override
             public Integer call() {
                 return captures.root.print(captures.root.request("DELETE", "/payload-captures/" + id, null));
+            }
+        }
+    }
+
+    @Command(name = "zstd-samples", mixinStandardHelpOptions = true, description = "Collect, export, and train Zstd dictionary samples.", subcommands = {
+            ZstdSamplesCommand.ListCommand.class,
+            ZstdSamplesCommand.StartCommand.class,
+            ZstdSamplesCommand.GetCommand.class,
+            ZstdSamplesCommand.StopCommand.class,
+            ZstdSamplesCommand.ExportCommand.class,
+            ZstdSamplesCommand.TrainCommand.class
+    })
+    static final class ZstdSamplesCommand implements Callable<Integer> {
+        @ParentCommand
+        private StrataProxyAdminCli root;
+
+        @Override
+        public Integer call() {
+            CommandLine.usage(this, System.out);
+            return 0;
+        }
+
+        @Command(name = "list", description = "List active Zstd sample capture sessions.")
+        static final class ListCommand implements Callable<Integer> {
+            @ParentCommand
+            private ZstdSamplesCommand samples;
+
+            @Override
+            public Integer call() {
+                var response = samples.root.request("GET", "/payload-captures", null);
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    return samples.root.print(response);
+                }
+                System.out.print(PayloadCaptureMetricsView.parseListJson(response.body()).render());
+                return 0;
+            }
+        }
+
+        @Command(name = "start", description = "Start a bounded capture suitable for Zstd dictionary sample export.")
+        static final class StartCommand implements Callable<Integer> {
+            @ParentCommand
+            private ZstdSamplesCommand samples;
+
+            @Option(names = "--id", required = true, description = "Capture id.")
+            private String id;
+
+            @Option(names = "--server", required = true, description = "Backend server name to capture.")
+            private String server;
+
+            @Option(names = "--direction", defaultValue = "frontend_to_backend", description = "Traffic direction.")
+            private String direction;
+
+            @Option(names = "--max-samples", defaultValue = "1024", description = "Maximum retained samples.")
+            private int maxSamples;
+
+            @Option(names = "--max-bytes", defaultValue = "32768", description = "Maximum bytes retained per sample.")
+            private int maxBytesPerSample;
+
+            @Option(names = "--duration-ms", defaultValue = "300000", description = "Capture duration in milliseconds.")
+            private long durationMillis;
+
+            @Override
+            public Integer call() {
+                var json = MAPPER.createObjectNode();
+                json.put("id", id);
+                json.put("server", server);
+                json.put("direction", direction);
+                json.put("maxSamples", maxSamples);
+                json.put("maxBytesPerSample", maxBytesPerSample);
+                json.put("durationMillis", durationMillis);
+
+                var response = samples.root.request("POST", "/payload-captures", json.toString());
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    return samples.root.print(response);
+                }
+                System.out.print(PayloadCaptureMetricsView.parseCaptureJson(response.body()).render());
+                return 0;
+            }
+        }
+
+        @Command(name = "get", description = "Print one Zstd sample capture session.")
+        static final class GetCommand implements Callable<Integer> {
+            @ParentCommand
+            private ZstdSamplesCommand samples;
+
+            @CommandLine.Parameters(index = "0", description = "Capture id.")
+            private String id;
+
+            @Override
+            public Integer call() {
+                var response = samples.root.request("GET", "/payload-captures/" + id, null);
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    return samples.root.print(response);
+                }
+                System.out.print(PayloadCaptureExportView.parseJson(response.body()).render());
+                return 0;
+            }
+        }
+
+        @Command(name = "stop", description = "Stop and remove one Zstd sample capture session.")
+        static final class StopCommand implements Callable<Integer> {
+            @ParentCommand
+            private ZstdSamplesCommand samples;
+
+            @CommandLine.Parameters(index = "0", description = "Capture id.")
+            private String id;
+
+            @Override
+            public Integer call() {
+                return samples.root.print(samples.root.request("DELETE", "/payload-captures/" + id, null));
+            }
+        }
+
+        @Command(name = "export", description = "Export captured prefix bytes as .bin files and a manifest.")
+        static final class ExportCommand implements Callable<Integer> {
+            @ParentCommand
+            private ZstdSamplesCommand samples;
+
+            @CommandLine.Parameters(index = "0", description = "Capture id.")
+            private String id;
+
+            @Option(names = "--out", required = true, description = "Output directory for sample .bin files.")
+            private Path outputDirectory;
+
+            @Override
+            public Integer call() throws IOException {
+                var response = samples.root.request("GET", "/payload-captures/" + id, null);
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    return samples.root.print(response);
+                }
+                var result = ZstdSampleFiles.exportCapture(response.body(), outputDirectory);
+                System.out.printf(
+                        "wrote_samples %d%noutput_directory %s%nmanifest %s%n",
+                        result.sampleCount(),
+                        result.outputDirectory(),
+                        result.manifestFile());
+                return 0;
+            }
+        }
+
+        @Command(name = "train", description = "Train a Zstd dictionary from exported .bin samples.")
+        static final class TrainCommand implements Callable<Integer> {
+            @Option(names = "--in", required = true, description = "Input directory containing sample .bin files.")
+            private Path inputDirectory;
+
+            @Option(names = "--out", required = true, description = "Output .zdict file.")
+            private Path outputFile;
+
+            @Option(names = "--max-dict", defaultValue = "16384", description = "Maximum dictionary size in bytes.")
+            private int maxDictionaryBytes;
+
+            @Option(names = "--level", defaultValue = "1", description = "Training compression level.")
+            private int level;
+
+            @Override
+            public Integer call() throws IOException {
+                var samples = ZstdSampleFiles.readSamples(inputDirectory);
+                var dictionary = MinecraftZstdDictionaryTrainer.train(samples, maxDictionaryBytes, level);
+                if (outputFile.getParent() != null) {
+                    Files.createDirectories(outputFile.getParent());
+                }
+                Files.write(outputFile, dictionary);
+                System.out.printf(
+                        "trained_samples %d%ndictionary_bytes %d%ndictionary %s%n",
+                        samples.size(),
+                        dictionary.length,
+                        outputFile);
+                return 0;
             }
         }
     }
@@ -2111,6 +2282,95 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             String reason,
             double effectiveWeight,
             double selectionKey) {
+    }
+
+    private static final class ZstdSampleFiles {
+        private ZstdSampleFiles() {
+        }
+
+        private static ExportResult exportCapture(String json, Path outputDirectory) throws IOException {
+            Files.createDirectories(outputDirectory);
+            var root = MAPPER.readTree(json);
+            var samples = root.get("samples");
+            var manifest = MAPPER.createObjectNode();
+            var files = MAPPER.createArrayNode();
+            var written = 0;
+            if (samples != null && samples.isArray()) {
+                for (var sample : samples) {
+                    var prefixBase64 = text(sample, "prefixBase64");
+                    if (prefixBase64.isBlank()) {
+                        continue;
+                    }
+                    var bytes = Base64.getDecoder().decode(prefixBase64);
+                    if (bytes.length == 0) {
+                        continue;
+                    }
+                    var sequence = sample.has("sequence") ? sample.get("sequence").asLong() : written + 1L;
+                    var fileName = "sample-%06d.bin".formatted(sequence);
+                    var sampleFile = outputDirectory.resolve(fileName);
+                    Files.write(sampleFile, bytes);
+
+                    var row = MAPPER.createObjectNode();
+                    row.put("file", fileName);
+                    row.put("sequence", sequence);
+                    row.put("captureId", text(sample, "captureId"));
+                    row.put("server", text(sample, "server"));
+                    row.put("direction", text(sample, "direction"));
+                    row.put("rawBytes", sample.has("rawBytes") ? sample.get("rawBytes").asLong() : 0L);
+                    row.put("compressedBytes", sample.has("compressedBytes") ? sample.get("compressedBytes").asLong() : 0L);
+                    row.put("sampleBytes", bytes.length);
+                    row.put("player", text(sample, "player"));
+                    row.put("remoteAddress", text(sample, "remoteAddress"));
+                    row.put("timestamp", text(sample, "timestamp"));
+                    files.add(row);
+                    written++;
+                }
+            }
+            var capture = root.get("capture");
+            if (capture != null && capture.isObject()) {
+                manifest.set("capture", capture);
+            }
+            manifest.put("format", "strataproxy-zstd-samples-v1");
+            manifest.put("sampleCount", written);
+            manifest.set("samples", files);
+            var manifestFile = outputDirectory.resolve("manifest.json");
+            MAPPER.writerWithDefaultPrettyPrinter().writeValue(manifestFile.toFile(), manifest);
+            return new ExportResult(outputDirectory, manifestFile, written);
+        }
+
+        private static List<byte[]> readSamples(Path inputDirectory) throws IOException {
+            if (Files.notExists(inputDirectory)) {
+                throw new IllegalArgumentException("input directory does not exist: " + inputDirectory);
+            }
+            var sampleFiles = new ArrayList<Path>();
+            try (var stream = Files.walk(inputDirectory)) {
+                stream.filter(Files::isRegularFile)
+                        .filter(path -> path.getFileName().toString().endsWith(".bin"))
+                        .sorted()
+                        .forEach(sampleFiles::add);
+            }
+            if (sampleFiles.isEmpty()) {
+                throw new IllegalArgumentException("input directory contains no .bin samples: " + inputDirectory);
+            }
+            var samples = new ArrayList<byte[]>(sampleFiles.size());
+            for (var sampleFile : sampleFiles) {
+                var bytes = Files.readAllBytes(sampleFile);
+                if (bytes.length > 0) {
+                    samples.add(bytes);
+                }
+            }
+            if (samples.isEmpty()) {
+                throw new IllegalArgumentException("input directory contains only empty .bin samples: " + inputDirectory);
+            }
+            return samples;
+        }
+
+        private static String text(com.fasterxml.jackson.databind.JsonNode node, String field) {
+            return node.has(field) && !node.get(field).isNull() ? node.get(field).asText() : "";
+        }
+
+        private record ExportResult(Path outputDirectory, Path manifestFile, int sampleCount) {
+        }
     }
 
     private static final class PayloadCaptureMetricsView {
