@@ -3,6 +3,7 @@ junit = "5.14.1"
 netty = "4.2.2.Final"
 jackson = "2.20.0"
 picocli = "4.7.7"
+zstd-jni = "1.5.7-11"
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -15,3 +16,4 @@ netty-handler = { module = "io.netty:netty-handler", version.ref = "netty" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 cli-picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }

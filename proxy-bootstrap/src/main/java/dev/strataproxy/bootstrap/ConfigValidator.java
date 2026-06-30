@@ -99,6 +99,22 @@ public final class ConfigValidator {
         if (compression.rewriteMaxEventLoopDelayMillis() < 0) {
             errors.add("compression.rewriteMaxEventLoopDelayMillis must be >= 0");
         }
+        var codec = compression.codec() == null ? "" : compression.codec().trim().toLowerCase(Locale.ROOT);
+        if (!codec.equals("zlib") && !codec.equals("zstd")) {
+            errors.add("compression.codec must be one of: zlib, zstd");
+        }
+        if (compression.zstdLevel() < -5 || compression.zstdLevel() > 22) {
+            errors.add("compression.zstdLevel must be between -5 and 22");
+        }
+        if (!compression.zstdDictionaryPath().isBlank()) {
+            var dictionaryPath = Path.of(compression.zstdDictionaryPath());
+            if (Files.notExists(dictionaryPath)) {
+                errors.add("compression.zstdDictionaryPath does not exist: " + compression.zstdDictionaryPath());
+            }
+        }
+        if (codec.equals("zstd")) {
+            warnings.add("compression.codec=zstd requires a modded client and matching backend/proxy negotiation");
+        }
 
         var packetAnalysis = config.packetAnalysis();
         if (packetAnalysis.largePayloadWarnBytes() < 0) {

@@ -59,6 +59,45 @@ final class ConfigValidatorTest {
     }
 
     @Test
+    void validatesOptionalZstdCompressionConfig() throws Exception {
+        var dictionary = tempDir.resolve("minecraft.zdict");
+        Files.writeString(dictionary, "dictionary");
+        var config = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                new ProxyConfig.CompressionConfig("adaptive", 256, 8192, 0.75d, false, 25, "zstd", 1, dictionary.toString()),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                ProxyConfig.AdminConfig.defaults());
+
+        var valid = new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
+
+        assertTrue(valid.valid());
+        assertTrue(valid.warnings().stream().anyMatch(warning -> warning.contains("modded client")));
+
+        var invalidConfig = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                new ProxyConfig.CompressionConfig("adaptive", 256, 8192, 0.75d, false, 25, "brotli", 99, tempDir.resolve("missing.zdict").toString()),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                ProxyConfig.AdminConfig.defaults());
+
+        var invalid = new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(invalidConfig, List.of(server("one"))));
+
+        assertFalse(invalid.valid());
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("compression.codec")));
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("zstdLevel")));
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("zstdDictionaryPath")));
+    }
+
+    @Test
     void rejectsDuplicateServersAndBadCapacity() {
         var loaded = new ConfigLoader.LoadedProxyConfig(
                 ProxyConfig.defaults(),

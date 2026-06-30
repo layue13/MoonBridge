@@ -164,14 +164,21 @@ Compression rewrite is opt-in:
 ```yaml
 compression:
   mode: adaptive
+  codec: zlib
   minThreshold: 256
   maxThreshold: 8192
   cpuGuard: 0.75
   rewriteEnabled: false
   rewriteMaxEventLoopDelayMillis: 25
+  zstdLevel: 1
+  zstdDictionaryPath: ""
 ```
 
 Leave `rewriteEnabled: false` for maximum transparent fast-path compatibility. Set it to `true` only when you want the proxy to apply the configured compression strategy to safe bounded compressed relay frames after backend compression negotiation. Partial frames are buffered per connection until a complete frame can be rewritten or safely forwarded by policy. `rewriteMaxEventLoopDelayMillis` disables live rewrite while observed event-loop delay is above the configured threshold; `0` disables this guard.
+
+`codec: zlib` keeps the vanilla-compatible Minecraft compression framing. `codec: zstd` enables the experimental modded-client compression codec path and must only be used with a matching client/backend negotiation layer. `zstdLevel` accepts fast negative levels through high-ratio levels, and `zstdDictionaryPath` points at an optional trained dictionary shared byte-for-byte by proxy and client. Good dictionary samples are repeated Minecraft structures such as NBT payloads, registry data, chunk palettes, and large mod custom payloads.
+
+The companion 1.7.10 client prototype lives in the separate `StrataProxyZstdClient` repository. It uses GTNH's maintained RetroFuturaGradle 1.7.10 toolchain and inserts Zstd encode/decode handlers into the client Netty pipeline when `-Dstrataproxy.zstd.enabled=true` is set. It is intentionally disabled by default so ordinary servers are not affected.
 
 Dynamic registry persistence is enabled by default:
 

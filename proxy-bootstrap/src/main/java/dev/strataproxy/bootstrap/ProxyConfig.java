@@ -185,7 +185,10 @@ public record ProxyConfig(
             int maxThreshold,
             double cpuGuard,
             boolean rewriteEnabled,
-            int rewriteMaxEventLoopDelayMillis) {
+            int rewriteMaxEventLoopDelayMillis,
+            String codec,
+            int zstdLevel,
+            String zstdDictionaryPath) {
         public CompressionConfig(String mode, int minThreshold, int maxThreshold, double cpuGuard) {
             this(mode, minThreshold, maxThreshold, cpuGuard, false, 25);
         }
@@ -194,8 +197,23 @@ public record ProxyConfig(
             this(mode, minThreshold, maxThreshold, cpuGuard, rewriteEnabled, 25);
         }
 
+        public CompressionConfig(
+                String mode,
+                int minThreshold,
+                int maxThreshold,
+                double cpuGuard,
+                boolean rewriteEnabled,
+                int rewriteMaxEventLoopDelayMillis) {
+            this(mode, minThreshold, maxThreshold, cpuGuard, rewriteEnabled, rewriteMaxEventLoopDelayMillis, "zlib", 1, "");
+        }
+
+        public CompressionConfig {
+            codec = codec == null || codec.isBlank() ? "zlib" : codec;
+            zstdDictionaryPath = zstdDictionaryPath == null ? "" : zstdDictionaryPath;
+        }
+
         public static CompressionConfig defaults() {
-            return new CompressionConfig("adaptive", 256, 8192, 0.75d, false, 25);
+            return new CompressionConfig("adaptive", 256, 8192, 0.75d, false, 25, "zlib", 1, "");
         }
     }
 

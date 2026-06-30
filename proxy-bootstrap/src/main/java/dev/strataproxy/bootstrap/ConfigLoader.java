@@ -96,7 +96,10 @@ public final class ConfigLoader {
                             compression.maxThreshold,
                             compression.cpuGuard,
                             compression.rewriteEnabled,
-                            compression.rewriteMaxEventLoopDelayMillis),
+                            compression.rewriteMaxEventLoopDelayMillis,
+                            compression.codec,
+                            compression.zstdLevel,
+                            compression.zstdDictionaryPath),
                     new ProxyConfig.PacketAnalysisConfig(
                             parseBytes(packetAnalysis.largePayloadWarnBytes, 1024 * 1024),
                             parseBytes(packetAnalysis.unknownChannelThrottleBytes, 256 * 1024),
@@ -171,6 +174,9 @@ public final class ConfigLoader {
         public double cpuGuard = 0.75d;
         public boolean rewriteEnabled = false;
         public int rewriteMaxEventLoopDelayMillis = 25;
+        public String codec = "zlib";
+        public int zstdLevel = 1;
+        public String zstdDictionaryPath = "";
     }
 
     public static final class PacketAnalysisFile {

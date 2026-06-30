@@ -20,11 +20,14 @@ registry:
 
 compression:
   mode: adaptive
+  codec: zlib
   minThreshold: 256
   maxThreshold: 8192
   cpuGuard: 0.75
   rewriteEnabled: false
   rewriteMaxEventLoopDelayMillis: 25
+  zstdLevel: 1
+  zstdDictionaryPath: ""
 
 packetAnalysis:
   largePayloadWarnBytes: "1mb"

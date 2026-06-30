@@ -145,6 +145,8 @@ forwarding:
 
 `velocity-modern` 会在压缩协商前拦截后端发来的 `velocity:player_info` Login Plugin Request，并回复带 HMAC-SHA256 签名的 Login Plugin Response。payload 内包含客户端地址、已校验 UUID、用户名和 Mojang profile properties。Paper 兼容后端应放在代理后面运行，后端 `server.properties` 使用 `online-mode=false`，Paper 的 Velocity forwarding 打开，并配置同一个 secret。当前实现覆盖 v1 身份/profile 转发；Minecraft 1.19+ 聊天签名公钥转发仍是独立兼容项，因为它需要解析并保留客户端 Login Start 中的 public-key 材料。
 
+实验性 Zstd 压缩 codec 通过 `compression.codec: zstd` 显式启用，默认仍是 vanilla 兼容的 `zlib`。`zstdDictionaryPath` 可指向由 NBT、registry、chunk palette 和大型 Mod custom payload 样本训练出的字典；客户端、代理和后端必须使用完全相同的字典字节。配套 1.7.10 客户端原型在单独的 `StrataProxyZstdClient` 仓库，使用 GTNH 维护的 RetroFuturaGradle 工具链，并且只有设置 `-Dstrataproxy.zstd.enabled=true` 时才会插入客户端 Netty handler。
+
 ## Admin API 和 CLI
 
 构建 CLI：
