@@ -15,6 +15,7 @@ public record ProxyConfig(
         ObservabilityConfig observability,
         AdminConfig admin,
         AuthConfig auth,
+        ForwardingConfig forwarding,
         NativeConfig nativeRuntime) {
     public ProxyConfig(
             InetSocketAddress bindAddress,
@@ -37,6 +38,7 @@ public record ProxyConfig(
                 observability,
                 admin,
                 AuthConfig.defaults(),
+                ForwardingConfig.defaults(),
                 NativeConfig.defaults());
     }
 
@@ -62,6 +64,7 @@ public record ProxyConfig(
                 observability,
                 admin,
                 AuthConfig.defaults(),
+                ForwardingConfig.defaults(),
                 nativeRuntime);
     }
 
@@ -76,6 +79,7 @@ public record ProxyConfig(
         observability = observability == null ? ObservabilityConfig.defaults() : observability;
         admin = admin == null ? AdminConfig.defaults() : admin;
         auth = auth == null ? AuthConfig.defaults() : auth;
+        forwarding = forwarding == null ? ForwardingConfig.defaults() : forwarding;
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
     }
 
@@ -95,6 +99,7 @@ public record ProxyConfig(
                 ObservabilityConfig.defaults(),
                 AdminConfig.defaults(),
                 AuthConfig.defaults(),
+                ForwardingConfig.defaults(),
                 NativeConfig.defaults());
     }
 
@@ -110,6 +115,17 @@ public record ProxyConfig(
 
         public static AuthConfig defaults() {
             return new AuthConfig(false, 1024, 4, false, Duration.ofSeconds(5));
+        }
+    }
+
+    public record ForwardingConfig(String mode, String secret) {
+        public ForwardingConfig {
+            mode = mode == null || mode.isBlank() ? "none" : mode;
+            secret = secret == null ? "" : secret;
+        }
+
+        public static ForwardingConfig defaults() {
+            return new ForwardingConfig("none", "");
         }
     }
 

@@ -28,6 +28,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
     private final CompressionRuntime compressionRuntime;
     private final CustomPayloadAnomalyPolicy customPayloadPolicy;
     private final MinecraftAuthRuntime authRuntime;
+    private final MinecraftForwardingRuntime forwardingRuntime;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private final NetworkRuntimeMonitor runtimeMonitor;
@@ -178,6 +179,38 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
             MinecraftAuthRuntime authRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
+        this(
+                workerThreads,
+                backendResolver,
+                metrics,
+                tuning,
+                nativeTransport,
+                compressionStrategy,
+                compressionMinThreshold,
+                compressionMaxThreshold,
+                compressionCpuGuard,
+                customPayloadPolicy,
+                authRuntime,
+                MinecraftForwardingRuntime.none(),
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis);
+    }
+
+    public NettyProxyNetworkServer(
+            int workerThreads,
+            BackendResolver backendResolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            boolean nativeTransport,
+            CompressionStrategy compressionStrategy,
+            int compressionMinThreshold,
+            int compressionMaxThreshold,
+            double compressionCpuGuard,
+            CustomPayloadAnomalyPolicy customPayloadPolicy,
+            MinecraftAuthRuntime authRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis) {
         this(workerThreads, backendResolver, metrics, tuning, nativeTransport, new CompressionRuntime(
                 compressionStrategy,
                 compressionMinThreshold,
@@ -185,6 +218,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                 compressionCpuGuard),
                 customPayloadPolicy,
                 authRuntime,
+                forwardingRuntime,
                 compressionRewriteEnabled,
                 compressionRewriteMaxEventLoopDelayMillis);
     }
@@ -207,7 +241,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
             boolean nativeTransport,
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), false, 25);
+        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), false, 25);
     }
 
     private NettyProxyNetworkServer(
@@ -219,7 +253,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             boolean compressionRewriteEnabled) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), compressionRewriteEnabled, 25);
+        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), compressionRewriteEnabled, 25);
     }
 
     private NettyProxyNetworkServer(
@@ -231,6 +265,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             MinecraftAuthRuntime authRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
         this.transport = NettyTransport.select(nativeTransport, workerThreads);
@@ -243,6 +278,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         this.compressionRuntime = compressionRuntime;
         this.customPayloadPolicy = customPayloadPolicy == null ? CustomPayloadAnomalyPolicy.defaults() : customPayloadPolicy;
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
+        this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
         this.runtimeMonitor = new NetworkRuntimeMonitor(workerGroup, metrics, Duration.ofSeconds(1));
@@ -283,6 +319,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                                 compressionRuntime,
                                 customPayloadPolicy,
                                 authRuntime,
+                                forwardingRuntime,
                                 compressionRewriteEnabled,
                                 compressionRewriteMaxEventLoopDelayMillis));
                     }

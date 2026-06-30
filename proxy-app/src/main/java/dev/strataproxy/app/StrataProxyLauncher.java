@@ -11,6 +11,7 @@ import dev.strataproxy.bootstrap.ConfigValidationResult;
 import dev.strataproxy.bootstrap.ConfigValidator;
 import dev.strataproxy.bootstrap.ProxyConfig;
 import dev.strataproxy.compression.CompressionStrategies;
+import dev.strataproxy.network.MinecraftForwardingRuntime;
 import dev.strataproxy.network.MinecraftAuthRuntime;
 import dev.strataproxy.network.NettyProxyNetworkServer;
 import dev.strataproxy.network.NetworkTuning;
@@ -176,6 +177,7 @@ public final class StrataProxyLauncher {
                     + " sessionVerification=" + config.auth().sessionVerification()
                     + " rsaKeyBits=" + config.auth().rsaKeyBits()
                     + " sessionVerificationTimeout=" + config.auth().sessionVerificationTimeout());
+            out.println("StrataProxy forwarding: mode=" + config.forwarding().mode());
             out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
                     + " os=" + nativeDecision.capabilities().os()
                     + " arch=" + nativeDecision.capabilities().arch()
@@ -240,6 +242,7 @@ public final class StrataProxyLauncher {
                     config.compression().cpuGuard(),
                     customPayloadPolicy,
                     authRuntime(config.auth()),
+                    forwardingRuntime(config.forwarding()),
                     config.compression().rewriteEnabled(),
                     config.compression().rewriteMaxEventLoopDelayMillis());
             started.add(server);
@@ -395,6 +398,7 @@ public final class StrataProxyLauncher {
                 config.observability(),
                 resolvedAdmin,
                 config.auth(),
+                config.forwarding(),
                 config.nativeRuntime());
         return new ConfigLoader.LoadedProxyConfig(resolvedConfig, loaded.servers());
     }
@@ -422,6 +426,11 @@ public final class StrataProxyLauncher {
                 auth.verifyTokenBytes(),
                 auth.sessionVerification(),
                 auth.sessionVerificationTimeout());
+    }
+
+    private static MinecraftForwardingRuntime forwardingRuntime(ProxyConfig.ForwardingConfig config) {
+        var forwarding = config == null ? ProxyConfig.ForwardingConfig.defaults() : config;
+        return new MinecraftForwardingRuntime(forwarding.mode(), forwarding.secret());
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

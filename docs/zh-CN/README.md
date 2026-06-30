@@ -135,6 +135,16 @@ auth:
 
 `sessionVerification` 是显式开关。启用后，StrataProxy 会在收到 Encryption Response 后异步调用 Mojang `hasJoined`，只有校验通过才继续连接后端。玩家侧 online-mode 加密终止不等于后端身份转发策略，后端仍需要按选定 forwarding 模式配置。
 
+后端身份转发单独配置：
+
+```yaml
+forwarding:
+  mode: "velocity-modern"
+  secret: "${STRATAPROXY_FORWARDING_SECRET}"
+```
+
+`velocity-modern` 会在压缩协商前拦截后端发来的 `velocity:player_info` Login Plugin Request，并回复带 HMAC-SHA256 签名的 Login Plugin Response。payload 内包含客户端地址、已校验 UUID、用户名和 Mojang profile properties。Paper 兼容后端应放在代理后面运行，后端 `server.properties` 使用 `online-mode=false`，Paper 的 Velocity forwarding 打开，并配置同一个 secret。当前实现覆盖 v1 身份/profile 转发；Minecraft 1.19+ 聊天签名公钥转发仍是独立兼容项，因为它需要解析并保留客户端 Login Start 中的 public-key 材料。
+
 ## Admin API 和 CLI
 
 构建 CLI：
@@ -218,7 +228,7 @@ JVM 起点：
 
 ## 当前未完成的高风险项
 
-- backend forwarding 策略需要和加密终止一起定型
+- Velocity modern forwarding v1 已实现，Minecraft 1.19+ 聊天签名公钥转发还需要协议兼容补齐
 - online-mode 还需要真实 Minecraft 客户端和 Mojang session server 的端到端验收
 - 10k idle / 2k active 的 Linux native acceptance 需要真实主机证据
 

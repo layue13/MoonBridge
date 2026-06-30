@@ -124,6 +124,7 @@ public final class ConfigValidator {
         validatePositive("observability.flushInterval", observability.flushInterval(), errors);
 
         validateAuth(config.auth(), errors, warnings);
+        validateForwarding(config.forwarding(), errors);
         validateNative(config.nativeRuntime(), errors, warnings);
 
         var admin = config.admin();
@@ -156,6 +157,19 @@ public final class ConfigValidator {
         validatePositive("auth.sessionVerificationTimeout", auth.sessionVerificationTimeout(), errors);
         if (auth.onlineMode() && !auth.sessionVerification()) {
             warnings.add("auth.onlineMode is enabled without Mojang session verification; use only for staged integration tests");
+        }
+    }
+
+    private static void validateForwarding(ProxyConfig.ForwardingConfig forwarding, ArrayList<String> errors) {
+        if (forwarding == null) {
+            return;
+        }
+        var mode = forwarding.mode() == null ? "" : forwarding.mode().trim().toLowerCase(Locale.ROOT);
+        if (!mode.equals("none") && !mode.equals("velocity-modern")) {
+            errors.add("forwarding.mode must be one of: none, velocity-modern");
+        }
+        if (mode.equals("velocity-modern") && forwarding.secret().isBlank()) {
+            errors.add("forwarding.secret must not be blank when forwarding.mode is velocity-modern");
         }
     }
 

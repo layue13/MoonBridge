@@ -37,7 +37,7 @@ final class MinecraftOnlineModeLoginHandlerTest {
                 keyPair,
                 verifyToken,
                 MinecraftSessionVerifier.disabled(),
-                (context, loginStartFrame, sharedSecret, username) -> {
+                (context, loginStartFrame, sharedSecret, username, profile) -> {
                     try {
                         var probe = MinecraftProtocolCodec.probeFrame(loginStartFrame, 4096);
                         loginStartFrame.skipBytes(probe.varIntBytes());
@@ -87,7 +87,7 @@ final class MinecraftOnlineModeLoginHandlerTest {
                 keyPair,
                 new byte[] {1, 2, 3, 4},
                 MinecraftSessionVerifier.disabled(),
-                (context, loginStartFrame, sharedSecret, username) -> loginStartFrame.release()));
+                (context, loginStartFrame, sharedSecret, username, profile) -> loginStartFrame.release()));
         try {
             assertFalse(channel.writeInbound(loginStartFrame("PlayerOne")));
             ((ByteBuf) channel.readOutbound()).release();
@@ -113,7 +113,7 @@ final class MinecraftOnlineModeLoginHandlerTest {
                 verifyToken,
                 (username, serverHash, remoteAddress) -> java.util.concurrent.CompletableFuture.completedFuture(
                         MinecraftSessionVerifier.SessionVerificationResult.denied("test-denied")),
-                (context, loginStartFrame, sharedSecret, username) -> loginStartFrame.release()));
+                (context, loginStartFrame, sharedSecret, username, profile) -> loginStartFrame.release()));
         try {
             assertFalse(channel.writeInbound(loginStartFrame("PlayerOne")));
             ((ByteBuf) channel.readOutbound()).release();

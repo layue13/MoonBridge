@@ -63,6 +63,7 @@ public final class ConfigLoader {
         public ObservabilityFile observability = new ObservabilityFile();
         public AdminFile admin = new AdminFile();
         public AuthFile auth = new AuthFile();
+        public ForwardingFile forwarding = new ForwardingFile();
         @JsonProperty("native")
         public NativeFile nativeRuntime = new NativeFile();
         public List<ServerFile> servers = List.of();
@@ -122,6 +123,9 @@ public final class ConfigLoader {
                             auth.verifyTokenBytes,
                             auth.sessionVerification,
                             java.time.Duration.ofMillis(parseDurationMillis(auth.sessionVerificationTimeout, 5_000))),
+                    new ProxyConfig.ForwardingConfig(
+                            forwarding.mode,
+                            forwarding.secret),
                     new ProxyConfig.NativeConfig(
                             nativeFile.enabled,
                             nativeFile.autoDetect,
@@ -201,6 +205,11 @@ public final class ConfigLoader {
         public int verifyTokenBytes = 4;
         public boolean sessionVerification = false;
         public String sessionVerificationTimeout = "5s";
+    }
+
+    public static final class ForwardingFile {
+        public String mode = "none";
+        public String secret = "";
     }
 
     public static final class AdminFile {

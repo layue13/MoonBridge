@@ -46,6 +46,10 @@ auth:
   sessionVerification: false
   sessionVerificationTimeout: "5s"
 
+forwarding:
+  mode: "none"
+  secret: "${STRATAPROXY_FORWARDING_SECRET:}"
+
 native:
   enabled: true
   autoDetect: true

@@ -146,7 +146,7 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
                     }
                     var authenticatedLoginStart = loginStartFrame;
                     loginStartFrame = null;
-                    callback.authenticated(context, authenticatedLoginStart, sharedSecret, username);
+                    callback.authenticated(context, authenticatedLoginStart, sharedSecret, username, result.profile());
                 }));
     }
 
@@ -198,6 +198,11 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
     }
 
     interface AuthenticatedLoginCallback {
-        void authenticated(ChannelHandlerContext context, ByteBuf loginStartFrame, byte[] sharedSecret, String username);
+        void authenticated(
+                ChannelHandlerContext context,
+                ByteBuf loginStartFrame,
+                byte[] sharedSecret,
+                String username,
+                MinecraftSessionVerifier.GameProfile profile);
     }
 }

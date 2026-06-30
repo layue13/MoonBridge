@@ -254,6 +254,16 @@ auth:
 
 When `sessionVerification` is enabled, StrataProxy calls Mojang `hasJoined` asynchronously after the Encryption Response and only continues backend relay for accepted profiles. Keep backend servers configured for the chosen forwarding mode; player-side online-mode encryption termination does not by itself define the backend identity-forwarding contract.
 
+Backend identity forwarding is configured separately:
+
+```yaml
+forwarding:
+  mode: "velocity-modern"
+  secret: "${STRATAPROXY_FORWARDING_SECRET}"
+```
+
+`velocity-modern` intercepts the backend Login Plugin Request on `velocity:player_info` before compression negotiation and replies with a HMAC-SHA256 signed Login Plugin Response containing the client address, verified UUID, username, and Mojang profile properties. Backend Paper-compatible servers should run behind the proxy with backend `online-mode=false`, Velocity forwarding enabled, and the same secret. The current implementation forwards the version 1 identity/profile payload; Minecraft 1.19+ chat signing key forwarding is still a separate compatibility item because it requires parsing and retaining the client's login public-key material.
+
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 
 ## Current Runtime Capability
@@ -266,6 +276,8 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Reports the actual bound proxy address after startup, including when the configured port is `0`.
 - Honors `network.nativeTransport`: uses Netty epoll/kqueue when available and falls back to NIO otherwise; startup logs the selected transport.
 - Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
+- Supports Minecraft online-mode player-side encryption termination with optional Mojang session verification.
+- Supports Velocity modern forwarding v1 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads.
 - Parses the first Minecraft handshake frame using bounded VarInt/frame checks.
 - Rejects excessive bytes pipelined after the initial handshake before backend connect; pre-route pending data is capped by `network.maxFrameBytes`.
 - Provides Minecraft compression frame codec and Netty encoder/decoder handlers with bounded VarInt parsing, threshold checks, maximum uncompressed-size guard, partial-frame handling, and malformed zlib rejection.

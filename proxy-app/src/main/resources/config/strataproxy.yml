@@ -46,6 +46,10 @@ auth:
   sessionVerification: false
   sessionVerificationTimeout: "5s"
 
+forwarding:
+  mode: "none"
+  secret: ""
+
 native:
   enabled: true
   autoDetect: true

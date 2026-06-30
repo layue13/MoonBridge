@@ -8,10 +8,16 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.regex.Pattern;
 
 final class MojangMinecraftSessionVerifier implements MinecraftSessionVerifier {
     private static final URI DEFAULT_HAS_JOINED_ENDPOINT = URI.create("https://sessionserver.mojang.com/session/minecraft/hasJoined");
+    private static final Pattern JSON_STRING_FIELD = Pattern.compile("\"%s\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
+    private static final Pattern PROPERTY_OBJECT = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"\\s*,\\s*\"value\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"(?:\\s*,\\s*\"signature\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\")?\\s*}");
 
     private final HttpClient client;
     private final URI endpoint;
@@ -45,8 +51,11 @@ final class MojangMinecraftSessionVerifier implements MinecraftSessionVerifier {
                 .build();
         return client.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
                 .thenApply(response -> {
-                    if (response.statusCode() == 200 && looksLikeProfile(response.body(), username)) {
-                        return SessionVerificationResult.allowed("mojang-hasJoined");
+                    if (response.statusCode() == 200) {
+                        var profile = parseProfile(response.body());
+                        if (profile != null && profile.name().equalsIgnoreCase(username)) {
+                            return SessionVerificationResult.allowed("mojang-hasJoined", profile);
+                        }
                     }
                     return SessionVerificationResult.denied("mojang-hasJoined status=" + response.statusCode());
                 })
@@ -58,18 +67,64 @@ final class MojangMinecraftSessionVerifier implements MinecraftSessionVerifier {
         return endpoint.resolve(endpoint.getPath() + "?" + query);
     }
 
-    private static boolean looksLikeProfile(String body, String username) {
+    private static GameProfile parseProfile(String body) {
         if (body == null || body.isBlank()) {
-            return false;
+            return null;
         }
-        return body.contains("\"id\"") && body.contains("\"name\"") && body.contains("\"" + jsonToken(username) + "\"");
+        var id = stringField(body, "id");
+        var name = stringField(body, "name");
+        if (id.isBlank() || name.isBlank()) {
+            return null;
+        }
+        return new GameProfile(uuidFromMojangId(id), name, properties(body));
+    }
+
+    private static List<Property> properties(String body) {
+        var properties = new ArrayList<Property>();
+        var matcher = PROPERTY_OBJECT.matcher(body);
+        while (matcher.find()) {
+            properties.add(new Property(
+                    unescape(matcher.group(1)),
+                    unescape(matcher.group(2)),
+                    matcher.group(3) == null ? "" : unescape(matcher.group(3))));
+        }
+        return List.copyOf(properties);
+    }
+
+    private static String stringField(String body, String field) {
+        var matcher = Pattern.compile(JSON_STRING_FIELD.pattern().formatted(Pattern.quote(field))).matcher(body);
+        return matcher.find() ? unescape(matcher.group(1)) : "";
+    }
+
+    private static UUID uuidFromMojangId(String id) {
+        var normalized = id.replace("-", "");
+        if (normalized.length() != 32) {
+            return null;
+        }
+        return UUID.fromString(normalized.substring(0, 8)
+                + "-"
+                + normalized.substring(8, 12)
+                + "-"
+                + normalized.substring(12, 16)
+                + "-"
+                + normalized.substring(16, 20)
+                + "-"
+                + normalized.substring(20));
     }
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private static String jsonToken(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    private static String unescape(String value) {
+        return value
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\/", "/")
+                .replace("\\b", "\b")
+                .replace("\\f", "\f")
+                .replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t");
     }
 }

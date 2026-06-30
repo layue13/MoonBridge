@@ -25,6 +25,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     private final CompressionRuntime compressionRuntime;
     private final MinecraftPacketTrafficSampler packetTrafficSampler;
     private final RelaySessionIdentity identity;
+    private final MinecraftForwardingRuntime forwardingRuntime;
     private final CompressionRewriteRuntime compressionRewriteRuntime;
     private final int maxFrameBytes;
     private boolean closed;
@@ -89,6 +90,20 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             RelaySessionIdentity identity,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
+        this(frontend, metrics, serverName, maxFrameBytes, compressionAudit, compressionRuntime, identity, MinecraftForwardingRuntime.none(), compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
+    }
+
+    BackendRelayHandler(
+            Channel frontend,
+            ProxyMetrics metrics,
+            String serverName,
+            int maxFrameBytes,
+            MinecraftCompressionAuditState compressionAudit,
+            CompressionRuntime compressionRuntime,
+            RelaySessionIdentity identity,
+            MinecraftForwardingRuntime forwardingRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis) {
         this.frontend = frontend;
         this.metrics = metrics;
         this.serverName = serverName;
@@ -97,6 +112,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         this.compressionRuntime = compressionRuntime;
         this.packetTrafficSampler = new MinecraftPacketTrafficSampler(maxFrameBytes);
         this.identity = identity;
+        this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteRuntime = new CompressionRewriteRuntime(compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
         this.maxFrameBytes = maxFrameBytes;
     }
@@ -112,6 +128,22 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         var forward = true;
         List<CompressionAction> compressionActions = List.of();
         if (message instanceof ByteBuf buffer) {
+            var forwardingRequest = observeVelocityForwardingRequest(context, buffer);
+            if (forwardingRequest.matched()) {
+                ReferenceCountUtil.release(message);
+                var response = VelocityModernForwarding.response(context.alloc(), forwardingRequest.messageId(), forwardingRuntime, identity);
+                context.writeAndFlush(response).addListener((ChannelFutureListener) future -> {
+                    if (future.isSuccess()) {
+                        context.channel().read();
+                    } else {
+                        context.close();
+                        if (frontend.isOpen()) {
+                            frontend.close();
+                        }
+                    }
+                });
+                return;
+            }
             metrics.backendToFrontendBytes(serverName, buffer.readableBytes());
             capturePayloadPrefix(buffer, CompressionDirection.BACKEND_TO_FRONTEND);
             observePacketTraffic(buffer);
@@ -156,6 +188,13 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
                 context.close();
             }
         });
+    }
+
+    private VelocityModernForwarding.ForwardingRequest observeVelocityForwardingRequest(ChannelHandlerContext context, ByteBuf buffer) {
+        if (!forwardingRuntime.velocityModern() || compressionAudit.negotiated()) {
+            return VelocityModernForwarding.ForwardingRequest.none();
+        }
+        return VelocityModernForwarding.request(buffer, maxFrameBytes);
     }
 
     @Override

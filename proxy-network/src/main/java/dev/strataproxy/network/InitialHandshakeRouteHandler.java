@@ -30,6 +30,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private final CompressionRuntime compressionRuntime;
     private final CustomPayloadAnomalyPolicy customPayloadPolicy;
     private final MinecraftAuthRuntime authRuntime;
+    private final MinecraftForwardingRuntime forwardingRuntime;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private boolean terminal;
@@ -45,7 +46,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             Class<? extends io.netty.channel.Channel> backendChannel,
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy) {
-        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), false, 25);
+        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), false, 25);
     }
 
     InitialHandshakeRouteHandler(
@@ -56,7 +57,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             boolean compressionRewriteEnabled) {
-        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), compressionRewriteEnabled, 25);
+        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), compressionRewriteEnabled, 25);
     }
 
     InitialHandshakeRouteHandler(
@@ -67,6 +68,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             MinecraftAuthRuntime authRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
         this.backendResolver = backendResolver;
@@ -76,6 +78,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         this.compressionRuntime = compressionRuntime;
         this.customPayloadPolicy = customPayloadPolicy;
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
+        this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
     }
@@ -97,6 +100,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 compressionRuntime,
                 customPayloadPolicy,
                 MinecraftAuthRuntime.offline(),
+                MinecraftForwardingRuntime.none(),
                 compressionRewriteEnabled,
                 compressionRewriteMaxEventLoopDelayMillis);
     }
@@ -215,6 +219,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             ByteBuf pendingBytes,
             RegisteredServer selected) {
         var consumed = new java.util.concurrent.atomic.AtomicBoolean();
+        var identity = new RelaySessionIdentity(remoteAddress(context.channel().remoteAddress()));
         context.channel().closeFuture().addListener(ignored -> {
             if (consumed.compareAndSet(false, true)) {
                 release(firstFrame);
@@ -226,10 +231,13 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 authRuntime.keyPair(),
                 authRuntime.newVerifyToken(),
                 authRuntime.sessionVerifier(),
-                (authContext, loginStartFrame, sharedSecret, username) -> {
+                (authContext, loginStartFrame, sharedSecret, username, profile) -> {
                     if (consumed.compareAndSet(false, true)) {
                         release(pendingBytes);
-                        connectBackend(authContext, firstFrame, loginStartFrame, selected, "online-mode-login");
+                        identity.profile(profile == null
+                                ? new MinecraftSessionVerifier.GameProfile(null, username, List.of())
+                                : profile);
+                        connectBackend(authContext, firstFrame, loginStartFrame, selected, "online-mode-login", identity);
                     } else {
                         release(loginStartFrame);
                     }
@@ -253,7 +261,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             ByteBuf firstFrame,
             ByteBuf pendingBytes,
             RegisteredServer selected) {
-        connectBackend(frontendContext, firstFrame, pendingBytes, selected, null);
+        connectBackend(frontendContext, firstFrame, pendingBytes, selected, null, null);
     }
 
     private void connectBackend(
@@ -261,11 +269,12 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             ByteBuf firstFrame,
             ByteBuf pendingBytes,
             RegisteredServer selected,
-            String frontendHandlerNameToReplace) {
+            String frontendHandlerNameToReplace,
+            RelaySessionIdentity existingIdentity) {
         var frontend = frontendContext.channel();
         var serverName = selected.descriptor().name();
         var compressionAudit = new MinecraftCompressionAuditState(tuning.maxFrameBytes());
-        var identity = new RelaySessionIdentity(remoteAddress(frontend.remoteAddress()));
+        var identity = existingIdentity == null ? new RelaySessionIdentity(remoteAddress(frontend.remoteAddress())) : existingIdentity;
         var bootstrap = new Bootstrap()
                 .group(frontend.eventLoop())
                 .channel(backendChannel)
@@ -285,11 +294,12 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                                 metrics,
                                 serverName,
                                 tuning.maxFrameBytes(),
-                                compressionAudit,
-                                compressionRuntime,
-                                identity,
-                                compressionRewriteEnabled,
-                                compressionRewriteMaxEventLoopDelayMillis));
+                                 compressionAudit,
+                                 compressionRuntime,
+                                 identity,
+                                 forwardingRuntime,
+                                 compressionRewriteEnabled,
+                                 compressionRewriteMaxEventLoopDelayMillis));
                     }
                 });
 
