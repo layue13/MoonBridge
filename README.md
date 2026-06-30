@@ -229,6 +229,16 @@ native:
 
 `autoDetect` records available CPU features such as AES, VAES, PCLMULQDQ, SHA-NI, CRC32, AVX2, AVX-512F, BMI2, POPCNT, NEON, and ARM crypto where the host exposes them. Java 25 and the JDK TLS/zlib implementations use their own intrinsics internally when available; StrataProxy records the selected runtime providers and exposes them through `/native-capabilities`, `/diagnostic-report`, and Prometheus. Set `disabledFeatures` to suppress a problematic feature in diagnostics and policy decisions, or `forcedFeatures` to model a capability that the detector cannot see. Set `requireNativeTransport: true` on Linux acceptance hosts when epoll/kqueue fallback to NIO should fail startup instead of silently reducing the performance envelope.
 
+StrataProxy does not ship custom JNI code for the core data path while Netty and the JDK already provide the needed native pieces. The application distribution includes Netty native transport classifiers for Linux x86_64, Linux aarch64, macOS x86_64, and macOS aarch64. Runtime selection is automatic:
+
+| Platform | Native path | Fallback |
+| --- | --- | --- |
+| Linux x86_64 / aarch64 | Netty epoll | NIO |
+| macOS x86_64 / aarch64 | Netty kqueue | NIO |
+| Windows x86_64 / aarch64 | NIO | NIO |
+
+Windows support is intentionally NIO-first because Netty does not provide an IOCP server transport equivalent in the standard transport set. If future profiling shows Admin API TLS, proxy TLS, or a custom encrypted transport is CPU-bound, add Netty `netty-tcnative-boringssl-static` as a provider dependency before considering project-owned JNI. For Minecraft proxy packet forwarding, native epoll/kqueue plus JDK crypto/compression intrinsics are the default high-performance baseline.
+
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 
 ## Current Runtime Capability

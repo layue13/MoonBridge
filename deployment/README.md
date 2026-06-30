@@ -47,6 +47,8 @@ docker run --rm \
 
 For host-network deployments, prefer Linux native transport and keep the Admin API bound to loopback or protected by mTLS.
 
+The release distribution carries Netty native transport libraries for Linux x86_64, Linux aarch64, macOS x86_64, and macOS aarch64. Keep `native.enabled: true`, `native.autoDetect: true`, and `network.nativeTransport: true` for automatic epoll/kqueue selection. Windows deployments run on Netty NIO by design; do not set `native.requireNativeTransport: true` on Windows.
+
 ## Observability
 
 Packaged observability assets live under `deployment/observability`:

@@ -144,6 +144,7 @@ gradle.projectsEvaluated {
         metadataFile.set(releaseMetadata)
         sbomFile.set(releaseSbom)
         checksumFile.set(releaseChecksum)
+        runtimeArtifacts.from(app.configurations.getByName("runtimeClasspath"))
     }
 
     val performanceProfilesSmokeTest = tasks.register<PerformanceProfilesAuditTask>("performanceProfilesSmokeTest") {
@@ -214,7 +215,7 @@ abstract class ReleaseManifestTask : DefaultTask() {
             appArchive=${appArchive.get()}
             adminArchive=${adminArchive.get()}
             queryArchive=${queryArchive.get()}
-            includes=deployment,configs,observability,checksums
+            includes=deployment,configs,observability,native-runtime,checksums
             """.trimIndent() + System.lineSeparator()
         )
     }
@@ -443,6 +444,9 @@ abstract class ReleaseAuditTask : DefaultTask() {
     @get:InputFile
     abstract val checksumFile: RegularFileProperty
 
+    @get:InputFiles
+    abstract val runtimeArtifacts: ConfigurableFileCollection
+
     @TaskAction
     fun audit() {
         val metadata = metadataFile.get().asFile.readText()
@@ -462,10 +466,23 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "\"specVersion\": \"1.5\"",
             "\"components\": [",
             "pkg:maven/io.netty/netty-transport",
+            "pkg:maven/io.netty/netty-transport-native-epoll",
+            "pkg:maven/io.netty/netty-transport-native-kqueue",
             "pkg:maven/com.fasterxml.jackson.core/jackson-databind",
             "pkg:maven/info.picocli/picocli"
         ).forEach { token ->
             require(sbom.contains(token)) { "release SBOM missing $token" }
+        }
+        val artifactNames = runtimeArtifacts.files.map { it.name }.toSet()
+        listOf(
+            "netty-transport-native-epoll-" to "linux-x86_64.jar",
+            "netty-transport-native-epoll-" to "linux-aarch_64.jar",
+            "netty-transport-native-kqueue-" to "osx-x86_64.jar",
+            "netty-transport-native-kqueue-" to "osx-aarch_64.jar"
+        ).forEach { (prefix, suffix) ->
+            require(artifactNames.any { it.startsWith(prefix) && it.endsWith(suffix) }) {
+                "runtime classpath missing Netty native artifact $prefix*$suffix"
+            }
         }
         listOf(
             "strataproxy-0.1.0-SNAPSHOT.zip",
