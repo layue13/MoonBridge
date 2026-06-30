@@ -24,6 +24,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     private final MinecraftCompressionNegotiationDetector compressionDetector;
     private final CompressionRuntime compressionRuntime;
     private final MinecraftPacketTrafficSampler packetTrafficSampler;
+    private final MinecraftLoginPluginRequestInspectionSampler loginPluginRequestInspection;
     private final RelaySessionIdentity identity;
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final CompressionRewriteRuntime compressionRewriteRuntime;
@@ -111,6 +112,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         this.compressionDetector = new MinecraftCompressionNegotiationDetector(maxFrameBytes);
         this.compressionRuntime = compressionRuntime;
         this.packetTrafficSampler = new MinecraftPacketTrafficSampler(maxFrameBytes);
+        this.loginPluginRequestInspection = new MinecraftLoginPluginRequestInspectionSampler(maxFrameBytes, maxFrameBytes);
         this.identity = identity;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteRuntime = new CompressionRewriteRuntime(compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
@@ -151,6 +153,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             }
             metrics.backendToFrontendBytes(serverName, buffer.readableBytes());
             capturePayloadPrefix(buffer, CompressionDirection.BACKEND_TO_FRONTEND);
+            observeLoginPluginRequests(buffer);
             observePacketTraffic(buffer);
             var compression = observeCompression(buffer);
             forward = compression.shouldForward();
@@ -227,7 +230,42 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         compressionDetector.close();
         compressionAudit.closeBackendSampler();
         packetTrafficSampler.close();
+        loginPluginRequestInspection.close();
         compressionRewriteRuntime.close();
+    }
+
+    private void observeLoginPluginRequests(ByteBuf buffer) {
+        if (compressionAudit.negotiated()) {
+            loginPluginRequestInspection.close();
+            return;
+        }
+        try {
+            for (var classification : loginPluginRequestInspection.observe(buffer)) {
+                metrics.customPayload(
+                        serverName,
+                        CompressionDirection.BACKEND_TO_FRONTEND,
+                        classification.kind().name(),
+                        classification.channel(),
+                        classification.payloadBytes(),
+                        0,
+                        identity.playerName(),
+                        identity.remoteAddress(),
+                        "LOGIN",
+                        classification.packetId());
+            }
+        } catch (RuntimeException exception) {
+            metrics.packetAnomaly(
+                    "login-plugin-request-inspection-malformed",
+                    identity.remoteAddress(),
+                    serverName,
+                    CompressionDirection.BACKEND_TO_FRONTEND.label(),
+                    "LOGIN",
+                    -1,
+                    buffer.readableBytes(),
+                    -1,
+                    exception.getMessage());
+            loginPluginRequestInspection.close();
+        }
     }
 
     private void observePacketTraffic(ByteBuf buffer) {

@@ -34,6 +34,30 @@ public final class MinecraftCustomPayloadClassifier {
         }
     }
 
+    public static CustomPayloadClassification classifyLoginPluginRequest(ByteBuf packetFrame, int largePayloadBytes) {
+        if (packetFrame == null) {
+            throw new IllegalArgumentException("packetFrame must not be null");
+        }
+        if (largePayloadBytes < 0) {
+            throw new IllegalArgumentException("largePayloadBytes must be non-negative");
+        }
+        var view = packetFrame.retainedDuplicate();
+        try {
+            var packetId = MinecraftVarInts.read(view);
+            MinecraftVarInts.read(view);
+            var channel = readString(view, MAX_CHANNEL_BYTES);
+            var payloadBytes = view.readableBytes();
+            return new CustomPayloadClassification(
+                    packetId,
+                    channel,
+                    payloadBytes,
+                    classifyChannel(channel),
+                    payloadBytes >= largePayloadBytes && largePayloadBytes > 0);
+        } finally {
+            view.release();
+        }
+    }
+
     private static String readString(ByteBuf input, int maxBytes) {
         var length = MinecraftVarInts.read(input);
         if (length < 0 || length > maxBytes) {

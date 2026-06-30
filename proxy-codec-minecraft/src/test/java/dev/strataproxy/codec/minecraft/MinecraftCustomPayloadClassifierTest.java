@@ -45,6 +45,24 @@ final class MinecraftCustomPayloadClassifierTest {
     }
 
     @Test
+    void classifiesLoginPluginRequestWithoutConsumingInput() {
+        var frame = loginPluginRequest(0x04, 7, "fml:handshake", 128);
+        var readerIndex = frame.readerIndex();
+        try {
+            var classification = MinecraftCustomPayloadClassifier.classifyLoginPluginRequest(frame, 64);
+
+            assertEquals(readerIndex, frame.readerIndex());
+            assertEquals(0x04, classification.packetId());
+            assertEquals("fml:handshake", classification.channel());
+            assertEquals(128, classification.payloadBytes());
+            assertEquals(MinecraftCustomPayloadClassifier.CustomPayloadKind.FORGE_HANDSHAKE, classification.kind());
+            assertTrue(classification.largePayload());
+        } finally {
+            frame.release();
+        }
+    }
+
+    @Test
     void classifiesRegistryOrConfigSyncPayloads() {
         var frame = customPayload(0x01, "modded:registry_sync", 64);
         try {
@@ -82,6 +100,17 @@ final class MinecraftCustomPayloadClassifierTest {
     private static io.netty.buffer.ByteBuf customPayload(int packetId, String channel, int payloadBytes) {
         var frame = Unpooled.buffer();
         MinecraftVarInts.write(frame, packetId);
+        var channelBytes = channel.getBytes(StandardCharsets.UTF_8);
+        MinecraftVarInts.write(frame, channelBytes.length);
+        frame.writeBytes(channelBytes);
+        frame.writeZero(payloadBytes);
+        return frame;
+    }
+
+    private static io.netty.buffer.ByteBuf loginPluginRequest(int packetId, int messageId, String channel, int payloadBytes) {
+        var frame = Unpooled.buffer();
+        MinecraftVarInts.write(frame, packetId);
+        MinecraftVarInts.write(frame, messageId);
         var channelBytes = channel.getBytes(StandardCharsets.UTF_8);
         MinecraftVarInts.write(frame, channelBytes.length);
         frame.writeBytes(channelBytes);
