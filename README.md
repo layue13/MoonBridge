@@ -115,6 +115,7 @@ Build the admin CLI distribution separately when you want local operator tooling
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 ready
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 overview
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 slo --require-ready --max-event-loop-delay-ms 5 --max-rejected 0 --max-anomalies 0
+.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 native
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 compression
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 packets
 .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 players
@@ -211,6 +212,22 @@ observability:
 `packetTopN` limits the sorted rule list returned by `/packet-anomalies`. `anomalySampling: false` keeps counters and Prometheus metrics active, but stops retaining recent anomaly samples.
 `flushIntervalSeconds` controls how often proxy-observed bytes, packet counts, and event loop delay are converted into per-server `ServerLoad` rates for routing and admin metrics.
 
+Native CPU/runtime acceleration is enabled by default and can be adjusted explicitly:
+
+```yaml
+native:
+  enabled: true
+  autoDetect: true
+  preferNativeTransport: true
+  requireNativeTransport: false
+  preferOpenSslTls: false
+  preferNativeCompression: false
+  disabledFeatures: []
+  forcedFeatures: []
+```
+
+`autoDetect` records available CPU features such as AES, VAES, PCLMULQDQ, SHA-NI, CRC32, AVX2, AVX-512F, BMI2, POPCNT, NEON, and ARM crypto where the host exposes them. Java 25 and the JDK TLS/zlib implementations use their own intrinsics internally when available; StrataProxy records the selected runtime providers and exposes them through `/native-capabilities`, `/diagnostic-report`, and Prometheus. Set `disabledFeatures` to suppress a problematic feature in diagnostics and policy decisions, or `forcedFeatures` to model a capability that the detector cannot see. Set `requireNativeTransport: true` on Linux acceptance hosts when epoll/kqueue fallback to NIO should fail startup instead of silently reducing the performance envelope.
+
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 
 ## Current Runtime Capability
@@ -222,6 +239,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Runs as a long-lived service until shutdown, with one centralized shutdown hook and idempotent reverse-order resource cleanup.
 - Reports the actual bound proxy address after startup, including when the configured port is `0`.
 - Honors `network.nativeTransport`: uses Netty epoll/kqueue when available and falls back to NIO otherwise; startup logs the selected transport.
+- Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
 - Parses the first Minecraft handshake frame using bounded VarInt/frame checks.
 - Rejects excessive bytes pipelined after the initial handshake before backend connect; pre-route pending data is capped by `network.maxFrameBytes`.
 - Provides Minecraft compression frame codec and Netty encoder/decoder handlers with bounded VarInt parsing, threshold checks, maximum uncompressed-size guard, partial-frame handling, and malformed zlib rejection.
@@ -289,6 +307,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
   - `GET /healthz`
   - `GET /readyz`
   - `GET /overview`
+  - `GET /native-capabilities`
   - `GET /compression-report`
   - `GET /diagnostic-report`
   - `GET /metrics` in Prometheus text format when `observability.prometheus` is enabled
@@ -310,7 +329,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
   - `POST /servers/{name}/undrain`
   - `POST /servers/{name}/health`
   - `POST /servers/{name}/load`
-- Provides `strataproxy-admin` CLI commands for health, readiness, structured operational overview with admission rejection reasons independent of Prometheus, scriptable SLO gates for readiness, event-loop delay, active connections, rejected connections, anomaly count, and native transport, metrics, diagnostic report export, direction-aware compression audit, strategy decision, and live rewrite outcome summaries independent of Prometheus, packet traffic summaries, classified custom payload summaries, active player sessions, route preview, structured packet anomaly summary with optional recent samples, relay backpressure summaries, payload capture list/start/get/stop, server list/get/register/update/remove/drain/undrain, and health/load updates.
+- Provides `strataproxy-admin` CLI commands for health, readiness, structured operational overview with admission rejection reasons independent of Prometheus, scriptable SLO gates for readiness, event-loop delay, active connections, rejected connections, anomaly count, and native transport, native CPU/runtime capability summaries, metrics, diagnostic report export, direction-aware compression audit, strategy decision, and live rewrite outcome summaries independent of Prometheus, packet traffic summaries, classified custom payload summaries, active player sessions, route preview, structured packet anomaly summary with optional recent samples, relay backpressure summaries, payload capture list/start/get/stop, server list/get/register/update/remove/drain/undrain, and health/load updates.
 - Supports optional Admin API HTTPS and mTLS using Java keystore/truststore configuration.
 - Provides `strataproxy-query` CLI commands for Minecraft status checks, idle TCP connection load probes, Minecraft handshake route-load probes, multi-virtual-host route storm probes, generated packet traffic-load probes, compression rewrite load probes with partial-frame writes, repeatable smoke/acceptance load-suite orchestration, JSON load-test result output for automation, and a slow-reading backend sink for backpressure validation.
 

@@ -39,6 +39,16 @@ observability:
   anomalySampling: true
   flushIntervalSeconds: 5
 
+native:
+  enabled: true
+  autoDetect: true
+  preferNativeTransport: true
+  requireNativeTransport: false
+  preferOpenSslTls: false
+  preferNativeCompression: false
+  disabledFeatures: []
+  forcedFeatures: []
+
 admin:
   enabled: true
   bind: "127.0.0.1:8080"

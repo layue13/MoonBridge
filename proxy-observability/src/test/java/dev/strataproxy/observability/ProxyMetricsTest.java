@@ -3,6 +3,7 @@ package dev.strataproxy.observability;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,6 +17,7 @@ final class ProxyMetricsTest {
         metrics.eventLoopDelayNanos(50);
         metrics.pooledDirectMemoryBytes(4096);
         metrics.networkTransport("nio", false);
+        metrics.nativeRuntime(true, "Linux", "amd64", "/proc/cpuinfo", "jdk-aes-intrinsics", "jdk-deflater-native-zlib", true, false, Map.of("aes", true, "avx2", true));
         metrics.rejectedConnection("global_limit");
         metrics.rejectedConnection("per_address_limit");
         metrics.rejectedConnection("per_address_limit");
@@ -47,6 +49,10 @@ final class ProxyMetricsTest {
         assertEquals(4096, snapshot.pooledDirectMemoryBytes());
         assertEquals("nio", snapshot.networkTransport().name());
         assertEquals(false, snapshot.networkTransport().nativeTransport());
+        assertTrue(snapshot.nativeRuntime().enabled());
+        assertEquals("Linux", snapshot.nativeRuntime().os());
+        assertEquals("jdk-aes-intrinsics", snapshot.nativeRuntime().tlsProvider());
+        assertEquals(true, snapshot.nativeRuntime().features().get("aes"));
         assertEquals(3, snapshot.rejectedConnections());
         assertEquals(1, snapshot.rejectedConnectionsByReason().get("global_limit"));
         assertEquals(2, snapshot.rejectedConnectionsByReason().get("per_address_limit"));

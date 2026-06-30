@@ -2,6 +2,7 @@ package dev.strataproxy.bootstrap;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Set;
 
 public record ProxyConfig(
         InetSocketAddress bindAddress,
@@ -12,7 +13,31 @@ public record ProxyConfig(
         CompressionConfig compression,
         PacketAnalysisConfig packetAnalysis,
         ObservabilityConfig observability,
-        AdminConfig admin) {
+        AdminConfig admin,
+        NativeConfig nativeRuntime) {
+    public ProxyConfig(
+            InetSocketAddress bindAddress,
+            int workerThreads,
+            boolean nativeTransport,
+            NetworkConfig network,
+            RegistryConfig registry,
+            CompressionConfig compression,
+            PacketAnalysisConfig packetAnalysis,
+            ObservabilityConfig observability,
+            AdminConfig admin) {
+        this(
+                bindAddress,
+                workerThreads,
+                nativeTransport,
+                network,
+                registry,
+                compression,
+                packetAnalysis,
+                observability,
+                admin,
+                NativeConfig.defaults());
+    }
+
     public ProxyConfig {
         if (workerThreads < 0) {
             throw new IllegalArgumentException("workerThreads must be >= 0");
@@ -23,6 +48,7 @@ public record ProxyConfig(
         packetAnalysis = packetAnalysis == null ? PacketAnalysisConfig.defaults() : packetAnalysis;
         observability = observability == null ? ObservabilityConfig.defaults() : observability;
         admin = admin == null ? AdminConfig.defaults() : admin;
+        nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
     }
 
     public int resolvedWorkerThreads() {
@@ -39,7 +65,27 @@ public record ProxyConfig(
                 CompressionConfig.defaults(),
                 PacketAnalysisConfig.defaults(),
                 ObservabilityConfig.defaults(),
-                AdminConfig.defaults());
+                AdminConfig.defaults(),
+                NativeConfig.defaults());
+    }
+
+    public record NativeConfig(
+            boolean enabled,
+            boolean autoDetect,
+            boolean preferNativeTransport,
+            boolean requireNativeTransport,
+            boolean preferOpenSslTls,
+            boolean preferNativeCompression,
+            Set<String> disabledFeatures,
+            Set<String> forcedFeatures) {
+        public NativeConfig {
+            disabledFeatures = disabledFeatures == null ? Set.of() : Set.copyOf(disabledFeatures);
+            forcedFeatures = forcedFeatures == null ? Set.of() : Set.copyOf(forcedFeatures);
+        }
+
+        public static NativeConfig defaults() {
+            return new NativeConfig(true, true, true, false, false, false, Set.of(), Set.of());
+        }
     }
 
     public record NetworkConfig(

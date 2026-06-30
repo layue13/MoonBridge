@@ -15,6 +15,7 @@ dependencies {
     implementation(project(":proxy-packet-analysis"))
     implementation(project(":proxy-admin-api"))
     implementation(project(":proxy-codec-minecraft"))
+    implementation(project(":proxy-native"))
 }
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {

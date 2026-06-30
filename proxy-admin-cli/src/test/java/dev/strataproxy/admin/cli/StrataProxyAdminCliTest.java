@@ -568,6 +568,26 @@ final class StrataProxyAdminCliTest {
     }
 
     @Test
+    void printsNativeRuntimeSummary() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        metrics.nativeRuntime(true, "Linux", "amd64", "/proc/cpuinfo", "jdk-aes-intrinsics", "jdk-deflater", true, false, java.util.Map.of("aes", true, "avx512f", false));
+        try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
+            admin.start();
+            var baseUrl = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+
+            var nativeRuntime = execute("--base-url", baseUrl, "native");
+
+            assertEquals(0, nativeRuntime.exitCode());
+            assertTrue(nativeRuntime.output().contains("enabled os arch source tls_provider compression_provider prefer_native_transport require_native_transport\n"));
+            assertTrue(nativeRuntime.output().contains("true Linux amd64 /proc/cpuinfo jdk-aes-intrinsics jdk-deflater true false"));
+            assertTrue(nativeRuntime.output().contains("feature enabled\n"));
+            assertTrue(nativeRuntime.output().contains("aes true"));
+            assertTrue(nativeRuntime.output().contains("avx512f false"));
+        }
+    }
+
+    @Test
     void printsRelayBackpressureSummary() throws Exception {
         var registry = new InMemoryServerRegistry();
         var metrics = new ProxyMetrics();

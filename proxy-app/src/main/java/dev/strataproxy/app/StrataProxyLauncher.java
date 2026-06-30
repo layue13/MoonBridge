@@ -14,6 +14,10 @@ import dev.strataproxy.compression.CompressionStrategies;
 import dev.strataproxy.network.NettyProxyNetworkServer;
 import dev.strataproxy.network.NetworkTuning;
 import dev.strataproxy.network.RoutingBackendResolver;
+import dev.strataproxy.nativefeature.NativeCapabilityDetector;
+import dev.strataproxy.nativefeature.NativeFeature;
+import dev.strataproxy.nativefeature.NativeRuntimeDecision;
+import dev.strataproxy.nativefeature.NativeRuntimeOptions;
 import dev.strataproxy.observability.ProxyMetrics;
 import dev.strataproxy.registry.InMemoryServerRegistry;
 import dev.strataproxy.registry.TcpServerHealthChecker;
@@ -26,6 +30,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CountDownLatch;
@@ -138,6 +144,17 @@ public final class StrataProxyLauncher {
             var router = new WeightedHealthAwareRouter(registry);
             var resolver = new RoutingBackendResolver(router);
             var metrics = new ProxyMetrics(config.observability().anomalySampling());
+            var nativeDecision = NativeRuntimeDecision.resolve(nativeOptions(config.nativeRuntime()), NativeCapabilityDetector.detect());
+            metrics.nativeRuntime(
+                    nativeDecision.enabled(),
+                    nativeDecision.capabilities().os(),
+                    nativeDecision.capabilities().arch(),
+                    nativeDecision.capabilities().detectionSource(),
+                    nativeDecision.tlsProvider(),
+                    nativeDecision.compressionProvider(),
+                    nativeDecision.preferNativeTransport(),
+                    nativeDecision.requireNativeTransport(),
+                    nativeDecision.capabilities().featureMap(nativeDecision.enabledFeatures()));
             var compressionStrategy = CompressionStrategies.from(config.compression().mode());
             var customPayloadPolicy = new CustomPayloadAnomalyPolicy(
                     config.packetAnalysis().largePayloadWarnBytes(),
@@ -154,6 +171,15 @@ public final class StrataProxyLauncher {
                     + " cpuGuard=" + config.compression().cpuGuard()
                     + " rewriteEnabled=" + config.compression().rewriteEnabled()
                     + " rewriteMaxEventLoopDelayMillis=" + config.compression().rewriteMaxEventLoopDelayMillis());
+            out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
+                    + " os=" + nativeDecision.capabilities().os()
+                    + " arch=" + nativeDecision.capabilities().arch()
+                    + " source=" + nativeDecision.capabilities().detectionSource()
+                    + " tlsProvider=" + nativeDecision.tlsProvider()
+                    + " compressionProvider=" + nativeDecision.compressionProvider()
+                    + " preferNativeTransport=" + nativeDecision.preferNativeTransport()
+                    + " requireNativeTransport=" + nativeDecision.requireNativeTransport()
+                    + " features=" + nativeDecision.enabledFeatures().stream().map(NativeFeature::label).sorted().toList());
             out.println("StrataProxy starting on " + config.bindAddress() + " with " + config.resolvedWorkerThreads() + " worker threads");
 
             if (config.registry().healthCheckEnabled()) {
@@ -202,7 +228,7 @@ public final class StrataProxyLauncher {
                             config.network().maxConnections(),
                             config.network().maxConnectionsPerAddress(),
                             config.network().initialHandshakeTimeoutMillis()),
-                    config.nativeTransport(),
+                    config.nativeTransport() && nativeDecision.preferNativeTransport(),
                     compressionStrategy,
                     config.compression().minThreshold(),
                     config.compression().maxThreshold(),
@@ -211,6 +237,9 @@ public final class StrataProxyLauncher {
                     config.compression().rewriteEnabled(),
                     config.compression().rewriteMaxEventLoopDelayMillis());
             started.add(server);
+            if (nativeDecision.requireNativeTransport() && !server.nativeTransport()) {
+                throw new IllegalStateException("native transport is required but unavailable; selected transport=" + server.transportName());
+            }
             server.bind(config.bindAddress()).toCompletableFuture().join();
             out.println("StrataProxy bound on " + server.bindAddress() + " using " + server.transportName() + " transport");
             var running = new RunningProxy(server, List.copyOf(started), metrics);
@@ -358,8 +387,29 @@ public final class StrataProxyLauncher {
                 config.compression(),
                 config.packetAnalysis(),
                 config.observability(),
-                resolvedAdmin);
+                resolvedAdmin,
+                config.nativeRuntime());
         return new ConfigLoader.LoadedProxyConfig(resolvedConfig, loaded.servers());
+    }
+
+    private static NativeRuntimeOptions nativeOptions(ProxyConfig.NativeConfig config) {
+        var nativeConfig = config == null ? ProxyConfig.NativeConfig.defaults() : config;
+        return new NativeRuntimeOptions(
+                nativeConfig.enabled(),
+                nativeConfig.autoDetect(),
+                nativeConfig.preferNativeTransport(),
+                nativeConfig.requireNativeTransport(),
+                nativeConfig.preferOpenSslTls(),
+                nativeConfig.preferNativeCompression(),
+                nativeFeatures(nativeConfig.disabledFeatures()),
+                nativeFeatures(nativeConfig.forcedFeatures()));
+    }
+
+    private static Set<NativeFeature> nativeFeatures(Set<String> values) {
+        if (values == null || values.isEmpty()) {
+            return Set.of();
+        }
+        return values.stream().map(NativeFeature::fromLabel).collect(Collectors.toUnmodifiableSet());
     }
 
     private static void printUsage(java.io.PrintStream out) {

@@ -614,6 +614,7 @@ final class AdminHttpServerTest {
         metrics.eventLoopDelayNanos(1_000_000);
         metrics.pooledDirectMemoryBytes(2048);
         metrics.networkTransport("nio", false);
+        metrics.nativeRuntime(true, "Linux", "amd64", "/proc/cpuinfo", "jdk-aes-intrinsics", "jdk-deflater-native-zlib", true, false, java.util.Map.of("aes", true, "avx2", true));
         metrics.rejectedConnection("global_limit");
         metrics.rejectedConnection("per_address_limit");
         metrics.packetAnomaly("initial-handshake-malformed-frame");
@@ -635,6 +636,9 @@ final class AdminHttpServerTest {
             assertTrue(response.body().contains("strataproxy_event_loop_delay_seconds"));
             assertTrue(response.body().contains("strataproxy_pooled_direct_memory_bytes 2048"));
             assertTrue(response.body().contains("strataproxy_network_transport_info{transport=\"nio\",native=\"false\"} 1"));
+            assertTrue(response.body().contains("strataproxy_native_runtime_info{enabled=\"true\",os=\"Linux\",arch=\"amd64\",source=\"/proc/cpuinfo\",tls_provider=\"jdk-aes-intrinsics\",compression_provider=\"jdk-deflater-native-zlib\"} 1"));
+            assertTrue(response.body().contains("strataproxy_native_capability{feature=\"aes\"} 1"));
+            assertTrue(response.body().contains("strataproxy_native_capability{feature=\"avx2\"} 1"));
             assertTrue(response.body().contains("strataproxy_connections_rejected_total 2"));
             assertTrue(response.body().contains("strataproxy_connections_rejected_total{reason=\"global_limit\"} 1"));
             assertTrue(response.body().contains("strataproxy_connections_rejected_total{reason=\"per_address_limit\"} 1"));
@@ -660,6 +664,28 @@ final class AdminHttpServerTest {
             assertTrue(response.body().contains("strataproxy_compression_decisions_total{server=\"metrics-1\",direction=\"backend_to_frontend\",action=\"threshold\",threshold=\"1024\"} 1"));
             assertTrue(response.body().contains("strataproxy_compression_rewrites_total{server=\"metrics-1\",direction=\"backend_to_frontend\",outcome=\"rewritten\"} 1"));
             assertTrue(response.body().contains("strataproxy_compression_rewrite_cpu_seconds_total{server=\"metrics-1\",direction=\"backend_to_frontend\",outcome=\"rewritten\"} 0.002"));
+        }
+    }
+
+    @Test
+    void exposesNativeCapabilitiesReport() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        metrics.nativeRuntime(true, "Linux", "amd64", "/proc/cpuinfo", "jdk-aes-intrinsics", "jdk-deflater", true, true, java.util.Map.of("aes", true, "avx512f", false));
+        try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
+            admin.start();
+            var base = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+            var client = HttpClient.newHttpClient();
+
+            var response = client.send(HttpRequest.newBuilder(URI.create(base + "/native-capabilities")).GET().build(), HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"enabled\":true"));
+            assertTrue(response.body().contains("\"os\":\"Linux\""));
+            assertTrue(response.body().contains("\"tlsProvider\":\"jdk-aes-intrinsics\""));
+            assertTrue(response.body().contains("\"requireNativeTransport\":true"));
+            assertTrue(response.body().contains("\"aes\":true"));
+            assertTrue(response.body().contains("\"avx512f\":false"));
         }
     }
 

@@ -122,6 +122,43 @@ final class ConfigValidatorTest {
     }
 
     @Test
+    void validatesNativeFeatureOverrides() {
+        var config = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                ProxyConfig.CompressionConfig.defaults(),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                ProxyConfig.AdminConfig.defaults(),
+                new ProxyConfig.NativeConfig(true, true, true, false, false, false, Set.of("not-a-feature"), Set.of("aes")));
+
+        var invalid = new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
+
+        assertFalse(invalid.valid());
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("unknown feature")));
+
+        var conflict = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                ProxyConfig.CompressionConfig.defaults(),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                ProxyConfig.AdminConfig.defaults(),
+                new ProxyConfig.NativeConfig(true, true, true, false, false, false, Set.of("aes"), Set.of("aes")));
+
+        var conflictResult = new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(conflict, List.of(server("one"))));
+
+        assertFalse(conflictResult.valid());
+        assertTrue(conflictResult.errors().stream().anyMatch(error -> error.contains("both disabled and forced")));
+    }
+
+    @Test
     void validatesAdminTlsFiles() throws Exception {
         var keyStore = tempDir.resolve("admin.p12");
         var trustStore = tempDir.resolve("clients.p12");

@@ -50,6 +50,7 @@ public final class ProxyMetrics {
     private final AtomicLong maxEventLoopDelayNanos = new AtomicLong();
     private final AtomicLong pooledDirectMemoryBytes = new AtomicLong();
     private final AtomicReference<NetworkTransport> networkTransport = new AtomicReference<>(new NetworkTransport("unknown", false));
+    private final AtomicReference<NativeRuntimeInfo> nativeRuntime = new AtomicReference<>(NativeRuntimeInfo.unknown());
 
     public ProxyMetrics() {
         this(true);
@@ -416,6 +417,28 @@ public final class ProxyMetrics {
         networkTransport.set(new NetworkTransport(name, nativeTransport));
     }
 
+    public void nativeRuntime(
+            boolean enabled,
+            String os,
+            String arch,
+            String detectionSource,
+            String tlsProvider,
+            String compressionProvider,
+            boolean preferNativeTransport,
+            boolean requireNativeTransport,
+            Map<String, Boolean> features) {
+        nativeRuntime.set(new NativeRuntimeInfo(
+                enabled,
+                sanitize(os),
+                sanitize(arch),
+                sanitize(detectionSource),
+                sanitize(tlsProvider),
+                sanitize(compressionProvider),
+                preferNativeTransport,
+                requireNativeTransport,
+                features == null ? Map.of() : Map.copyOf(features)));
+    }
+
     public Snapshot snapshot() {
         expirePayloadCaptures();
         return new Snapshot(
@@ -435,6 +458,7 @@ public final class ProxyMetrics {
                 maxEventLoopDelayNanos.get(),
                 pooledDirectMemoryBytes.get(),
                 networkTransport.get(),
+                nativeRuntime.get(),
                 packetAnomalies.entrySet().stream()
                         .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().sum())),
                 recentPacketAnomalySamples(),
@@ -792,6 +816,21 @@ public final class ProxyMetrics {
     public record NetworkTransport(String name, boolean nativeTransport) {
     }
 
+    public record NativeRuntimeInfo(
+            boolean enabled,
+            String os,
+            String arch,
+            String detectionSource,
+            String tlsProvider,
+            String compressionProvider,
+            boolean preferNativeTransport,
+            boolean requireNativeTransport,
+            Map<String, Boolean> features) {
+        private static NativeRuntimeInfo unknown() {
+            return new NativeRuntimeInfo(false, "unknown", "unknown", "unknown", "jdk", "jdk-deflater", false, false, Map.of());
+        }
+    }
+
     public record PacketAnomalySample(
             long sequence,
             String rule,
@@ -872,6 +911,7 @@ public final class ProxyMetrics {
             long maxEventLoopDelayNanos,
             long pooledDirectMemoryBytes,
             NetworkTransport networkTransport,
+            NativeRuntimeInfo nativeRuntime,
             Map<String, Long> packetAnomalies,
             List<PacketAnomalySample> recentPacketAnomalies,
             Map<String, ServerTraffic> serverTraffic,

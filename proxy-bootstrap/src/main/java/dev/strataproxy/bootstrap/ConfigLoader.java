@@ -1,5 +1,6 @@
 package dev.strataproxy.bootstrap;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -61,9 +62,12 @@ public final class ConfigLoader {
         public PacketAnalysisFile packetAnalysis = new PacketAnalysisFile();
         public ObservabilityFile observability = new ObservabilityFile();
         public AdminFile admin = new AdminFile();
+        @JsonProperty("native")
+        public NativeFile nativeRuntime = new NativeFile();
         public List<ServerFile> servers = List.of();
 
         LoadedProxyConfig toLoadedConfig() {
+            var nativeFile = nativeRuntime == null ? new NativeFile() : nativeRuntime;
             var bind = parseAddress(network.bind, 25577);
             var proxy = new ProxyConfig(
                     bind,
@@ -110,7 +114,16 @@ public final class ConfigLoader {
                                     admin.tls.trustStorePath,
                                     admin.tls.trustStorePassword,
                                     admin.tls.trustStoreType,
-                                    admin.tls.clientAuth)));
+                                    admin.tls.clientAuth)),
+                    new ProxyConfig.NativeConfig(
+                            nativeFile.enabled,
+                            nativeFile.autoDetect,
+                            nativeFile.preferNativeTransport,
+                            nativeFile.requireNativeTransport,
+                            nativeFile.preferOpenSslTls,
+                            nativeFile.preferNativeCompression,
+                            nativeFile.disabledFeatures,
+                            nativeFile.forcedFeatures));
             var descriptors = registry.staticServers
                     ? servers.stream().map(ServerFile::toDescriptor).toList()
                     : List.<ServerDescriptor>of();
@@ -162,6 +175,17 @@ public final class ConfigLoader {
         public int packetTopN = 50;
         public boolean anomalySampling = true;
         public long flushIntervalSeconds = 5;
+    }
+
+    public static final class NativeFile {
+        public boolean enabled = true;
+        public boolean autoDetect = true;
+        public boolean preferNativeTransport = true;
+        public boolean requireNativeTransport = false;
+        public boolean preferOpenSslTls = false;
+        public boolean preferNativeCompression = false;
+        public Set<String> disabledFeatures = Set.of();
+        public Set<String> forcedFeatures = Set.of();
     }
 
     public static final class AdminFile {

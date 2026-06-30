@@ -12,6 +12,23 @@ import java.util.Locale;
 
 public final class ConfigValidator {
     private static final int MIN_SAFE_MAX_FRAME_BYTES = 1_024;
+    private static final java.util.Set<String> NATIVE_FEATURES = java.util.Set.of(
+            "aes",
+            "vaes",
+            "pclmulqdq",
+            "vpclmulqdq",
+            "sha_ni",
+            "crc32",
+            "sse4_2",
+            "avx2",
+            "avx512f",
+            "bmi1",
+            "bmi2",
+            "lzcnt",
+            "popcnt",
+            "neon",
+            "arm_aes",
+            "arm_sha");
 
     public ConfigValidationResult validate(ConfigLoader.LoadedProxyConfig loaded) {
         var errors = new ArrayList<String>();
@@ -106,6 +123,8 @@ public final class ConfigValidator {
         }
         validatePositive("observability.flushInterval", observability.flushInterval(), errors);
 
+        validateNative(config.nativeRuntime(), errors, warnings);
+
         var admin = config.admin();
         if (admin.enabled()) {
             validateAddress("admin.bind", admin.bindAddress(), errors);
@@ -118,6 +137,44 @@ public final class ConfigValidator {
             }
             validateAdminTls(admin.tls(), errors, warnings);
         }
+    }
+
+    private static void validateNative(ProxyConfig.NativeConfig nativeConfig, ArrayList<String> errors, ArrayList<String> warnings) {
+        if (nativeConfig == null) {
+            return;
+        }
+        validateFeatureSet("native.disabledFeatures", nativeConfig.disabledFeatures(), errors);
+        validateFeatureSet("native.forcedFeatures", nativeConfig.forcedFeatures(), errors);
+        var overlap = new java.util.HashSet<String>();
+        for (var feature : nativeConfig.disabledFeatures()) {
+            overlap.add(normalizedFeature(feature));
+        }
+        for (var feature : nativeConfig.forcedFeatures()) {
+            if (overlap.contains(normalizedFeature(feature))) {
+                errors.add("native feature cannot be both disabled and forced: " + feature);
+            }
+        }
+        if (!nativeConfig.enabled() && nativeConfig.requireNativeTransport()) {
+            errors.add("native.requireNativeTransport cannot be true when native.enabled is false");
+        }
+        if (!nativeConfig.autoDetect() && nativeConfig.forcedFeatures().isEmpty()) {
+            warnings.add("native.autoDetect is false and no native.forcedFeatures are configured");
+        }
+    }
+
+    private static void validateFeatureSet(String field, java.util.Set<String> features, ArrayList<String> errors) {
+        if (features == null) {
+            return;
+        }
+        for (var feature : features) {
+            if (!NATIVE_FEATURES.contains(normalizedFeature(feature))) {
+                errors.add(field + " contains unknown feature: " + feature);
+            }
+        }
+    }
+
+    private static String normalizedFeature(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replace('-', '_');
     }
 
     private static void validateAdminTls(ProxyConfig.AdminTlsConfig tls, ArrayList<String> errors, ArrayList<String> warnings) {

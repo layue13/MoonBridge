@@ -44,6 +44,7 @@ import javax.net.ssl.TrustManagerFactory;
                 StrataProxyAdminCli.SloCommand.class,
                 StrataProxyAdminCli.MetricsCommand.class,
                 StrataProxyAdminCli.DiagnosticsCommand.class,
+                StrataProxyAdminCli.NativeCommand.class,
                 StrataProxyAdminCli.CompressionCommand.class,
                 StrataProxyAdminCli.PacketsCommand.class,
                 StrataProxyAdminCli.ModPayloadsCommand.class,
@@ -334,6 +335,22 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         @Override
         public Integer call() {
             return root.print(root.request("GET", "/metrics", null));
+        }
+    }
+
+    @Command(name = "native", description = "Show native CPU/runtime capability decisions.")
+    static final class NativeCommand implements Callable<Integer> {
+        @ParentCommand
+        private StrataProxyAdminCli root;
+
+        @Override
+        public Integer call() {
+            var response = root.request("GET", "/native-capabilities", null);
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return root.print(response);
+            }
+            System.out.print(NativeRuntimeMetricsView.parseJson(response.body()).render());
+            return 0;
         }
     }
 
@@ -1518,6 +1535,72 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
     }
 
     private record SloRow(String name, String actual, String expected, boolean passed) {
+    }
+
+    private static final class NativeRuntimeMetricsView {
+        private boolean enabled;
+        private String os = "";
+        private String arch = "";
+        private String detectionSource = "";
+        private String tlsProvider = "";
+        private String compressionProvider = "";
+        private boolean preferNativeTransport;
+        private boolean requireNativeTransport;
+        private final Map<String, Boolean> features = new LinkedHashMap<>();
+
+        static NativeRuntimeMetricsView parseJson(String json) {
+            var view = new NativeRuntimeMetricsView();
+            try {
+                var root = MAPPER.readTree(json);
+                view.enabled = root.has("enabled") && root.get("enabled").asBoolean();
+                view.os = text(root, "os");
+                view.arch = text(root, "arch");
+                view.detectionSource = text(root, "detectionSource");
+                view.tlsProvider = text(root, "tlsProvider");
+                view.compressionProvider = text(root, "compressionProvider");
+                view.preferNativeTransport = root.has("preferNativeTransport") && root.get("preferNativeTransport").asBoolean();
+                view.requireNativeTransport = root.has("requireNativeTransport") && root.get("requireNativeTransport").asBoolean();
+                var features = root.get("features");
+                if (features != null && features.isObject()) {
+                    var names = new ArrayList<String>();
+                    features.fieldNames().forEachRemaining(names::add);
+                    names.sort(String::compareTo);
+                    for (var name : names) {
+                        view.features.put(name, features.get(name).asBoolean());
+                    }
+                }
+                return view;
+            } catch (IOException exception) {
+                return view;
+            }
+        }
+
+        String render() {
+            var output = new StringBuilder("enabled os arch source tls_provider compression_provider prefer_native_transport require_native_transport\n");
+            output.append(enabled).append(' ')
+                    .append(value(os)).append(' ')
+                    .append(value(arch)).append(' ')
+                    .append(value(detectionSource)).append(' ')
+                    .append(value(tlsProvider)).append(' ')
+                    .append(value(compressionProvider)).append(' ')
+                    .append(preferNativeTransport).append(' ')
+                    .append(requireNativeTransport).append('\n');
+            output.append("feature enabled\n");
+            for (var entry : features.entrySet()) {
+                output.append(value(entry.getKey())).append(' ')
+                        .append(entry.getValue())
+                        .append('\n');
+            }
+            return output.toString();
+        }
+
+        private static String text(com.fasterxml.jackson.databind.JsonNode node, String field) {
+            return node.has(field) ? node.get(field).asText() : "";
+        }
+
+        private static String value(String value) {
+            return value == null || value.isBlank() ? "-" : value.replace(' ', '_');
+        }
     }
 
     private static final class AnomalyMetricsView {

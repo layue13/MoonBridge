@@ -88,6 +88,37 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesNativeRuntimeConfig() throws Exception {
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                native:
+                  enabled: true
+                  autoDetect: false
+                  preferNativeTransport: false
+                  requireNativeTransport: false
+                  preferOpenSslTls: true
+                  preferNativeCompression: true
+                  disabledFeatures: ["avx512f"]
+                  forcedFeatures: ["aes", "avx2"]
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        var nativeConfig = loaded.proxy().nativeRuntime();
+        assertTrue(nativeConfig.enabled());
+        assertEquals(false, nativeConfig.autoDetect());
+        assertEquals(false, nativeConfig.preferNativeTransport());
+        assertTrue(nativeConfig.preferOpenSslTls());
+        assertTrue(nativeConfig.preferNativeCompression());
+        assertTrue(nativeConfig.disabledFeatures().contains("avx512f"));
+        assertTrue(nativeConfig.forcedFeatures().contains("aes"));
+        assertTrue(nativeConfig.forcedFeatures().contains("avx2"));
+    }
+
+    @Test
     void parsesAdminTlsConfig() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """

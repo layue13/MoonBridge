@@ -125,6 +125,7 @@ public final class AdminHttpServer implements AutoCloseable {
         this.server.createContext("/readyz", this::ready);
         this.server.createContext("/overview", this::overview);
         this.server.createContext("/metrics", this::metrics);
+        this.server.createContext("/native-capabilities", this::nativeCapabilities);
         this.server.createContext("/compression-report", this::compressionReport);
         this.server.createContext("/diagnostic-report", this::diagnosticReport);
         this.server.createContext("/packet-anomalies", this::packetAnomalies);
@@ -246,6 +247,7 @@ public final class AdminHttpServer implements AutoCloseable {
         appendMetric(body, "gauge", "strataproxy_network_transport_info", "transport=\""
                 + label(snapshot.networkTransport().name()) + "\",native=\""
                 + snapshot.networkTransport().nativeTransport() + "\"", 1);
+        appendNativeRuntimeMetrics(body, snapshot.nativeRuntime());
         appendMetric(body, "gauge", "strataproxy_jvm_heap_used_bytes", heapUsed);
         appendMetric(body, "gauge", "strataproxy_jvm_heap_committed_bytes", heapCommitted);
         appendMetric(body, "gauge", "strataproxy_jvm_heap_max_bytes", heapMax);
@@ -315,6 +317,17 @@ public final class AdminHttpServer implements AutoCloseable {
         respondJson(exchange, 200, compressionReport(metrics.snapshot()));
     }
 
+    private void nativeCapabilities(HttpExchange exchange) throws IOException {
+        if (!authorized(exchange)) {
+            return;
+        }
+        if (!exchange.getRequestMethod().equals("GET")) {
+            respondError(exchange, 405, "method not allowed");
+            return;
+        }
+        respondJson(exchange, 200, NativeRuntimeView.from(metrics.snapshot().nativeRuntime()));
+    }
+
     private OverviewView overviewView(ProxyMetrics.Snapshot snapshot, long servers) {
         var totalAnomalies = snapshot.packetAnomalies().values().stream().mapToLong(Long::longValue).sum();
         return new OverviewView(
@@ -336,6 +349,21 @@ public final class AdminHttpServer implements AutoCloseable {
                 snapshot.pooledDirectMemoryBytes(),
                 snapshot.networkTransport().name(),
                 snapshot.networkTransport().nativeTransport());
+    }
+
+    private static void appendNativeRuntimeMetrics(StringBuilder body, ProxyMetrics.NativeRuntimeInfo runtime) {
+        var labels = "enabled=\"" + runtime.enabled()
+                + "\",os=\"" + label(runtime.os())
+                + "\",arch=\"" + label(runtime.arch())
+                + "\",source=\"" + label(runtime.detectionSource())
+                + "\",tls_provider=\"" + label(runtime.tlsProvider())
+                + "\",compression_provider=\"" + label(runtime.compressionProvider()) + "\"";
+        appendMetric(body, "gauge", "strataproxy_native_runtime_info", labels, 1);
+        appendMetric(body, "gauge", "strataproxy_native_prefer_transport", runtime.preferNativeTransport() ? 1 : 0);
+        appendMetric(body, "gauge", "strataproxy_native_require_transport", runtime.requireNativeTransport() ? 1 : 0);
+        for (var entry : runtime.features().entrySet()) {
+            appendMetric(body, "gauge", "strataproxy_native_capability", "feature=\"" + label(entry.getKey()) + "\"", entry.getValue() ? 1 : 0);
+        }
     }
 
     private RejectionReport rejectionReport(ProxyMetrics.Snapshot snapshot) {
@@ -491,6 +519,7 @@ public final class AdminHttpServer implements AutoCloseable {
                 overviewView(snapshot, servers.size()),
                 rejectionReport(snapshot),
                 servers,
+                NativeRuntimeView.from(snapshot.nativeRuntime()),
                 compressionReport(snapshot),
                 packetTrafficReport(snapshot),
                 customPayloadReport(snapshot),
@@ -1232,6 +1261,30 @@ public final class AdminHttpServer implements AutoCloseable {
             boolean nativeTransport) {
     }
 
+    public record NativeRuntimeView(
+            boolean enabled,
+            String os,
+            String arch,
+            String detectionSource,
+            String tlsProvider,
+            String compressionProvider,
+            boolean preferNativeTransport,
+            boolean requireNativeTransport,
+            Map<String, Boolean> features) {
+        static NativeRuntimeView from(ProxyMetrics.NativeRuntimeInfo runtime) {
+            return new NativeRuntimeView(
+                    runtime.enabled(),
+                    runtime.os(),
+                    runtime.arch(),
+                    runtime.detectionSource(),
+                    runtime.tlsProvider(),
+                    runtime.compressionProvider(),
+                    runtime.preferNativeTransport(),
+                    runtime.requireNativeTransport(),
+                    runtime.features());
+        }
+    }
+
     private static boolean canReceiveNewConnections(RegisteredServer server) {
         return !server.draining()
                 && server.health().canReceiveNewConnections()
@@ -1265,6 +1318,7 @@ public final class AdminHttpServer implements AutoCloseable {
             OverviewView overview,
             RejectionReport admission,
             List<ServerView> servers,
+            NativeRuntimeView nativeRuntime,
             CompressionReport compression,
             PacketTrafficReport packetTraffic,
             CustomPayloadReport customPayloads,
