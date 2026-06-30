@@ -32,6 +32,26 @@
       ]
     },
     {
+      "name": "traffic-latency-acceptance",
+      "tool": "strataproxy-query",
+      "args": [
+        "--host", "127.0.0.1",
+        "--port", "25577",
+        "traffic-load",
+        "--connections", "100",
+        "--virtual-host", "play.example.net",
+        "--packets-per-connection", "100",
+        "--payload-bytes", "64",
+        "--parallelism", "100",
+        "--measure-echo-latency",
+        "--max-p99-latency-ms", "5",
+        "--min-handshaken", "100",
+        "--min-packets-sent", "10000",
+        "--max-failed", "0",
+        "--json"
+      ]
+    },
+    {
       "name": "slo-gate",
       "tool": "strataproxy-admin",
       "args": [

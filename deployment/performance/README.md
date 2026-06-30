@@ -23,13 +23,26 @@ Use `profile-result-template.json` to capture evidence after a run. A complete r
 
 Do not mark a profile as passed from partial command output. The result must include the configured gates and the observed values used to evaluate them.
 
+Use the bundled runner to execute a profile and write a complete evidence file:
+
+```bash
+python3 deployment/performance/run_profile.py acceptance-linux-native-java25 \
+  --query-bin ./proxy-query/build/install/strataproxy-query/bin/strataproxy-query \
+  --admin-bin ./proxy-admin-cli/build/install/strataproxy-admin/bin/strataproxy-admin \
+  --admin-url http://127.0.0.1:8080 \
+  --config ./proxy-app/build/install/strataproxy/config/strataproxy-production.yml
+```
+
+The runner executes each profile command, embeds JSON output, fetches `/metrics`, `/overview`, and `/native-capabilities`, evaluates profile gates, and writes `deployment/performance/results/<profile>-<timestamp>.json`. Result files are intentionally ignored by Git; archive them with release or incident evidence instead.
+
 ## Example
 
 ```powershell
 .\gradlew.bat --no-daemon :proxy-app:installDist :proxy-query:installDist :proxy-admin-cli:installDist
-.\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat --host 127.0.0.1 --port 25577 load-suite --profile acceptance --virtual-host play.example.net --parallelism 512 --json
-.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --base-url http://127.0.0.1:8080 slo --require-ready --max-event-loop-delay-ms 5 --max-rejected 0 --max-anomalies 0
+python deployment\performance\run_profile.py acceptance-linux-native-java25 --query-bin .\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat --admin-bin .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --admin-url http://127.0.0.1:8080
 ```
+
+The acceptance latency gate requires an echo backend that returns each received Minecraft frame unchanged for the `traffic-latency-acceptance` command.
 
 For Linux hosts, raise file descriptors before running the acceptance profile:
 

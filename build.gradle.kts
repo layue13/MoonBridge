@@ -149,6 +149,7 @@ gradle.projectsEvaluated {
     val performanceProfilesSmokeTest = tasks.register<PerformanceProfilesAuditTask>("performanceProfilesSmokeTest") {
         group = "verification"
         description = "Validates packaged StrataProxy performance profile definitions."
+        runnerFile.set(layout.projectDirectory.file("deployment/performance/run_profile.py"))
         profileFiles.from(fileTree("deployment/performance") {
             include("profiles/*.json")
             include("profile-result-template.json")
@@ -479,11 +480,19 @@ abstract class ReleaseAuditTask : DefaultTask() {
 }
 
 abstract class PerformanceProfilesAuditTask : DefaultTask() {
+    @get:InputFile
+    abstract val runnerFile: RegularFileProperty
+
     @get:InputFiles
     abstract val profileFiles: ConfigurableFileCollection
 
     @TaskAction
     fun audit() {
+        val runner = runnerFile.get().asFile
+        require(runner.isFile) { "missing performance profile runner: ${runner.path}" }
+        val runnerText = runner.readText()
+        require(runnerText.contains("evaluate_gates")) { "performance profile runner must evaluate gates" }
+        require(runnerText.contains("/native-capabilities")) { "performance profile runner must capture native capabilities" }
         val files = profileFiles.files.sortedBy { it.name }
         require(files.size >= 4) { "expected performance profiles and result template" }
         val parser = JsonSlurper()
@@ -493,6 +502,8 @@ abstract class PerformanceProfilesAuditTask : DefaultTask() {
             if (file.name == "profile-result-template.json") {
                 require(parsed.containsKey("gateResults")) { "profile result template missing gateResults" }
                 require(parsed.containsKey("observations")) { "profile result template missing observations" }
+                val observations = parsed["observations"] as? Map<*, *>
+                require(observations?.containsKey("nativeRuntimeJson") == true) { "profile result template missing nativeRuntimeJson" }
                 continue
             }
             val id = parsed["id"] as? String
@@ -501,6 +512,15 @@ abstract class PerformanceProfilesAuditTask : DefaultTask() {
             require(parsed["java"] == "25") { "profile $id must target Java 25" }
             require(parsed.containsKey("commands")) { "profile $id missing commands" }
             require(parsed.containsKey("gates")) { "profile $id missing gates" }
+            val gates = parsed["gates"] as? Map<*, *> ?: emptyMap<Any, Any>()
+            val commands = parsed["commands"] as? List<*> ?: emptyList<Any>()
+            if (gates.containsKey("maxP99ProxyForwardingLatencyMillis")) {
+                require(commands.any { command ->
+                    val commandMap = command as? Map<*, *> ?: return@any false
+                    val args = commandMap["args"] as? List<*> ?: return@any false
+                    args.contains("--measure-echo-latency")
+                }) { "profile $id has p99 latency gate but no --measure-echo-latency command" }
+            }
         }
         require(profileIds.contains("smoke")) { "missing smoke performance profile" }
         require(profileIds.contains("acceptance-linux-native-java25")) { "missing Linux native Java 25 acceptance profile" }

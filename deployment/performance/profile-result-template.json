@@ -29,6 +29,7 @@
   "observations": {
     "metricsSnapshot": "",
     "overviewJson": {},
+    "nativeRuntimeJson": {},
     "sloOutput": ""
   },
   "gateResults": [
