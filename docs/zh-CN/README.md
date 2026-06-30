@@ -129,10 +129,11 @@ auth:
   onlineMode: true
   rsaKeyBits: 1024
   verifyTokenBytes: 4
-  sessionVerification: false
+  sessionVerification: true
+  sessionVerificationTimeout: "5s"
 ```
 
-`sessionVerification` 是显式开关。Mojang session server 校验尚未完成，所以 `onlineMode: true` 目前应视为玩家侧加密终止的阶段性集成模式，不能等同于完整正版登录校验。
+`sessionVerification` 是显式开关。启用后，StrataProxy 会在收到 Encryption Response 后异步调用 Mojang `hasJoined`，只有校验通过才继续连接后端。玩家侧 online-mode 加密终止不等于后端身份转发策略，后端仍需要按选定 forwarding 模式配置。
 
 ## Admin API 和 CLI
 
@@ -217,8 +218,8 @@ JVM 起点：
 
 ## 当前未完成的高风险项
 
-- Mojang session server 校验尚未接入
 - backend forwarding 策略需要和加密终止一起定型
+- online-mode 还需要真实 Minecraft 客户端和 Mojang session server 的端到端验收
 - 10k idle / 2k active 的 Linux native acceptance 需要真实主机证据
 
 这些项完成前，不应宣称项目已经达到完整生产验收。

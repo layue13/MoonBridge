@@ -44,6 +44,7 @@ auth:
   rsaKeyBits: 1024
   verifyTokenBytes: 4
   sessionVerification: false
+  sessionVerificationTimeout: "5s"
 
 native:
   enabled: true

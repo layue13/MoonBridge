@@ -153,6 +153,7 @@ public final class ConfigValidator {
         if (auth.sessionVerification() && !auth.onlineMode()) {
             errors.add("auth.sessionVerification requires auth.onlineMode");
         }
+        validatePositive("auth.sessionVerificationTimeout", auth.sessionVerificationTimeout(), errors);
         if (auth.onlineMode() && !auth.sessionVerification()) {
             warnings.add("auth.onlineMode is enabled without Mojang session verification; use only for staged integration tests");
         }

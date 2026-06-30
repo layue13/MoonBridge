@@ -36,6 +36,7 @@ final class MinecraftOnlineModeLoginHandlerTest {
                 4096,
                 keyPair,
                 verifyToken,
+                MinecraftSessionVerifier.disabled(),
                 (context, loginStartFrame, sharedSecret, username) -> {
                     try {
                         var probe = MinecraftProtocolCodec.probeFrame(loginStartFrame, 4096);
@@ -85,6 +86,7 @@ final class MinecraftOnlineModeLoginHandlerTest {
                 4096,
                 keyPair,
                 new byte[] {1, 2, 3, 4},
+                MinecraftSessionVerifier.disabled(),
                 (context, loginStartFrame, sharedSecret, username) -> loginStartFrame.release()));
         try {
             assertFalse(channel.writeInbound(loginStartFrame("PlayerOne")));
@@ -92,6 +94,32 @@ final class MinecraftOnlineModeLoginHandlerTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> channel.writeInbound(encryptionResponseFrame(keyPair.getPublic(), SHARED_SECRET, new byte[] {4, 3, 2, 1})));
+
+            assertFalse(channel.isOpen());
+        } finally {
+            assertFalse(channel.finishAndReleaseAll());
+        }
+    }
+
+    @Test
+    void closesConnectionWhenSessionVerifierDeniesLogin() throws Exception {
+        var generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(1024);
+        var keyPair = generator.generateKeyPair();
+        var verifyToken = new byte[] {1, 2, 3, 4};
+        var channel = new EmbeddedChannel(new MinecraftOnlineModeLoginHandler(
+                4096,
+                keyPair,
+                verifyToken,
+                (username, serverHash, remoteAddress) -> java.util.concurrent.CompletableFuture.completedFuture(
+                        MinecraftSessionVerifier.SessionVerificationResult.denied("test-denied")),
+                (context, loginStartFrame, sharedSecret, username) -> loginStartFrame.release()));
+        try {
+            assertFalse(channel.writeInbound(loginStartFrame("PlayerOne")));
+            ((ByteBuf) channel.readOutbound()).release();
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> channel.writeInbound(encryptionResponseFrame(keyPair.getPublic(), SHARED_SECRET, verifyToken)));
 
             assertFalse(channel.isOpen());
         } finally {

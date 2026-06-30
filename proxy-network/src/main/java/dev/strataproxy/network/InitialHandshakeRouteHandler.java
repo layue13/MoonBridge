@@ -225,6 +225,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 tuning.maxFrameBytes(),
                 authRuntime.keyPair(),
                 authRuntime.newVerifyToken(),
+                authRuntime.sessionVerifier(),
                 (authContext, loginStartFrame, sharedSecret, username) -> {
                     if (consumed.compareAndSet(false, true)) {
                         release(pendingBytes);

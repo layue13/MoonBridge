@@ -174,7 +174,8 @@ public final class StrataProxyLauncher {
                     + " rewriteMaxEventLoopDelayMillis=" + config.compression().rewriteMaxEventLoopDelayMillis());
             out.println("StrataProxy auth: onlineMode=" + config.auth().onlineMode()
                     + " sessionVerification=" + config.auth().sessionVerification()
-                    + " rsaKeyBits=" + config.auth().rsaKeyBits());
+                    + " rsaKeyBits=" + config.auth().rsaKeyBits()
+                    + " sessionVerificationTimeout=" + config.auth().sessionVerificationTimeout());
             out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
                     + " os=" + nativeDecision.capabilities().os()
                     + " arch=" + nativeDecision.capabilities().arch()
@@ -416,7 +417,11 @@ public final class StrataProxyLauncher {
         if (!auth.onlineMode()) {
             return MinecraftAuthRuntime.offline();
         }
-        return MinecraftAuthRuntime.online(auth.rsaKeyBits(), auth.verifyTokenBytes());
+        return MinecraftAuthRuntime.online(
+                auth.rsaKeyBits(),
+                auth.verifyTokenBytes(),
+                auth.sessionVerification(),
+                auth.sessionVerificationTimeout());
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

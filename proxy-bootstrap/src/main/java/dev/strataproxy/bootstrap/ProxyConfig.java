@@ -102,9 +102,14 @@ public record ProxyConfig(
             boolean onlineMode,
             int rsaKeyBits,
             int verifyTokenBytes,
-            boolean sessionVerification) {
+            boolean sessionVerification,
+            Duration sessionVerificationTimeout) {
+        public AuthConfig {
+            sessionVerificationTimeout = sessionVerificationTimeout == null ? Duration.ofSeconds(5) : sessionVerificationTimeout;
+        }
+
         public static AuthConfig defaults() {
-            return new AuthConfig(false, 1024, 4, false);
+            return new AuthConfig(false, 1024, 4, false, Duration.ofSeconds(5));
         }
     }
 

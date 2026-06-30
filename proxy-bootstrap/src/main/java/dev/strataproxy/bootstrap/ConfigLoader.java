@@ -120,7 +120,8 @@ public final class ConfigLoader {
                             auth.onlineMode,
                             auth.rsaKeyBits,
                             auth.verifyTokenBytes,
-                            auth.sessionVerification),
+                            auth.sessionVerification,
+                            java.time.Duration.ofMillis(parseDurationMillis(auth.sessionVerificationTimeout, 5_000))),
                     new ProxyConfig.NativeConfig(
                             nativeFile.enabled,
                             nativeFile.autoDetect,
@@ -199,6 +200,7 @@ public final class ConfigLoader {
         public int rsaKeyBits = 1024;
         public int verifyTokenBytes = 4;
         public boolean sessionVerification = false;
+        public String sessionVerificationTimeout = "5s";
     }
 
     public static final class AdminFile {

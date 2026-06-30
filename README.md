@@ -248,10 +248,11 @@ auth:
   onlineMode: true
   rsaKeyBits: 1024
   verifyTokenBytes: 4
-  sessionVerification: false
+  sessionVerification: true
+  sessionVerificationTimeout: "5s"
 ```
 
-`sessionVerification` is intentionally explicit. Full Mojang session-server verification is still a remaining production item; until it is implemented, `onlineMode: true` should be treated as a staged integration mode rather than complete online-mode authentication.
+When `sessionVerification` is enabled, StrataProxy calls Mojang `hasJoined` asynchronously after the Encryption Response and only continues backend relay for accepted profiles. Keep backend servers configured for the chosen forwarding mode; player-side online-mode encryption termination does not by itself define the backend identity-forwarding contract.
 
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 

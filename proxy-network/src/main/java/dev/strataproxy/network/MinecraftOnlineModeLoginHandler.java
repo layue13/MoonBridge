@@ -24,6 +24,7 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
     private final int maxFrameBytes;
     private final KeyPair keyPair;
     private final byte[] verifyToken;
+    private final MinecraftSessionVerifier sessionVerifier;
     private final AuthenticatedLoginCallback callback;
     private ByteBuf loginStartFrame;
     private String username = "";
@@ -33,6 +34,7 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
             int maxFrameBytes,
             KeyPair keyPair,
             byte[] verifyToken,
+            MinecraftSessionVerifier sessionVerifier,
             AuthenticatedLoginCallback callback) {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
@@ -49,6 +51,7 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
         this.maxFrameBytes = maxFrameBytes;
         this.keyPair = keyPair;
         this.verifyToken = verifyToken.clone();
+        this.sessionVerifier = sessionVerifier == null ? MinecraftSessionVerifier.disabled() : sessionVerifier;
         this.callback = callback;
     }
 
@@ -117,16 +120,34 @@ final class MinecraftOnlineModeLoginHandler extends ByteToMessageDecoder {
                 throw new IllegalArgumentException("Minecraft encryption verify token mismatch");
             }
             installCiphers(context, sharedSecret);
-            var authenticatedLoginStart = loginStartFrame;
-            loginStartFrame = null;
-            callback.authenticated(context, authenticatedLoginStart, sharedSecret, username);
-            context.pipeline().remove(this);
+            verifySession(context, sharedSecret);
         } catch (RuntimeException exception) {
             context.fireExceptionCaught(exception);
             context.close();
         } finally {
             frame.release();
         }
+    }
+
+    private void verifySession(ChannelHandlerContext context, byte[] sharedSecret) {
+        var serverHash = MinecraftEncryption.serverHash("", sharedSecret, keyPair.getPublic());
+        sessionVerifier.verify(username, serverHash, context.channel().remoteAddress())
+                .whenComplete((result, throwable) -> context.executor().execute(() -> {
+                    if (throwable != null) {
+                        context.fireExceptionCaught(throwable);
+                        context.close();
+                        return;
+                    }
+                    if (result == null || !result.allowed()) {
+                        context.fireExceptionCaught(new IllegalArgumentException("Minecraft session verification failed: "
+                                + (result == null ? "missing result" : result.reason())));
+                        context.close();
+                        return;
+                    }
+                    var authenticatedLoginStart = loginStartFrame;
+                    loginStartFrame = null;
+                    callback.authenticated(context, authenticatedLoginStart, sharedSecret, username);
+                }));
     }
 
     private void installCiphers(ChannelHandlerContext context, byte[] sharedSecret) {
