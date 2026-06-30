@@ -213,6 +213,8 @@ forwarding:
 
 实验性 Zstd 压缩 codec 通过 `compression.codec: zstd` 显式启用，默认仍是 vanilla 兼容的 `zlib`。`zstdDictionaryPath` 可指向由 NBT、registry、chunk palette 和大型 Mod custom payload 样本训练出的字典；客户端、代理和后端必须使用完全相同的字典字节。配套 1.7.10 客户端原型在单独的 `StrataProxyZstdClient` 仓库，使用 GTNH 维护的 RetroFuturaGradle 工具链，并且只有设置 `-Dstrataproxy.zstd.enabled=true` 时才会插入客户端 Netty handler。
 
+完整启用条件、字典训练、阈值选择和 Minecraft 场景下的收益预期见 [Zstd 压缩调参指南](compression-zstd.md)。
+
 ## Admin API 和 CLI
 
 构建 CLI：

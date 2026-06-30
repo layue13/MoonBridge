@@ -189,6 +189,8 @@ Leave `rewriteEnabled: false` for maximum transparent fast-path compatibility. S
 
 The companion 1.7.10 client prototype lives in the separate `StrataProxyZstdClient` repository. It uses GTNH's maintained RetroFuturaGradle 1.7.10 toolchain and inserts Zstd encode/decode handlers into the client Netty pipeline when `-Dstrataproxy.zstd.enabled=true` is set. It is intentionally disabled by default so ordinary servers are not affected.
 
+See [Zstd compression tuning](docs/compression-zstd.md) for rollout requirements, dictionary training, threshold selection, and expected Minecraft-specific gains.
+
 Dynamic registry persistence is enabled by default:
 
 ```yaml
