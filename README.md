@@ -11,6 +11,7 @@ The core model intentionally does not contain `modpackId`. Routing decisions are
 - Version Catalog
 - Convention plugins in `proxy-build-logic`
 - Configuration cache enabled
+- Gitea Actions CI in `.gitea/workflows/ci.yml` runs Java 25 `check`, installed distribution smoke tests, release audit, performance profile validation, and release bundle creation on `main` pushes and pull requests
 
 The local machine currently has JDK 25 installed at `C:\Program Files\Zulu\zulu-25`, while the default `java` on PATH may still point to Java 8. Use `JAVA_HOME=C:\Program Files\Zulu\zulu-25` or update PATH before building.
 
@@ -72,6 +73,15 @@ Build a complete release bundle with checksums:
 Get-ChildItem .\build\release
 Get-Content .\build\release\strataproxy-0.1.0-SNAPSHOT.zip.sha256
 ```
+
+The same core verification is automated in Gitea CI:
+
+```text
+./gradlew --no-daemon --configuration-cache check installDist :proxy-admin-cli:installDist :proxy-query:installDist
+./gradlew --no-daemon --configuration-cache release
+```
+
+CI proves build, unit/integration tests, installed command smoke tests, release metadata/SBOM/checksum audits, deployment asset validation, and performance profile schema validation. It does not replace the dedicated Linux native acceptance run for the 10k idle / 2k active-player performance target; record that evidence with `deployment/performance/profile-result-template.json`.
 
 The release bundle contains app, Admin CLI, query CLI distribution archives, deployment profiles, sample configs, observability assets, README, `RELEASE-MANIFEST.txt`, `strataproxy-<version>.sbom.cdx.json`, and `strataproxy-<version>.metadata.json`. The checksum file covers the outer release bundle, the three inner distribution archives, the SBOM, and release metadata.
 
