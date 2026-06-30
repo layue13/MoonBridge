@@ -1199,6 +1199,9 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         @Option(names = "--read-delay-ms", defaultValue = "100", description = "Delay after each socket read.")
         private long readDelayMillis;
 
+        @Option(names = "--echo", description = "Write each received byte chunk back to the client for echo-latency tests.")
+        private boolean echo;
+
         @Option(names = "--backlog", defaultValue = "1024", description = "Server socket backlog.")
         private int backlog;
 
@@ -1216,6 +1219,9 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
             if (readDelayMillis < 0) {
                 throw new IllegalArgumentException("read-delay-ms must not be negative");
             }
+            if (echo && readChunkBytes == 0) {
+                throw new IllegalArgumentException("echo requires read-chunk-bytes greater than 0");
+            }
             if (backlog <= 0) {
                 throw new IllegalArgumentException("backlog must be positive");
             }
@@ -1224,6 +1230,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
             var closed = new AtomicInteger();
             var failed = new AtomicInteger();
             var bytesRead = new java.util.concurrent.atomic.LongAdder();
+            var bytesWritten = new java.util.concurrent.atomic.LongAdder();
             var startedAt = Instant.now();
             var deadline = startedAt.plusMillis(durationMillis);
 
@@ -1231,11 +1238,12 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
                 server.setReuseAddress(true);
                 server.bind(new InetSocketAddress(bindHost, port), backlog);
                 server.setSoTimeout(acceptTimeoutMillis);
-                System.out.printf("listening=%s:%d readChunkBytes=%d readDelayMillis=%d durationMillis=%d%n",
+                System.out.printf("listening=%s:%d readChunkBytes=%d readDelayMillis=%d echo=%s durationMillis=%d%n",
                         server.getInetAddress().getHostAddress(),
                         server.getLocalPort(),
                         readChunkBytes,
                         readDelayMillis,
+                        echo,
                         durationMillis);
                 System.out.flush();
 
@@ -1250,7 +1258,9 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
                                     readDelayMillis,
                                     acceptTimeoutMillis,
                                     deadline,
+                                    echo,
                                     bytesRead,
+                                    bytesWritten,
                                     closed,
                                     failed));
                         } catch (SocketTimeoutException exception) {
@@ -1262,13 +1272,16 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
 
             var elapsedMillis = Math.max(1, Duration.between(startedAt, Instant.now()).toMillis());
             System.out.printf(
-                    "accepted=%d closed=%d failed=%d bytesRead=%d elapsedMillis=%d readBytesPerSecond=%.2f%n",
+                    "accepted=%d closed=%d failed=%d bytesRead=%d bytesWritten=%d echo=%s elapsedMillis=%d readBytesPerSecond=%.2f writeBytesPerSecond=%.2f%n",
                     accepted.get(),
                     closed.get(),
                     failed.get(),
                     bytesRead.sum(),
+                    bytesWritten.sum(),
+                    echo,
                     elapsedMillis,
-                    bytesRead.sum() * 1000.0d / elapsedMillis);
+                    bytesRead.sum() * 1000.0d / elapsedMillis,
+                    bytesWritten.sum() * 1000.0d / elapsedMillis);
             return failed.get() == 0 ? 0 : 1;
         }
     }
@@ -1358,7 +1371,9 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
             long readDelayMillis,
             int readTimeoutMillis,
             Instant deadline,
+            boolean echo,
             java.util.concurrent.atomic.LongAdder bytesRead,
+            java.util.concurrent.atomic.LongAdder bytesWritten,
             AtomicInteger closed,
             AtomicInteger failed) {
         try (socket) {
@@ -1371,6 +1386,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
                 return;
             }
             var input = socket.getInputStream();
+            var output = echo ? socket.getOutputStream() : null;
             var buffer = new byte[readChunkBytes];
             while (Instant.now().isBefore(deadline)) {
                 int read;
@@ -1384,6 +1400,11 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
                     return;
                 }
                 bytesRead.add(read);
+                if (echo) {
+                    output.write(buffer, 0, read);
+                    output.flush();
+                    bytesWritten.add(read);
+                }
                 if (readDelayMillis > 0) {
                     TimeUnit.MILLISECONDS.sleep(readDelayMillis);
                 }

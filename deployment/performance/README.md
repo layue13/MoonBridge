@@ -35,6 +35,18 @@ python3 deployment/performance/run_profile.py acceptance-linux-native-java25 \
 
 The runner executes each profile command, embeds JSON output, fetches `/metrics`, `/overview`, and `/native-capabilities`, evaluates profile gates, and writes `deployment/performance/results/<profile>-<timestamp>.json`. Result files are intentionally ignored by Git; archive them with release or incident evidence instead.
 
+For the acceptance latency gate, start the bundled echo backend and route the proxy backend to it before running the profile:
+
+```bash
+./proxy-query/build/install/strataproxy-query/bin/strataproxy-query slow-sink \
+  --bind-host 127.0.0.1 \
+  --port 25565 \
+  --duration-ms 900000 \
+  --read-chunk-bytes 8192 \
+  --read-delay-ms 0 \
+  --echo
+```
+
 ## Example
 
 ```powershell
@@ -42,7 +54,7 @@ The runner executes each profile command, embeds JSON output, fetches `/metrics`
 python deployment\performance\run_profile.py acceptance-linux-native-java25 --query-bin .\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat --admin-bin .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --admin-url http://127.0.0.1:8080
 ```
 
-The acceptance latency gate requires an echo backend that returns each received Minecraft frame unchanged for the `traffic-latency-acceptance` command.
+The acceptance latency gate requires an echo backend that returns received bytes unchanged for the `traffic-latency-acceptance` command.
 
 For Linux hosts, raise file descriptors before running the acceptance profile:
 

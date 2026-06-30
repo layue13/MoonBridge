@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -1004,6 +1005,39 @@ final class StrataProxyQueryCliTest {
             assertTrue(result.output().contains("accepted=1"));
             assertTrue(result.output().contains("failed=0"));
             assertTrue(result.output().contains("bytesRead=6"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void slowSinkCanEchoReceivedBytes() throws Exception {
+        var port = freePort();
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var future = executor.submit(() -> execute(
+                    "slow-sink",
+                    "--bind-host", "127.0.0.1",
+                    "--port", Integer.toString(port),
+                    "--duration-ms", "300",
+                    "--accept-timeout-ms", "25",
+                    "--read-chunk-bytes", "3",
+                    "--read-delay-ms", "0",
+                    "--echo"));
+
+            var payload = new byte[] {10, 20, 30, 40, 50, 60};
+            try (var socket = connectWithRetry(port)) {
+                socket.setSoTimeout(5_000);
+                socket.getOutputStream().write(payload);
+                socket.getOutputStream().flush();
+                assertArrayEquals(payload, socket.getInputStream().readNBytes(payload.length));
+            }
+
+            var result = future.get(5, TimeUnit.SECONDS);
+            assertEquals(0, result.exitCode());
+            assertTrue(result.output().contains("echo=true"));
+            assertTrue(result.output().contains("bytesRead=6"));
+            assertTrue(result.output().contains("bytesWritten=6"));
         } finally {
             executor.shutdownNow();
         }
