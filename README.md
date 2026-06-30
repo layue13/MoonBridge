@@ -330,9 +330,10 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Relays client/backend traffic transparently after routing.
 - Uses Netty with manual read backpressure: both frontend and backend channels keep `AUTO_READ=false` during relay and only read after writes complete.
 - Applies configured backend connect timeout and write-buffer watermarks to frontend/backend channels.
-- Enforces global and per-address connection admission limits before handshake routing to reduce connection storm impact.
+- Enforces global and per-address connection admission limits before handshake routing to cap active socket resource use.
+- Enforces optional global and per-address new-connection-per-second admission limits before handshake routing to absorb login storms before route/backend work starts.
 - Supports optional HAProxy PROXY protocol v1 parsing on trusted listener deployments, so per-address limits, routing, player attribution, and Bungee/Velocity forwarding use the forwarded client address.
-- Attributes admission rejections by low-cardinality reason (`global_limit` or `per_address_limit`) so operators can distinguish total saturation from one-address storms without high-cardinality client labels.
+- Attributes admission rejections by low-cardinality reason (`global_limit`, `per_address_limit`, `global_rate_limit`, or `per_address_rate_limit`) so operators can distinguish total saturation from one-address storms without high-cardinality client labels.
 - Closes connections that do not send the initial Minecraft handshake within `network.initialHandshakeTimeoutMillis`.
 - Uses Netty pooled `ByteBuf` allocation for listener and backend connections.
 - Tracks accepted connections, active connections, rejected connections by reason, routed connections, route failures, backend connect failures, and bidirectional bytes with low-contention `LongAdder` counters.
@@ -549,8 +550,9 @@ The first usable runtime favors a high-throughput transparent fast path:
 - Minecraft compression codec and Netty handler instances reuse zlib state and scratch buffers. Compressed custom-payload inspection inflates only bounded early frames and immediately releases decoded buffers.
 - `network.writeBufferLow` and `network.writeBufferHigh` are applied as Netty watermarks to protect pending write queues.
 - `network.connectTimeoutMillis` is applied to backend connection attempts so failed routes do not hang.
-- `network.maxConnections` and `network.maxConnectionsPerAddress` reject excess connections before route/backend work starts.
-- Admission rejects are exported as `/overview` and `/diagnostic-report` JSON reason maps, CLI overview reason rows, a compatible total counter, and `strataproxy_connections_rejected_total{reason="global_limit|per_address_limit"}` for storm attribution.
+- `network.maxConnections` and `network.maxConnectionsPerAddress` reject excess active connections before route/backend work starts.
+- `network.maxNewConnectionsPerSecond` and `network.maxNewConnectionsPerAddressPerSecond` optionally reject excess admission rate before route/backend work starts; `0` disables each rate limiter.
+- Admission rejects are exported as `/overview` and `/diagnostic-report` JSON reason maps, CLI overview reason rows, a compatible total counter, and `strataproxy_connections_rejected_total{reason="global_limit|per_address_limit|global_rate_limit|per_address_rate_limit"}` for storm attribution.
 - `network.initialHandshakeTimeoutMillis` prevents idle pre-handshake sockets from holding connection slots indefinitely.
 - Metrics use `LongAdder` and stay off the hot path beyond simple increments.
 - Global connection lifecycle is accounted at admission; per-server lifecycle starts only after backend route/connect succeeds.

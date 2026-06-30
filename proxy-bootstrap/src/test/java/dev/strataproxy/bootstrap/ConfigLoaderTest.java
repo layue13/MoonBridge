@@ -42,6 +42,8 @@ final class ConfigLoaderTest {
         Files.writeString(config, """
                 network:
                   proxyProtocol: true
+                  maxNewConnectionsPerSecond: 1500
+                  maxNewConnectionsPerAddressPerSecond: 30
                 servers:
                   - name: "lobby-1"
                     address: "127.0.0.1:25565"
@@ -50,6 +52,8 @@ final class ConfigLoaderTest {
         var loaded = new ConfigLoader().load(config);
 
         assertTrue(loaded.proxy().network().proxyProtocol());
+        assertEquals(1500, loaded.proxy().network().maxNewConnectionsPerSecond());
+        assertEquals(30, loaded.proxy().network().maxNewConnectionsPerAddressPerSecond());
     }
 
     @Test

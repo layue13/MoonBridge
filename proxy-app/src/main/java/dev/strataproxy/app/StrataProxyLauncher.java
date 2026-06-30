@@ -192,7 +192,9 @@ public final class StrataProxyLauncher {
                     + " requireNativeTransport=" + nativeDecision.requireNativeTransport()
                     + " features=" + nativeDecision.enabledFeatures().stream().map(NativeFeature::label).sorted().toList());
             out.println("StrataProxy starting on " + config.bindAddress() + " with " + config.resolvedWorkerThreads()
-                    + " worker threads; proxyProtocol=" + config.network().proxyProtocol());
+                    + " worker threads; proxyProtocol=" + config.network().proxyProtocol()
+                    + " maxNewConnectionsPerSecond=" + config.network().maxNewConnectionsPerSecond()
+                    + " maxNewConnectionsPerAddressPerSecond=" + config.network().maxNewConnectionsPerAddressPerSecond());
 
             if (config.registry().healthCheckEnabled()) {
                 var healthChecker = new TcpServerHealthChecker(
@@ -241,6 +243,8 @@ public final class StrataProxyLauncher {
                             config.network().writeBufferHighBytes(),
                             config.network().maxConnections(),
                             config.network().maxConnectionsPerAddress(),
+                            config.network().maxNewConnectionsPerSecond(),
+                            config.network().maxNewConnectionsPerAddressPerSecond(),
                             config.network().initialHandshakeTimeoutMillis(),
                             config.network().proxyProtocol()),
                     config.nativeTransport() && nativeDecision.preferNativeTransport(),

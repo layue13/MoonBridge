@@ -8,6 +8,9 @@ network:
   writeBufferHigh: "16mb"
   maxConnections: 20000
   maxConnectionsPerAddress: 300
+  # Admission rate limits are per proxy process. Raise for planned events; lower for public attack-prone listeners.
+  maxNewConnectionsPerSecond: 3000
+  maxNewConnectionsPerAddressPerSecond: 60
   initialHandshakeTimeoutMillis: 5000
   # Enable only behind a trusted HAProxy/Load Balancer that sends PROXY protocol v1.
   proxyProtocol: false

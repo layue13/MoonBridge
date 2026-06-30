@@ -72,6 +72,12 @@ public final class ConfigValidator {
         if (network.maxConnectionsPerAddress() > network.maxConnections()) {
             errors.add("network.maxConnectionsPerAddress must be <= network.maxConnections");
         }
+        if (network.maxNewConnectionsPerSecond() < 0) {
+            errors.add("network.maxNewConnectionsPerSecond must be >= 0");
+        }
+        if (network.maxNewConnectionsPerAddressPerSecond() < 0) {
+            errors.add("network.maxNewConnectionsPerAddressPerSecond must be >= 0");
+        }
         if (network.initialHandshakeTimeoutMillis() <= 0) {
             errors.add("network.initialHandshakeTimeoutMillis must be positive");
         }

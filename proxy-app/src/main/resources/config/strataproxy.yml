@@ -8,6 +8,9 @@ network:
   writeBufferHigh: "16mb"
   maxConnections: 10000
   maxConnectionsPerAddress: 200
+  # 0 disables per-second admission rate limits. Tune these on public listeners to absorb login storms.
+  maxNewConnectionsPerSecond: 0
+  maxNewConnectionsPerAddressPerSecond: 0
   initialHandshakeTimeoutMillis: 5000
   # Enable only behind a trusted HAProxy/Load Balancer that sends PROXY protocol v1.
   proxyProtocol: false

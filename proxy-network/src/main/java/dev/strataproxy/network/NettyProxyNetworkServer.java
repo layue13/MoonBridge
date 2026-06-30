@@ -49,7 +49,10 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                 NetworkTuning.defaults().writeBufferHighBytes(),
                 NetworkTuning.defaults().maxConnections(),
                 NetworkTuning.defaults().maxConnectionsPerAddress(),
-                NetworkTuning.defaults().initialHandshakeTimeoutMillis()),
+                NetworkTuning.defaults().maxNewConnectionsPerSecond(),
+                NetworkTuning.defaults().maxNewConnectionsPerAddressPerSecond(),
+                NetworkTuning.defaults().initialHandshakeTimeoutMillis(),
+                NetworkTuning.defaults().proxyProtocol()),
                 false);
     }
 
@@ -321,7 +324,11 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
         this.runtimeMonitor = new NetworkRuntimeMonitor(workerGroup, metrics, Duration.ofSeconds(1));
-        this.admissionControl = new ConnectionAdmissionControl(tuning.maxConnections(), tuning.maxConnectionsPerAddress());
+        this.admissionControl = new ConnectionAdmissionControl(
+                tuning.maxConnections(),
+                tuning.maxConnectionsPerAddress(),
+                tuning.maxNewConnectionsPerSecond(),
+                tuning.maxNewConnectionsPerAddressPerSecond());
     }
 
     @Override

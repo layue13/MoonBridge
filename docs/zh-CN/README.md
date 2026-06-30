@@ -73,6 +73,18 @@ network:
 
 只应在玩家不能直连的监听入口启用。启用后，每条连接都必须先发送合法 PROXY v1 头，再发送 Minecraft 握手。
 
+公网入口建议显式配置 admission 速率限制。连接数上限负责限制已经占用的 socket 资源；每秒速率上限负责削平登录风暴和恶意建连冲击：
+
+```yaml
+network:
+  maxConnections: 20000
+  maxConnectionsPerAddress: 300
+  maxNewConnectionsPerSecond: 3000
+  maxNewConnectionsPerAddressPerSecond: 60
+```
+
+`maxNewConnectionsPerSecond` 和 `maxNewConnectionsPerAddressPerSecond` 设置为 `0` 表示关闭对应限速。被拒绝的连接会按低基数原因进入 Admin API、CLI、诊断报告和 Prometheus：`global_limit`、`per_address_limit`、`global_rate_limit`、`per_address_rate_limit`。
+
 registry 健康检查支持两种模式：
 
 ```yaml

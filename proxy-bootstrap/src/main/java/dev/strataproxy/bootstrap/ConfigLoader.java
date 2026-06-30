@@ -85,6 +85,8 @@ public final class ConfigLoader {
                             parseBytes(network.writeBufferHigh, 16 * 1024 * 1024),
                             network.maxConnections,
                             network.maxConnectionsPerAddress,
+                            network.maxNewConnectionsPerSecond,
+                            network.maxNewConnectionsPerAddressPerSecond,
                             network.initialHandshakeTimeoutMillis,
                             network.proxyProtocol),
                     new ProxyConfig.RegistryConfig(
@@ -189,6 +191,8 @@ public final class ConfigLoader {
         public String writeBufferHigh = "16mb";
         public int maxConnections = 10_000;
         public int maxConnectionsPerAddress = 200;
+        public int maxNewConnectionsPerSecond = 0;
+        public int maxNewConnectionsPerAddressPerSecond = 0;
         public int initialHandshakeTimeoutMillis = 5_000;
         public boolean proxyProtocol = false;
     }

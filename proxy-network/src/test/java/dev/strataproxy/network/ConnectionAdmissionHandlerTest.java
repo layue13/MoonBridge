@@ -42,4 +42,21 @@ final class ConnectionAdmissionHandlerTest {
         assertEquals(0, control.activeConnections());
         assertEquals(0, metrics.snapshot().activeConnections());
     }
+
+    @Test
+    void rateLimitedRejectionUsesReasonMetric() {
+        var control = new ConnectionAdmissionControl(10, 10, 1, 0);
+        var metrics = new ProxyMetrics();
+        var accepted = new EmbeddedChannel(new ConnectionAdmissionHandler(control, metrics));
+        var rejected = new EmbeddedChannel(new ConnectionAdmissionHandler(control, metrics));
+
+        assertEquals(1, control.activeConnections());
+        assertEquals(1, metrics.snapshot().activeConnections());
+        assertEquals(1, metrics.snapshot().acceptedConnections());
+        assertEquals(1, metrics.snapshot().rejectedConnections());
+        assertEquals(1, metrics.snapshot().rejectedConnectionsByReason().get("global_rate_limit"));
+
+        rejected.finishAndReleaseAll();
+        accepted.finishAndReleaseAll();
+    }
 }

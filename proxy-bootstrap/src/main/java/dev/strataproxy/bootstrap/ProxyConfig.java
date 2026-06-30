@@ -221,6 +221,8 @@ public record ProxyConfig(
             int writeBufferHighBytes,
             int maxConnections,
             int maxConnectionsPerAddress,
+            int maxNewConnectionsPerSecond,
+            int maxNewConnectionsPerAddressPerSecond,
             int initialHandshakeTimeoutMillis,
             boolean proxyProtocol) {
         public NetworkConfig(
@@ -238,12 +240,46 @@ public record ProxyConfig(
                     writeBufferHighBytes,
                     maxConnections,
                     maxConnectionsPerAddress,
+                    0,
+                    0,
                     initialHandshakeTimeoutMillis,
                     false);
         }
 
+        public NetworkConfig(
+                int maxFrameBytes,
+                int connectTimeoutMillis,
+                int writeBufferLowBytes,
+                int writeBufferHighBytes,
+                int maxConnections,
+                int maxConnectionsPerAddress,
+                int initialHandshakeTimeoutMillis,
+                boolean proxyProtocol) {
+            this(
+                    maxFrameBytes,
+                    connectTimeoutMillis,
+                    writeBufferLowBytes,
+                    writeBufferHighBytes,
+                    maxConnections,
+                    maxConnectionsPerAddress,
+                    0,
+                    0,
+                    initialHandshakeTimeoutMillis,
+                    proxyProtocol);
+        }
+
         public static NetworkConfig defaults() {
-            return new NetworkConfig(8 * 1024 * 1024, 5_000, 4 * 1024 * 1024, 16 * 1024 * 1024, 10_000, 200, 5_000, false);
+            return new NetworkConfig(
+                    8 * 1024 * 1024,
+                    5_000,
+                    4 * 1024 * 1024,
+                    16 * 1024 * 1024,
+                    10_000,
+                    200,
+                    0,
+                    0,
+                    5_000,
+                    false);
         }
     }
 
