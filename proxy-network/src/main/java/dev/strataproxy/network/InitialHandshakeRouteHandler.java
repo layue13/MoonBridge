@@ -33,6 +33,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private final CustomPayloadAnomalyPolicy customPayloadPolicy;
     private final MinecraftAuthRuntime authRuntime;
     private final MinecraftForwardingRuntime forwardingRuntime;
+    private final MinecraftStatusRuntime statusRuntime;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private boolean terminal;
@@ -48,7 +49,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             Class<? extends io.netty.channel.Channel> backendChannel,
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy) {
-        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), false, 25);
+        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(), false, 25);
     }
 
     InitialHandshakeRouteHandler(
@@ -59,7 +60,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             CompressionRuntime compressionRuntime,
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             boolean compressionRewriteEnabled) {
-        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), compressionRewriteEnabled, 25);
+        this(backendResolver, metrics, tuning, backendChannel, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(), compressionRewriteEnabled, 25);
     }
 
     InitialHandshakeRouteHandler(
@@ -71,6 +72,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             CustomPayloadAnomalyPolicy customPayloadPolicy,
             MinecraftAuthRuntime authRuntime,
             MinecraftForwardingRuntime forwardingRuntime,
+            MinecraftStatusRuntime statusRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
         this.backendResolver = backendResolver;
@@ -81,6 +83,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         this.customPayloadPolicy = customPayloadPolicy;
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
+        this.statusRuntime = statusRuntime == null ? MinecraftStatusRuntime.disabled() : statusRuntime;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
     }
@@ -103,6 +106,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 customPayloadPolicy,
                 MinecraftAuthRuntime.offline(),
                 MinecraftForwardingRuntime.none(),
+                MinecraftStatusRuntime.disabled(),
                 compressionRewriteEnabled,
                 compressionRewriteMaxEventLoopDelayMillis);
     }
@@ -149,9 +153,34 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         frontend.config().setAutoRead(false);
 
         MinecraftHandshake handshake;
-        RegisteredServer selected;
         try {
             handshake = MinecraftProtocolCodec.readHandshake(firstFrame, probe);
+        } catch (RuntimeException exception) {
+            metrics.packetAnomaly(
+                    RULE_MALFORMED_HANDSHAKE,
+                    remoteAddress(frontend.remoteAddress()),
+                    "",
+                    "frontend_to_backend",
+                    "HANDSHAKE",
+                    0,
+                    firstFrame.readableBytes(),
+                    -1,
+                    exception.getMessage());
+            metrics.failedRoute();
+            terminal = true;
+            firstFrame.release();
+            context.close();
+            return;
+        }
+
+        if (statusRuntime.enabled() && handshake.nextState() == 1) {
+            var pendingBytes = input.isReadable() ? input.readRetainedSlice(input.readableBytes()) : null;
+            beginLocalStatus(context, firstFrame, pendingBytes);
+            return;
+        }
+
+        RegisteredServer selected;
+        try {
             selected = backendResolver.resolve(handshake, frontend.remoteAddress()).orElse(null);
         } catch (RuntimeException exception) {
             metrics.packetAnomaly(
@@ -214,6 +243,24 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             beginBungeeLegacyLogin(context, handshake, firstFrame, pendingBytes, selected);
         } else {
             connectBackend(context, handshake, firstFrame, pendingBytes, selected);
+        }
+    }
+
+    private void beginLocalStatus(ChannelHandlerContext context, ByteBuf firstFrame, ByteBuf pendingBytes) {
+        release(firstFrame);
+        var handler = new MinecraftStatusHandler(tuning.maxFrameBytes(), statusRuntime);
+        context.pipeline().replace(this, "minecraft-status", handler);
+        if (pendingBytes != null && pendingBytes.isReadable()) {
+            var statusContext = context.pipeline().context("minecraft-status");
+            try {
+                handler.channelRead(statusContext, pendingBytes);
+            } catch (Exception exception) {
+                statusContext.fireExceptionCaught(exception);
+                statusContext.close();
+            }
+        } else {
+            release(pendingBytes);
+            context.channel().read();
         }
     }
 

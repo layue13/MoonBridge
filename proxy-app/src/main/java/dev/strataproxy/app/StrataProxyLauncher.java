@@ -13,6 +13,7 @@ import dev.strataproxy.bootstrap.ProxyConfig;
 import dev.strataproxy.compression.CompressionStrategies;
 import dev.strataproxy.network.MinecraftForwardingRuntime;
 import dev.strataproxy.network.MinecraftAuthRuntime;
+import dev.strataproxy.network.MinecraftStatusRuntime;
 import dev.strataproxy.network.NettyProxyNetworkServer;
 import dev.strataproxy.network.NetworkTuning;
 import dev.strataproxy.network.RoutingBackendResolver;
@@ -178,6 +179,9 @@ public final class StrataProxyLauncher {
                     + " rsaKeyBits=" + config.auth().rsaKeyBits()
                     + " sessionVerificationTimeout=" + config.auth().sessionVerificationTimeout());
             out.println("StrataProxy forwarding: mode=" + config.forwarding().mode());
+            out.println("StrataProxy status: enabled=" + config.status().enabled()
+                    + " protocol=" + config.status().protocolName() + "/" + config.status().protocolVersion()
+                    + " maxPlayers=" + config.status().maxPlayers());
             out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
                     + " os=" + nativeDecision.capabilities().os()
                     + " arch=" + nativeDecision.capabilities().arch()
@@ -243,6 +247,7 @@ public final class StrataProxyLauncher {
                     customPayloadPolicy,
                     authRuntime(config.auth()),
                     forwardingRuntime(config.forwarding()),
+                    statusRuntime(config.status(), metrics),
                     config.compression().rewriteEnabled(),
                     config.compression().rewriteMaxEventLoopDelayMillis());
             started.add(server);
@@ -397,6 +402,7 @@ public final class StrataProxyLauncher {
                 config.packetAnalysis(),
                 config.observability(),
                 resolvedAdmin,
+                config.status(),
                 config.auth(),
                 config.forwarding(),
                 config.nativeRuntime());
@@ -431,6 +437,17 @@ public final class StrataProxyLauncher {
     private static MinecraftForwardingRuntime forwardingRuntime(ProxyConfig.ForwardingConfig config) {
         var forwarding = config == null ? ProxyConfig.ForwardingConfig.defaults() : config;
         return new MinecraftForwardingRuntime(forwarding.mode(), forwarding.secret());
+    }
+
+    private static MinecraftStatusRuntime statusRuntime(ProxyConfig.StatusConfig config, ProxyMetrics metrics) {
+        var status = config == null ? ProxyConfig.StatusConfig.defaults() : config;
+        return new MinecraftStatusRuntime(
+                status.enabled(),
+                status.motd(),
+                status.protocolName(),
+                status.protocolVersion(),
+                status.maxPlayers(),
+                () -> metrics.snapshot().playerSessions().size());
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

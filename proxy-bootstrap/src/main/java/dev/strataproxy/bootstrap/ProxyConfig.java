@@ -14,6 +14,7 @@ public record ProxyConfig(
         PacketAnalysisConfig packetAnalysis,
         ObservabilityConfig observability,
         AdminConfig admin,
+        StatusConfig status,
         AuthConfig auth,
         ForwardingConfig forwarding,
         NativeConfig nativeRuntime) {
@@ -37,6 +38,7 @@ public record ProxyConfig(
                 packetAnalysis,
                 observability,
                 admin,
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
                 NativeConfig.defaults());
@@ -63,8 +65,38 @@ public record ProxyConfig(
                 packetAnalysis,
                 observability,
                 admin,
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
+                nativeRuntime);
+    }
+
+    public ProxyConfig(
+            InetSocketAddress bindAddress,
+            int workerThreads,
+            boolean nativeTransport,
+            NetworkConfig network,
+            RegistryConfig registry,
+            CompressionConfig compression,
+            PacketAnalysisConfig packetAnalysis,
+            ObservabilityConfig observability,
+            AdminConfig admin,
+            AuthConfig auth,
+            ForwardingConfig forwarding,
+            NativeConfig nativeRuntime) {
+        this(
+                bindAddress,
+                workerThreads,
+                nativeTransport,
+                network,
+                registry,
+                compression,
+                packetAnalysis,
+                observability,
+                admin,
+                StatusConfig.defaults(),
+                auth,
+                forwarding,
                 nativeRuntime);
     }
 
@@ -78,6 +110,7 @@ public record ProxyConfig(
         packetAnalysis = packetAnalysis == null ? PacketAnalysisConfig.defaults() : packetAnalysis;
         observability = observability == null ? ObservabilityConfig.defaults() : observability;
         admin = admin == null ? AdminConfig.defaults() : admin;
+        status = status == null ? StatusConfig.defaults() : status;
         auth = auth == null ? AuthConfig.defaults() : auth;
         forwarding = forwarding == null ? ForwardingConfig.defaults() : forwarding;
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
@@ -98,9 +131,26 @@ public record ProxyConfig(
                 PacketAnalysisConfig.defaults(),
                 ObservabilityConfig.defaults(),
                 AdminConfig.defaults(),
+                StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
                 NativeConfig.defaults());
+    }
+
+    public record StatusConfig(
+            boolean enabled,
+            String motd,
+            String protocolName,
+            int protocolVersion,
+            int maxPlayers) {
+        public StatusConfig {
+            motd = motd == null || motd.isBlank() ? "StrataProxy" : motd;
+            protocolName = protocolName == null || protocolName.isBlank() ? "StrataProxy" : protocolName;
+        }
+
+        public static StatusConfig defaults() {
+            return new StatusConfig(true, "StrataProxy", "StrataProxy", -1, 1000);
+        }
     }
 
     public record AuthConfig(

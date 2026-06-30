@@ -62,6 +62,7 @@ public final class ConfigLoader {
         public PacketAnalysisFile packetAnalysis = new PacketAnalysisFile();
         public ObservabilityFile observability = new ObservabilityFile();
         public AdminFile admin = new AdminFile();
+        public StatusFile status = new StatusFile();
         public AuthFile auth = new AuthFile();
         public ForwardingFile forwarding = new ForwardingFile();
         @JsonProperty("native")
@@ -117,6 +118,12 @@ public final class ConfigLoader {
                                     admin.tls.trustStorePassword,
                                     admin.tls.trustStoreType,
                                     admin.tls.clientAuth)),
+                    new ProxyConfig.StatusConfig(
+                            status.enabled,
+                            status.motd,
+                            status.protocolName,
+                            status.protocolVersion,
+                            status.maxPlayers),
                     new ProxyConfig.AuthConfig(
                             auth.onlineMode,
                             auth.rsaKeyBits,
@@ -205,6 +212,14 @@ public final class ConfigLoader {
         public int verifyTokenBytes = 4;
         public boolean sessionVerification = false;
         public String sessionVerificationTimeout = "5s";
+    }
+
+    public static final class StatusFile {
+        public boolean enabled = true;
+        public String motd = "StrataProxy";
+        public String protocolName = "StrataProxy";
+        public int protocolVersion = -1;
+        public int maxPlayers = 1000;
     }
 
     public static final class ForwardingFile {

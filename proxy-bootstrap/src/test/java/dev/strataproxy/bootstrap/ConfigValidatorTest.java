@@ -173,6 +173,15 @@ final class ConfigValidatorTest {
     }
 
     @Test
+    void validatesStatusConfig() {
+        var invalid = validateWithStatus(new ProxyConfig.StatusConfig(true, "motd", "proto", -2, -1));
+
+        assertFalse(invalid.valid());
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("status.protocolVersion")));
+        assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("status.maxPlayers")));
+    }
+
+    @Test
     void validatesAdminTlsFiles() throws Exception {
         var keyStore = tempDir.resolve("admin.p12");
         var trustStore = tempDir.resolve("clients.p12");
@@ -283,6 +292,24 @@ final class ConfigValidatorTest {
                 new ProxyConfig.AdminConfig(true, new InetSocketAddress("127.0.0.1", 8080), "secret"),
                 ProxyConfig.AuthConfig.defaults(),
                 forwarding,
+                ProxyConfig.NativeConfig.defaults());
+        return new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
+    }
+
+    private ConfigValidationResult validateWithStatus(ProxyConfig.StatusConfig status) {
+        var config = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                ProxyConfig.CompressionConfig.defaults(),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                new ProxyConfig.AdminConfig(true, new InetSocketAddress("127.0.0.1", 8080), "secret"),
+                status,
+                ProxyConfig.AuthConfig.defaults(),
+                ProxyConfig.ForwardingConfig.defaults(),
                 ProxyConfig.NativeConfig.defaults());
         return new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
     }

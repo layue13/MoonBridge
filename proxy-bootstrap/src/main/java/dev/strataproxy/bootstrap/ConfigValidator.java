@@ -124,6 +124,7 @@ public final class ConfigValidator {
         validatePositive("observability.flushInterval", observability.flushInterval(), errors);
 
         validateAuth(config.auth(), errors, warnings);
+        validateStatus(config.status(), errors);
         validateForwarding(config.forwarding(), errors);
         validateNative(config.nativeRuntime(), errors, warnings);
 
@@ -157,6 +158,18 @@ public final class ConfigValidator {
         validatePositive("auth.sessionVerificationTimeout", auth.sessionVerificationTimeout(), errors);
         if (auth.onlineMode() && !auth.sessionVerification()) {
             warnings.add("auth.onlineMode is enabled without Mojang session verification; use only for staged integration tests");
+        }
+    }
+
+    private static void validateStatus(ProxyConfig.StatusConfig status, ArrayList<String> errors) {
+        if (status == null) {
+            return;
+        }
+        if (status.protocolVersion() < -1) {
+            errors.add("status.protocolVersion must be >= -1");
+        }
+        if (status.maxPlayers() < 0) {
+            errors.add("status.maxPlayers must be >= 0");
         }
     }
 

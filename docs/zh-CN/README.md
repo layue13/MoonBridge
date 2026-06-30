@@ -110,6 +110,21 @@ native:
 
 Windows 不要打开 `requireNativeTransport`，因为标准 Netty server transport 没有等价的 IOCP 服务器实现。
 
+## Minecraft 状态响应
+
+Minecraft 客户端服务器列表的 status ping 可以由代理直接响应：
+
+```yaml
+status:
+  enabled: true
+  motd: "StrataProxy"
+  protocolName: "StrataProxy"
+  protocolVersion: -1
+  maxPlayers: 1000
+```
+
+启用后，Handshake `nextState=1` 会在代理本地处理，不需要先选中或连接后端。这样维护、动态 registry 为空、后端全挂时，客户端服务器列表仍能看到清晰状态。`online` 来自代理观测到的活跃玩家会话；`maxPlayers`、MOTD 和协议显示由管理员配置。
+
 ## Minecraft 加密
 
 Minecraft Java online-mode 登录不是 TLS，而是协议内的 RSA + AES/CFB8：

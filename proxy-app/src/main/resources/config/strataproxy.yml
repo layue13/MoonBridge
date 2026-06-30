@@ -39,6 +39,13 @@ observability:
   anomalySampling: true
   flushIntervalSeconds: 5
 
+status:
+  enabled: true
+  motd: "StrataProxy"
+  protocolName: "StrataProxy"
+  protocolVersion: -1
+  maxPlayers: 1000
+
 auth:
   onlineMode: false
   rsaKeyBits: 1024
