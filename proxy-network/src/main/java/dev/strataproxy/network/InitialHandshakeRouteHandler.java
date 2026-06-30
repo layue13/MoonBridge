@@ -18,12 +18,16 @@ import io.netty.util.ReferenceCountUtil;
 import java.net.SocketAddress;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private static final String RULE_MALFORMED_FRAME = "initial-handshake-malformed-frame";
     private static final String RULE_MALFORMED_HANDSHAKE = "initial-handshake-malformed-packet";
     private static final String RULE_NO_ROUTE = "initial-handshake-no-route";
     private static final String RULE_PENDING_TOO_LARGE = "initial-handshake-pending-too-large";
+    private static final String DISCONNECT_NO_ROUTE = "No available backend server for this route.";
+    private static final String DISCONNECT_PENDING_TOO_LARGE = "Login request is too large.";
+    private static final String DISCONNECT_BACKEND_UNAVAILABLE = "Backend server is unavailable.";
 
     private final BackendResolver backendResolver;
     private final ProxyMetrics metrics;
@@ -152,7 +156,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         var frontend = context.channel();
         frontend.config().setAutoRead(false);
 
-        MinecraftHandshake handshake;
+        MinecraftHandshake handshake = null;
         try {
             handshake = MinecraftProtocolCodec.readHandshake(firstFrame, probe);
         } catch (RuntimeException exception) {
@@ -169,7 +173,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             metrics.failedRoute();
             terminal = true;
             firstFrame.release();
-            context.close();
+            scheduleCloseLogin(context, handshake, DISCONNECT_PENDING_TOO_LARGE);
             return;
         }
 
@@ -196,11 +200,12 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             metrics.failedRoute();
             terminal = true;
             firstFrame.release();
-            context.close();
+            scheduleCloseLogin(context, handshake, DISCONNECT_NO_ROUTE);
             return;
         }
 
         if (selected == null) {
+            var pendingBytes = input.isReadable() ? input.readRetainedSlice(input.readableBytes()) : null;
             metrics.packetAnomaly(
                     RULE_NO_ROUTE,
                     remoteAddress(frontend.remoteAddress()),
@@ -214,7 +219,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             metrics.failedRoute();
             terminal = true;
             firstFrame.release();
-            context.close();
+            beginFailingLogin(context, handshake, pendingBytes, DISCONNECT_NO_ROUTE);
             return;
         }
 
@@ -232,7 +237,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             metrics.failedRoute();
             terminal = true;
             firstFrame.release();
-            context.close();
+            scheduleCloseLogin(context, handshake, DISCONNECT_PENDING_TOO_LARGE);
             return;
         }
 
@@ -257,6 +262,32 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             } catch (Exception exception) {
                 statusContext.fireExceptionCaught(exception);
                 statusContext.close();
+            }
+        } else {
+            release(pendingBytes);
+            context.channel().read();
+        }
+    }
+
+    private void beginFailingLogin(
+            ChannelHandlerContext context,
+            MinecraftHandshake handshake,
+            ByteBuf pendingBytes,
+            String reason) {
+        if (handshake.nextState() != 2) {
+            release(pendingBytes);
+            context.close();
+            return;
+        }
+        var handler = new LoginFailureHandler(handshake, reason);
+        context.pipeline().replace(this, "login-failure", handler);
+        if (pendingBytes != null && pendingBytes.isReadable()) {
+            var failureContext = context.pipeline().context("login-failure");
+            try {
+                handler.channelRead(failureContext, pendingBytes);
+            } catch (Exception exception) {
+                failureContext.fireExceptionCaught(exception);
+                failureContext.close();
             }
         } else {
             release(pendingBytes);
@@ -384,7 +415,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 metrics.backendConnectFailure();
                 release(firstFrame);
                 release(pendingBytes);
-                frontend.close();
+                closeLogin(frontendContext, handshake, DISCONNECT_BACKEND_UNAVAILABLE);
                 return;
             }
 
@@ -412,7 +443,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                     release(firstFrame);
                     release(pendingBytes);
                     backend.close();
-                    frontend.close();
+                    closeLogin(frontendContext, handshake, DISCONNECT_BACKEND_UNAVAILABLE);
                     return;
                 }
             }
@@ -495,6 +526,20 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         if (buffer != null) {
             buffer.release();
         }
+    }
+
+    private void closeLogin(ChannelHandlerContext context, MinecraftHandshake handshake, String reason) {
+        if (handshake != null && handshake.nextState() == 2 && context.channel().isActive()) {
+            context.channel().writeAndFlush(MinecraftLoginDisconnect.frame(context.alloc(), reason))
+                    .addListener((ChannelFutureListener) ignored ->
+                            context.executor().schedule(() -> context.close(), 25, TimeUnit.MILLISECONDS));
+        } else {
+            context.close();
+        }
+    }
+
+    private void scheduleCloseLogin(ChannelHandlerContext context, MinecraftHandshake handshake, String reason) {
+        context.executor().execute(() -> closeLogin(context, handshake, reason));
     }
 
     private static String remoteAddress(SocketAddress address) {
@@ -608,6 +653,69 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
 
         private void releasePendingBuffer() {
+            if (pending.refCnt() > 0) {
+                pending.release();
+            }
+            pending = io.netty.buffer.Unpooled.EMPTY_BUFFER;
+        }
+    }
+
+    private final class LoginFailureHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+        private final MinecraftHandshake handshake;
+        private final String reason;
+        private ByteBuf pending = io.netty.buffer.Unpooled.buffer();
+        private boolean closed;
+
+        private LoginFailureHandler(MinecraftHandshake handshake, String reason) {
+            this.handshake = handshake;
+            this.reason = reason;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext context, Object message) {
+            if (!(message instanceof ByteBuf buffer)) {
+                ReferenceCountUtil.release(message);
+                context.close();
+                return;
+            }
+            try {
+                if (pending.readableBytes() + buffer.readableBytes() > tuning.maxFrameBytes() + 5) {
+                    closeNow(context);
+                    return;
+                }
+                pending.writeBytes(buffer, buffer.readerIndex(), buffer.readableBytes());
+                var probe = MinecraftProtocolCodec.probeFrame(pending, tuning.maxFrameBytes());
+                if (!probe.complete()) {
+                    context.channel().read();
+                    return;
+                }
+                closeNow(context);
+            } finally {
+                buffer.release();
+            }
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext context) {
+            releasePending();
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
+            context.close();
+            releasePending();
+        }
+
+        private void closeNow(ChannelHandlerContext context) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            releasePending();
+            closeLogin(context, handshake, reason);
+        }
+
+        private void releasePending() {
             if (pending.refCnt() > 0) {
                 pending.release();
             }

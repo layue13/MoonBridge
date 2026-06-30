@@ -243,6 +243,88 @@ final class NettyProxyNetworkServerSmokeTest {
         }
     }
 
+    @Test
+    void sendsLoginDisconnectWhenBackendConnectFailsOverRealTcp() throws Exception {
+        var closedBackendPort = freePort();
+        var selected = server("survival-1", closedBackendPort);
+        var metrics = new ProxyMetrics();
+        var tuning = new NetworkTuning(2048, 500, 128, 1024, 100, 100, 5_000);
+        try (var proxy = new NettyProxyNetworkServer(
+                1,
+                (request, remoteAddress) -> java.util.Optional.of(selected),
+                metrics,
+                tuning)) {
+            proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            try (var client = new Socket()) {
+                client.connect(proxy.bindAddress(), 5_000);
+                client.setSoTimeout(5_000);
+                client.getOutputStream().write(handshakeFrame(763, "play.example.net", 25565, 2));
+                client.getOutputStream().flush();
+
+                assertEquals("Backend server is unavailable.", loginDisconnectReason(readMinecraftFrame(client.getInputStream())));
+            }
+
+            awaitBackendConnectFailure(metrics);
+        }
+    }
+
+    @Test
+    void sendsLoginDisconnectWhenNoRouteExistsOverRealTcp() throws Exception {
+        var metrics = new ProxyMetrics();
+        var tuning = new NetworkTuning(2048, 500, 128, 1024, 100, 100, 5_000);
+        try (var proxy = new NettyProxyNetworkServer(
+                1,
+                (request, remoteAddress) -> java.util.Optional.empty(),
+                metrics,
+                tuning)) {
+            proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            try (var client = new Socket()) {
+                client.connect(proxy.bindAddress(), 5_000);
+                client.setSoTimeout(5_000);
+                client.getOutputStream().write(handshakeFrame(763, "missing.example.net", 25565, 2));
+                client.getOutputStream().write(loginStartFrame("MissingRoute"));
+                client.getOutputStream().flush();
+
+                assertEquals("No available backend server for this route.", loginDisconnectReason(readMinecraftFrame(client.getInputStream())));
+            }
+
+            assertEquals(1, metrics.snapshot().failedRoutes());
+        }
+    }
+
+    @Test
+    void sendsLoginDisconnectWhenPendingLoginRequestIsTooLargeOverRealTcp() throws Exception {
+        var selected = server("survival-1", freePort());
+        var metrics = new ProxyMetrics();
+        var tuning = new NetworkTuning(64, 500, 128, 1024, 100, 100, 5_000);
+        try (var proxy = new NettyProxyNetworkServer(
+                1,
+                (request, remoteAddress) -> java.util.Optional.of(selected),
+                metrics,
+                tuning)) {
+            proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            try (var client = new Socket()) {
+                client.connect(proxy.bindAddress(), 5_000);
+                client.setSoTimeout(5_000);
+                client.getOutputStream().write(concat(handshakeFrame(763, "play.example.net", 25565, 2), new byte[96]));
+                client.getOutputStream().flush();
+
+                assertEquals("Login request is too large.", loginDisconnectReason(readMinecraftFrame(client.getInputStream())));
+            }
+
+            assertEquals(1, metrics.snapshot().failedRoutes());
+        }
+    }
+
     private static void awaitMetrics(ProxyMetrics metrics, int frontendBytes, int backendBytes) throws InterruptedException {
         var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (System.nanoTime() < deadline) {
@@ -302,6 +384,17 @@ final class NettyProxyNetworkServerSmokeTest {
         assertEquals(acceptedConnections, snapshot.acceptedConnections());
         assertEquals(acceptedConnections, snapshot.activeConnections());
         assertEquals(rejectedConnections, snapshot.rejectedConnections());
+    }
+
+    private static void awaitBackendConnectFailure(ProxyMetrics metrics) throws InterruptedException {
+        var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (metrics.snapshot().backendConnectFailures() == 1) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertEquals(1, metrics.snapshot().backendConnectFailures());
     }
 
     private static void closeAll(List<Socket> sockets) {
@@ -397,6 +490,29 @@ final class NettyProxyNetworkServerSmokeTest {
             }
         }
         throw new IllegalArgumentException("malformed frame length");
+    }
+
+    private static String loginDisconnectReason(byte[] frameBytes) {
+        var frame = Unpooled.wrappedBuffer(frameBytes);
+        try {
+            var length = MinecraftVarInts.read(frame);
+            var body = frame.readSlice(length);
+            assertEquals(0, MinecraftVarInts.read(body));
+            var json = readString(body);
+            var prefix = "{\"text\":\"";
+            var suffix = "\"}";
+            return json.startsWith(prefix) && json.endsWith(suffix)
+                    ? json.substring(prefix.length(), json.length() - suffix.length())
+                    : json;
+        } finally {
+            frame.release();
+        }
+    }
+
+    private static int freePort() throws Exception {
+        try (var socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
     }
 
     private static String handshakeHost(byte[] frameBytes) {

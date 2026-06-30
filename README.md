@@ -295,6 +295,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
 - Supports Minecraft online-mode player-side encryption termination with optional Mojang session verification.
 - Supports proxy-level Minecraft server-list status responses without opening a backend connection.
+- Sends Minecraft Login Disconnect JSON frames for routable login failures such as no available backend route, oversized pipelined login data, or backend connect failure, instead of exposing clients to a bare TCP close.
 - Supports Velocity modern forwarding v1/v2 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads and optional 1.19+ chat signing key material.
 - Supports BungeeCord legacy IP forwarding and BungeeGuard secret forwarding by rewriting the backend Handshake after player identity is known.
 - Parses the first Minecraft handshake frame using bounded VarInt/frame checks.
@@ -590,6 +591,7 @@ Smoke-tested runtime:
 - covered idempotent runtime close, shutdown waiter release, and listener port release
 - covered active player session tracking from split Login Start frames plus Prometheus, direct Admin API, Admin CLI, and diagnostic report export
 - covered a real TCP proxy smoke test in `proxy-network`: client handshake -> proxy -> backend -> proxy -> client, including routed connection count and per-server byte attribution
+- covered real TCP Minecraft Login Disconnect responses for no-route, oversized pending-login-data, and backend-connect-failure login paths
 - covered a real TCP per-address connection storm test in `proxy-network`: concurrent virtual-thread clients exceed the per-address admission limit and rejected connections are counted
 - covered connection admission rejection reasons from control logic through Netty handler metrics, Prometheus output, Admin API diagnostic JSON, and CLI overview output
 - covered `proxy-query` status protocol encode/decode and a real local status-query exchange

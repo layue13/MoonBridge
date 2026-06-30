@@ -150,6 +150,8 @@ auth:
 
 `sessionVerification` 是显式开关。启用后，StrataProxy 会在收到 Encryption Response 后异步调用 Mojang `hasJoined`，只有校验通过才继续连接后端。玩家侧 online-mode 加密终止不等于后端身份转发策略，后端仍需要按选定 forwarding 模式配置。
 
+登录阶段如果没有可用后端路由、握手后 pipelined 登录数据超过限制，或已选中后端但连接失败，StrataProxy 会返回 Minecraft Login Disconnect JSON 包，而不是只关闭 TCP 连接。无路由场景会等客户端进入 Login Start 后再响应，这样客户端看到的是协议层断开原因；握手帧本身 malformed 时仍会直接关闭连接。
+
 后端身份转发单独配置：
 
 ```yaml
