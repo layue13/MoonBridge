@@ -30,12 +30,23 @@ python3 deployment/performance/run_profile.py acceptance-linux-native-java25 \
   --query-bin ./proxy-query/build/install/strataproxy-query/bin/strataproxy-query \
   --admin-bin ./proxy-admin-cli/build/install/strataproxy-admin/bin/strataproxy-admin \
   --admin-url http://127.0.0.1:8080 \
+  --start-echo-backend \
   --config ./proxy-app/build/install/strataproxy/config/strataproxy-production.yml
 ```
 
-The runner executes each profile command, embeds JSON output, fetches `/metrics`, `/overview`, and `/native-capabilities`, evaluates profile gates, and writes `deployment/performance/results/<profile>-<timestamp>.json`. Result files are intentionally ignored by Git; archive them with release or incident evidence instead.
+The runner executes each profile command, embeds JSON output, fetches `/metrics`, `/overview`, and `/native-capabilities`, evaluates profile gates, and writes `deployment/performance/results/<profile>-<timestamp>.json`. Result files are intentionally ignored by Git; archive them with release or incident evidence instead. With `--start-echo-backend`, the runner starts `strataproxy-query slow-sink --echo`, waits for the backend port to accept TCP connections, records setup metadata, and stops the backend when the profile exits.
 
-For the acceptance latency gate, start the bundled echo backend and route the proxy backend to it before running the profile:
+For the acceptance latency gate, the proxy route must point to an echo backend. The runner can start one automatically:
+
+```bash
+python3 deployment/performance/run_profile.py acceptance-linux-native-java25 \
+  --query-bin ./proxy-query/build/install/strataproxy-query/bin/strataproxy-query \
+  --admin-bin ./proxy-admin-cli/build/install/strataproxy-admin/bin/strataproxy-admin \
+  --admin-url http://127.0.0.1:8080 \
+  --start-echo-backend
+```
+
+Manual equivalent:
 
 ```bash
 ./proxy-query/build/install/strataproxy-query/bin/strataproxy-query slow-sink \
@@ -54,7 +65,7 @@ For the acceptance latency gate, start the bundled echo backend and route the pr
 python deployment\performance\run_profile.py acceptance-linux-native-java25 --query-bin .\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat --admin-bin .\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat --admin-url http://127.0.0.1:8080
 ```
 
-The acceptance latency gate requires an echo backend that returns received bytes unchanged for the `traffic-latency-acceptance` command.
+The acceptance latency gate requires an echo backend that returns received bytes unchanged for the `traffic-latency-acceptance` command. Add `--start-echo-backend` when the backend should be managed by the runner.
 
 For Linux hosts, raise file descriptors before running the acceptance profile:
 

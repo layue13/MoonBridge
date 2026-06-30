@@ -18,6 +18,15 @@
     "nativeTransport": false,
     "configSha256": ""
   },
+  "setup": {
+    "echoBackend": {
+      "enabled": false,
+      "argv": [],
+      "host": "",
+      "port": 0,
+      "ready": false
+    }
+  },
   "commands": [
     {
       "name": "",
