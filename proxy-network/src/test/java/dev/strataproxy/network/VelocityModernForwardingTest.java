@@ -36,6 +36,7 @@ final class VelocityModernForwardingTest {
         var response = VelocityModernForwarding.response(
                 UnpooledByteBufAllocatorHolder.ALLOC,
                 7,
+                1,
                 new MinecraftForwardingRuntime("velocity-modern", "secret"),
                 identity);
         try {
@@ -56,6 +57,72 @@ final class VelocityModernForwardingTest {
                 assertEquals("value", readString(payload));
                 assertTrue(payload.readBoolean());
                 assertEquals("signature", readString(payload));
+            } finally {
+                payload.release();
+            }
+        } finally {
+            response.release();
+        }
+    }
+
+    @Test
+    void writesVelocityV2ChatSessionKeyWhenBackendRequestsIt() {
+        var identity = new RelaySessionIdentity("/203.0.113.10:50000");
+        identity.playerName("PlayerOne");
+        identity.chatSessionKey(new MinecraftLoginStart.ChatSessionKey(
+                1_700_000_000_000L,
+                new byte[] {1, 2, 3},
+                new byte[] {4, 5, 6, 7}));
+
+        var response = VelocityModernForwarding.response(
+                UnpooledByteBufAllocatorHolder.ALLOC,
+                11,
+                2,
+                new MinecraftForwardingRuntime("velocity-modern", "secret"),
+                identity);
+        try {
+            var payload = unwrapFrame(response);
+            try {
+                assertEquals(0x02, MinecraftVarInts.read(payload));
+                assertEquals(11, MinecraftVarInts.read(payload));
+                assertTrue(payload.readBoolean());
+                payload.skipBytes(32);
+                assertEquals(2, MinecraftVarInts.read(payload));
+                assertEquals("203.0.113.10", readString(payload));
+                payload.skipBytes(16);
+                assertEquals("PlayerOne", readString(payload));
+                assertEquals(0, MinecraftVarInts.read(payload));
+                assertEquals(1_700_000_000_000L, payload.readLong());
+                assertArrayEquals(new byte[] {1, 2, 3}, readByteArray(payload));
+                assertArrayEquals(new byte[] {4, 5, 6, 7}, readByteArray(payload));
+                assertFalse(payload.isReadable());
+            } finally {
+                payload.release();
+            }
+        } finally {
+            response.release();
+        }
+    }
+
+    @Test
+    void fallsBackToVelocityV1WhenBackendRequestsV2ButClientHasNoChatKey() {
+        var identity = new RelaySessionIdentity("/203.0.113.10:50000");
+        identity.playerName("PlayerOne");
+
+        var response = VelocityModernForwarding.response(
+                UnpooledByteBufAllocatorHolder.ALLOC,
+                12,
+                2,
+                new MinecraftForwardingRuntime("velocity-modern", "secret"),
+                identity);
+        try {
+            var payload = unwrapFrame(response);
+            try {
+                assertEquals(0x02, MinecraftVarInts.read(payload));
+                assertEquals(12, MinecraftVarInts.read(payload));
+                assertTrue(payload.readBoolean());
+                payload.skipBytes(32);
+                assertEquals(1, MinecraftVarInts.read(payload));
             } finally {
                 payload.release();
             }
@@ -145,6 +212,10 @@ final class VelocityModernForwardingTest {
         var bytes = new byte[length];
         input.readBytes(bytes);
         return bytes;
+    }
+
+    private static byte[] readByteArray(ByteBuf input) {
+        return readBytes(input, MinecraftVarInts.read(input));
     }
 
     private static byte[] uuidBytes(UUID uuid) {

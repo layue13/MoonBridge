@@ -43,20 +43,10 @@ final class MinecraftLoginStartSampler {
         }
         var frame = pending.readRetainedSlice(totalBytes);
         try {
-            var body = frame.slice(frameLength.bytes(), frameLength.value()).retainedDuplicate();
-            try {
-                var packetId = MinecraftVarInts.read(body);
-                if (packetId != 0) {
-                    close();
-                    return Optional.empty();
-                }
-                var username = MinecraftProtocolCodec.readString(body, 16);
-                found = true;
-                close();
-                return Optional.of(username);
-            } finally {
-                body.release();
-            }
+            var loginStart = MinecraftLoginStart.read(frame, maxFrameBytes);
+            found = true;
+            close();
+            return Optional.of(loginStart.username());
         } finally {
             frame.release();
         }

@@ -264,7 +264,7 @@ forwarding:
 
 Supported modes are `none`, `velocity-modern`, `bungee-legacy`, and `bungee-guard`.
 
-`velocity-modern` intercepts the backend Login Plugin Request on `velocity:player_info` before compression negotiation and replies with a HMAC-SHA256 signed Login Plugin Response containing the client address, verified UUID, username, and Mojang profile properties. Backend Paper-compatible servers should run behind the proxy with backend `online-mode=false`, Velocity forwarding enabled, and the same secret. The current implementation forwards the version 1 identity/profile payload; Minecraft 1.19+ chat signing key forwarding is still a separate compatibility item because it requires parsing and retaining the client's login public-key material.
+`velocity-modern` intercepts the backend Login Plugin Request on `velocity:player_info` before compression negotiation and replies with a HMAC-SHA256 signed Login Plugin Response containing the client address, verified UUID, username, and Mojang profile properties. Backend Paper-compatible servers should run behind the proxy with backend `online-mode=false`, Velocity forwarding enabled, and the same secret. Version 1 identity/profile forwarding is always supported. When the backend requests version 2 and the client Login Start supplied chat signing key material, StrataProxy returns version 2 and appends the public-key expiry, encoded public key, and Mojang key signature. If no key material is available, it returns a version 1 payload rather than fabricating invalid chat-signing data.
 
 `bungee-legacy` rewrites the backend Handshake host field to the classic BungeeCord NUL-separated format: requested host, client address, UUID without dashes, and profile properties JSON. In offline-mode proxy operation it waits for Login Start before connecting so it can derive the offline UUID from the player name instead of sending an incomplete legacy handshake. `bungee-guard` uses the same handshake format and appends the configured shared secret as the final NUL-separated field. Use these modes for Spigot/Paper servers configured with BungeeCord-style IP forwarding; prefer `bungee-guard` when the backend supports it.
 
@@ -281,7 +281,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Honors `network.nativeTransport`: uses Netty epoll/kqueue when available and falls back to NIO otherwise; startup logs the selected transport.
 - Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
 - Supports Minecraft online-mode player-side encryption termination with optional Mojang session verification.
-- Supports Velocity modern forwarding v1 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads.
+- Supports Velocity modern forwarding v1/v2 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads and optional 1.19+ chat signing key material.
 - Supports BungeeCord legacy IP forwarding and BungeeGuard secret forwarding by rewriting the backend Handshake after player identity is known.
 - Parses the first Minecraft handshake frame using bounded VarInt/frame checks.
 - Rejects excessive bytes pipelined after the initial handshake before backend connect; pre-route pending data is capped by `network.maxFrameBytes`.

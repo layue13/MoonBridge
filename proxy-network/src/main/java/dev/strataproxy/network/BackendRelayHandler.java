@@ -131,7 +131,12 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             var forwardingRequest = observeVelocityForwardingRequest(context, buffer);
             if (forwardingRequest.matched()) {
                 ReferenceCountUtil.release(message);
-                var response = VelocityModernForwarding.response(context.alloc(), forwardingRequest.messageId(), forwardingRuntime, identity);
+                var response = VelocityModernForwarding.response(
+                        context.alloc(),
+                        forwardingRequest.messageId(),
+                        forwardingRequest.version(),
+                        forwardingRuntime,
+                        identity);
                 context.writeAndFlush(response).addListener((ChannelFutureListener) future -> {
                     if (future.isSuccess()) {
                         context.channel().read();

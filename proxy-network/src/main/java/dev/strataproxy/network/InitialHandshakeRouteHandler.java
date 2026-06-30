@@ -344,9 +344,12 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             var backend = future.channel();
             metrics.routedConnection();
             metrics.serverConnectionOpened(serverName);
-            var initialPlayerName = pendingBytes == null ? null : observeInitialLoginStart(frontend, serverName, pendingBytes);
-            if (initialPlayerName != null && !initialPlayerName.isBlank()) {
-                identity.playerName(initialPlayerName);
+            var initialLoginStart = pendingBytes == null ? null : observeInitialLoginStart(frontend, serverName, pendingBytes);
+            if (initialLoginStart != null) {
+                if (!initialLoginStart.username().isBlank()) {
+                    identity.playerName(initialLoginStart.username());
+                }
+                initialLoginStart.chatSessionKey().ifPresent(identity::chatSessionKey);
             }
             var outboundFirstFrame = firstFrame;
             if (forwardingRuntime.bungeeHandshakeForwarding() && handshake.nextState() == 2) {
@@ -380,7 +383,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                     compressionRuntime,
                     tuning.maxFrameBytes(),
                     customPayloadPolicy,
-                    initialPlayerName,
+                    initialLoginStart == null ? null : initialLoginStart.username(),
                     identity,
                     compressionRewriteEnabled,
                     compressionRewriteMaxEventLoopDelayMillis);
@@ -430,18 +433,13 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
     }
 
-    private String observeInitialLoginStart(io.netty.channel.Channel frontend, String serverName, ByteBuf pendingBytes) {
-        var sampler = new MinecraftLoginStartSampler(tuning.maxFrameBytes());
+    private MinecraftLoginStart observeInitialLoginStart(io.netty.channel.Channel frontend, String serverName, ByteBuf pendingBytes) {
         try {
-            var username = sampler.observe(pendingBytes);
-            if (username.isPresent()) {
-                metrics.playerSessionStarted(username.get(), serverName, remoteAddress(frontend.remoteAddress()));
-                return username.get();
-            }
+            var loginStart = MinecraftLoginStart.read(pendingBytes, tuning.maxFrameBytes());
+            metrics.playerSessionStarted(loginStart.username(), serverName, remoteAddress(frontend.remoteAddress()));
+            return loginStart;
         } catch (RuntimeException ignored) {
             // Player attribution must never block the initial fast-forward path.
-        } finally {
-            sampler.close();
         }
         return null;
     }
@@ -492,9 +490,12 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 var loginStartFrame = pending.readRetainedSlice(probe.totalBytes());
                 var remaining = pending.isReadable() ? pending.readRetainedSlice(pending.readableBytes()) : null;
                 var outboundPending = combine(context, loginStartFrame, remaining);
-                var username = loginStartUsername(outboundPending);
+                var loginStart = loginStart(outboundPending);
                 var identity = new RelaySessionIdentity(remoteAddress(context.channel().remoteAddress()));
-                identity.playerName(username.orElse(""));
+                loginStart.ifPresent(value -> {
+                    identity.playerName(value.username());
+                    value.chatSessionKey().ifPresent(identity::chatSessionKey);
+                });
                 consumed = true;
                 releasePendingBuffer();
                 connectBackend(context, handshake, firstFrame, outboundPending, selected, "bungee-legacy-login-start", identity);
@@ -542,12 +543,11 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             }
         }
 
-        private Optional<String> loginStartUsername(ByteBuf loginStartFrame) {
-            var sampler = new MinecraftLoginStartSampler(tuning.maxFrameBytes());
+        private Optional<MinecraftLoginStart> loginStart(ByteBuf loginStartFrame) {
             try {
-                return sampler.observe(loginStartFrame);
-            } finally {
-                sampler.close();
+                return Optional.of(MinecraftLoginStart.read(loginStartFrame, tuning.maxFrameBytes()));
+            } catch (RuntimeException exception) {
+                return Optional.empty();
             }
         }
 

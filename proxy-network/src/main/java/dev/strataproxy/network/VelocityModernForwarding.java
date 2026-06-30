@@ -14,7 +14,8 @@ final class VelocityModernForwarding {
     static final String CHANNEL = "velocity:player_info";
     private static final int LOGIN_PLUGIN_REQUEST_PACKET_ID = 0x04;
     private static final int LOGIN_PLUGIN_RESPONSE_PACKET_ID = 0x02;
-    private static final int FORWARDING_VERSION = 1;
+    private static final int MODERN_FORWARDING_DEFAULT = 1;
+    private static final int MODERN_FORWARDING_WITH_KEY = 2;
     private static final int SIGNATURE_BYTES = 32;
 
     private VelocityModernForwarding() {
@@ -37,7 +38,7 @@ final class VelocityModernForwarding {
             if (!CHANNEL.equals(channel)) {
                 return ForwardingRequest.none();
             }
-            var version = duplicate.isReadable() ? MinecraftProtocolCodec.readVarInt(duplicate) : FORWARDING_VERSION;
+            var version = duplicate.isReadable() ? MinecraftProtocolCodec.readVarInt(duplicate) : MODERN_FORWARDING_DEFAULT;
             return new ForwardingRequest(true, messageId, version);
         } catch (RuntimeException exception) {
             return ForwardingRequest.none();
@@ -49,6 +50,7 @@ final class VelocityModernForwarding {
     static ByteBuf response(
             ByteBufAllocator allocator,
             int messageId,
+            int requestedVersion,
             MinecraftForwardingRuntime runtime,
             RelaySessionIdentity identity) {
         if (runtime == null || !runtime.velocityModern() || runtime.secret().isBlank()) {
@@ -57,10 +59,14 @@ final class VelocityModernForwarding {
         var profile = identity.profile();
         var username = profile == null || profile.name().isBlank() ? identity.playerName() : profile.name();
         var uuid = profile == null || profile.id() == null ? offlineUuid(username) : profile.id();
+        var chatSessionKey = identity.chatSessionKey();
+        var responseVersion = requestedVersion >= MODERN_FORWARDING_WITH_KEY && chatSessionKey != null
+                ? MODERN_FORWARDING_WITH_KEY
+                : MODERN_FORWARDING_DEFAULT;
         var payload = Unpooled.buffer();
         try {
             payload.writeZero(SIGNATURE_BYTES);
-            MinecraftVarInts.write(payload, FORWARDING_VERSION);
+            MinecraftVarInts.write(payload, responseVersion);
             writeString(payload, remoteAddress(identity.remoteAddress()));
             writeUuid(payload, uuid);
             writeString(payload, username);
@@ -73,6 +79,11 @@ final class VelocityModernForwarding {
                 if (!property.signature().isBlank()) {
                     writeString(payload, property.signature());
                 }
+            }
+            if (responseVersion == MODERN_FORWARDING_WITH_KEY) {
+                payload.writeLong(chatSessionKey.expiresAtEpochMillis());
+                writeByteArray(payload, chatSessionKey.encodedPublicKey());
+                writeByteArray(payload, chatSessionKey.signature());
             }
             var signedBytes = new byte[payload.readableBytes() - SIGNATURE_BYTES];
             payload.getBytes(payload.readerIndex() + SIGNATURE_BYTES, signedBytes);
@@ -129,6 +140,11 @@ final class VelocityModernForwarding {
         var bytes = (value == null ? "" : value).getBytes(StandardCharsets.UTF_8);
         MinecraftVarInts.write(output, bytes.length);
         output.writeBytes(bytes);
+    }
+
+    private static void writeByteArray(ByteBuf output, byte[] value) {
+        MinecraftVarInts.write(output, value.length);
+        output.writeBytes(value);
     }
 
     private static void writeUuid(ByteBuf output, UUID uuid) {
