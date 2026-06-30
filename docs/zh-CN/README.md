@@ -4,6 +4,12 @@ StrataProxy 是面向大型 Minecraft 模组服网络的新代理项目，不以
 
 ## 定位
 
+文档入口：
+
+- [运维说明书](operations-manual.md)
+- [Zstd 压缩调参指南](compression-zstd.md)
+- [英文文档目录](../README.md)
+
 目标是高并发、低 GC 压力、可观测、可动态调度的 Minecraft Proxy：
 
 - 高连接数和高 PPS 下保持低 CPU/GC 压力
