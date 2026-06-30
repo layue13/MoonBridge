@@ -195,6 +195,8 @@ auth:
 
 登录阶段如果没有可用后端路由、握手后 pipelined 登录数据超过限制，或已选中后端但连接失败，StrataProxy 会返回 Minecraft Login Disconnect JSON 包，而不是只关闭 TCP 连接。无路由场景会等客户端进入 Login Start 后再响应，这样客户端看到的是协议层断开原因；握手帧本身 malformed 时仍会直接关闭连接。
 
+路由前会规范化握手里的 virtual host，去掉 DNS 尾点和 Forge/FML NUL 后缀，避免模组客户端因为 host 附加标记导致已配置的 host alias 匹配失败。
+
 后端身份转发单独配置：
 
 ```yaml

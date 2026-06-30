@@ -325,6 +325,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Provides a standalone compressed-frame rewriter that can decode one Minecraft compression-mode frame, re-encode it with a target threshold, and return before/after frame size attribution.
 - Supports opt-in live compressed-frame rewrite after backend compression negotiation through `compression.rewriteEnabled`. The default remains `false`; when enabled, the relay rewrites safe bounded compressed-frame batches selected by the configured compression strategy, including frames split across reads, and records low-cardinality rewrite outcomes plus CPU time.
 - Routes to a backend by requested host, server name, tag, metadata `host`, metadata `route`, protocol range, health, drain state, capacity, and effective weight.
+- Normalizes the handshake route host before routing by trimming DNS trailing dots and Forge/FML NUL suffixes, so modded clients still match configured host aliases.
 - Distributes matching requests with deterministic weighted selection, so gray/canary backends receive traffic according to weight while repeated requests from the same source remain stable.
 - Exposes route preview with candidate explanations through the Admin API and CLI so operators can verify host/tag/capability/protocol decisions, effective weights, and rejection reasons before changing DNS, weights, or drain mode.
 - Falls back to a generic healthy backend when no host-specific backend matches, which makes a one-backend setup work out of the box.
