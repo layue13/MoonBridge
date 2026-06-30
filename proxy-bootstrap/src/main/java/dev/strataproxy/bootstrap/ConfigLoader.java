@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -32,7 +33,7 @@ public final class ConfigLoader {
         }
         var yaml = expandEnvironment(Files.readString(path), environment);
         var file = mapper.readValue(yaml, ConfigFile.class);
-        return file.toLoadedConfig();
+        return file.toLoadedConfig(path.toAbsolutePath().getParent());
     }
 
     public record LoadedProxyConfig(ProxyConfig proxy, List<ServerDescriptor> servers) {
@@ -69,8 +70,9 @@ public final class ConfigLoader {
         public NativeFile nativeRuntime = new NativeFile();
         public List<ServerFile> servers = List.of();
 
-        LoadedProxyConfig toLoadedConfig() {
+        LoadedProxyConfig toLoadedConfig(Path configDirectory) {
             var nativeFile = nativeRuntime == null ? new NativeFile() : nativeRuntime;
+            var statusFile = status == null ? new StatusFile() : status;
             var bind = parseAddress(network.bind, 25577);
             var proxy = new ProxyConfig(
                     bind,
@@ -119,11 +121,15 @@ public final class ConfigLoader {
                                     admin.tls.trustStoreType,
                                     admin.tls.clientAuth)),
                     new ProxyConfig.StatusConfig(
-                            status.enabled,
-                            status.motd,
-                            status.protocolName,
-                            status.protocolVersion,
-                            status.maxPlayers),
+                            statusFile.enabled,
+                            statusFile.motd,
+                            statusFile.protocolName,
+                            statusFile.protocolVersion,
+                            statusFile.maxPlayers,
+                            resolveStatusFavicon(statusFile, configDirectory),
+                            statusSamplePlayers(statusFile).stream()
+                                    .map(player -> new ProxyConfig.StatusSamplePlayer(player.name, player.id))
+                                    .toList()),
                     new ProxyConfig.AuthConfig(
                             auth.onlineMode,
                             auth.rsaKeyBits,
@@ -146,6 +152,28 @@ public final class ConfigLoader {
                     ? servers.stream().map(ServerFile::toDescriptor).toList()
                     : List.<ServerDescriptor>of();
             return new LoadedProxyConfig(proxy, descriptors);
+        }
+
+        private static List<StatusSamplePlayerFile> statusSamplePlayers(StatusFile status) {
+            return status.samplePlayers == null ? List.of() : status.samplePlayers;
+        }
+
+        private static String resolveStatusFavicon(StatusFile status, Path configDirectory) {
+            if (status.favicon != null && !status.favicon.isBlank()) {
+                return status.favicon;
+            }
+            if (status.faviconPath == null || status.faviconPath.isBlank()) {
+                return "";
+            }
+            var path = Path.of(status.faviconPath);
+            if (!path.isAbsolute() && configDirectory != null) {
+                path = configDirectory.resolve(path);
+            }
+            try {
+                return "data:image/png;base64," + Base64.getEncoder().encodeToString(Files.readAllBytes(path));
+            } catch (IOException exception) {
+                throw new IllegalArgumentException("failed to read status.faviconPath: " + path, exception);
+            }
         }
     }
 
@@ -220,6 +248,14 @@ public final class ConfigLoader {
         public String protocolName = "StrataProxy";
         public int protocolVersion = -1;
         public int maxPlayers = 1000;
+        public String favicon = "";
+        public String faviconPath = "";
+        public List<StatusSamplePlayerFile> samplePlayers = List.of();
+    }
+
+    public static final class StatusSamplePlayerFile {
+        public String name = "";
+        public String id = "00000000-0000-0000-0000-000000000000";
     }
 
     public static final class ForwardingFile {

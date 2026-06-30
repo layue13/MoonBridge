@@ -179,6 +179,20 @@ final class ConfigValidatorTest {
         assertFalse(invalid.valid());
         assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("status.protocolVersion")));
         assertTrue(invalid.errors().stream().anyMatch(error -> error.contains("status.maxPlayers")));
+
+        var invalidRichStatus = validateWithStatus(new ProxyConfig.StatusConfig(
+                true,
+                "motd",
+                "proto",
+                763,
+                100,
+                "not-a-data-uri",
+                List.of(new ProxyConfig.StatusSamplePlayer("", "not-a-uuid"))));
+
+        assertFalse(invalidRichStatus.valid());
+        assertTrue(invalidRichStatus.errors().stream().anyMatch(error -> error.contains("status.favicon")));
+        assertTrue(invalidRichStatus.errors().stream().anyMatch(error -> error.contains("samplePlayers[0].name")));
+        assertTrue(invalidRichStatus.errors().stream().anyMatch(error -> error.contains("samplePlayers[0].id")));
     }
 
     @Test

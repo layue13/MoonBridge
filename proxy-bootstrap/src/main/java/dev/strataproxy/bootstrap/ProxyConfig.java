@@ -2,6 +2,7 @@ package dev.strataproxy.bootstrap;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 public record ProxyConfig(
@@ -142,14 +143,29 @@ public record ProxyConfig(
             String motd,
             String protocolName,
             int protocolVersion,
-            int maxPlayers) {
+            int maxPlayers,
+            String favicon,
+            List<StatusSamplePlayer> samplePlayers) {
+        public StatusConfig(boolean enabled, String motd, String protocolName, int protocolVersion, int maxPlayers) {
+            this(enabled, motd, protocolName, protocolVersion, maxPlayers, "", List.of());
+        }
+
         public StatusConfig {
             motd = motd == null || motd.isBlank() ? "StrataProxy" : motd;
             protocolName = protocolName == null || protocolName.isBlank() ? "StrataProxy" : protocolName;
+            favicon = favicon == null ? "" : favicon;
+            samplePlayers = samplePlayers == null ? List.of() : List.copyOf(samplePlayers);
         }
 
         public static StatusConfig defaults() {
-            return new StatusConfig(true, "StrataProxy", "StrataProxy", -1, 1000);
+            return new StatusConfig(true, "StrataProxy", "StrataProxy", -1, 1000, "", List.of());
+        }
+    }
+
+    public record StatusSamplePlayer(String name, String id) {
+        public StatusSamplePlayer {
+            name = name == null ? "" : name;
+            id = id == null || id.isBlank() ? "00000000-0000-0000-0000-000000000000" : id;
         }
     }
 

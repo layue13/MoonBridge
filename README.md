@@ -224,9 +224,13 @@ status:
   protocolName: "StrataProxy"
   protocolVersion: -1
   maxPlayers: 1000
+  faviconPath: "favicon.png"
+  samplePlayers:
+    - name: "Survival"
+      id: "00000000-0000-0000-0000-000000000001"
 ```
 
-When enabled, Handshake `nextState=1` is handled locally and does not require a routable backend. This keeps the server list useful during maintenance, dynamic-only startup, or total backend outage. `online` is derived from active player sessions observed by the proxy; `maxPlayers`, MOTD, and protocol display are operator-configured.
+When enabled, Handshake `nextState=1` is handled locally and does not require a routable backend. This keeps the server list useful during maintenance, dynamic-only startup, or total backend outage. `online` is derived from active player sessions observed by the proxy; `maxPlayers`, MOTD, protocol display, optional PNG favicon, and sample player rows are operator-configured. `favicon` accepts a `data:image/png;base64,...` URI; `faviconPath` reads a PNG relative to the active config file.
 
 Native CPU/runtime acceleration is enabled by default and can be adjusted explicitly:
 
@@ -294,7 +298,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Honors `network.nativeTransport`: uses Netty epoll/kqueue when available and falls back to NIO otherwise; startup logs the selected transport.
 - Detects native CPU/runtime capabilities at startup and records low-cardinality feature flags plus selected TLS/compression providers for operations and performance reports.
 - Supports Minecraft online-mode player-side encryption termination with optional Mojang session verification.
-- Supports proxy-level Minecraft server-list status responses without opening a backend connection.
+- Supports proxy-level Minecraft server-list status responses without opening a backend connection, including configurable MOTD, protocol display, max players, favicon, and sample player rows.
 - Sends Minecraft Login Disconnect JSON frames for routable login failures such as no available backend route, oversized pipelined login data, or backend connect failure, instead of exposing clients to a bare TCP close.
 - Supports Velocity modern forwarding v1/v2 by answering backend `velocity:player_info` login plugin requests with signed player identity/profile payloads and optional 1.19+ chat signing key material.
 - Supports BungeeCord legacy IP forwarding and BungeeGuard secret forwarding by rewriting the backend Handshake after player identity is known.
@@ -575,7 +579,7 @@ Smoke-tested runtime:
 - verified `/metrics`
 - confirmed listener/admin ports were released after shutdown
 - covered app-level YAML startup smoke: temporary config -> running proxy -> Minecraft status request -> backend -> proxy -> client, with runtime resources closed inside the test
-- covered proxy-level Minecraft server-list status response and Pong without a backend route
+- covered proxy-level Minecraft server-list status response and Pong without a backend route, including config-loaded favicon and sample player rows
 - covered config-relative registry persistence path resolution at runtime
 - covered corrupt persisted registry quarantine plus successful runtime startup
 - covered environment placeholder expansion in YAML config values

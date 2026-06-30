@@ -88,6 +88,33 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesStatusFaviconPathAndSamplePlayers() throws Exception {
+        var favicon = tempDir.resolve("favicon.png");
+        Files.write(favicon, new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47});
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                status:
+                  motd: "Maintenance"
+                  faviconPath: "favicon.png"
+                  samplePlayers:
+                    - name: "Survival"
+                      id: "00000000-0000-0000-0000-000000000001"
+                    - name: "Modded"
+                      id: "00000000-0000-0000-0000-000000000002"
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertEquals("data:image/png;base64,iVBORw==", loaded.proxy().status().favicon());
+        assertEquals(2, loaded.proxy().status().samplePlayers().size());
+        assertEquals("Survival", loaded.proxy().status().samplePlayers().getFirst().name());
+        assertEquals("00000000-0000-0000-0000-000000000001", loaded.proxy().status().samplePlayers().getFirst().id());
+    }
+
+    @Test
     void parsesNativeRuntimeConfig() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """

@@ -45,6 +45,10 @@ status:
   protocolName: "StrataProxy"
   protocolVersion: -1
   maxPlayers: 1000
+  # Optional server-list icon. Use either a data:image/png;base64 URI or a PNG path relative to this config file.
+  favicon: ""
+  faviconPath: ""
+  samplePlayers: []
 
 auth:
   onlineMode: false

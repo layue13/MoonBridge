@@ -121,9 +121,13 @@ status:
   protocolName: "StrataProxy"
   protocolVersion: -1
   maxPlayers: 1000
+  faviconPath: "favicon.png"
+  samplePlayers:
+    - name: "Survival"
+      id: "00000000-0000-0000-0000-000000000001"
 ```
 
-启用后，Handshake `nextState=1` 会在代理本地处理，不需要先选中或连接后端。这样维护、动态 registry 为空、后端全挂时，客户端服务器列表仍能看到清晰状态。`online` 来自代理观测到的活跃玩家会话；`maxPlayers`、MOTD 和协议显示由管理员配置。
+启用后，Handshake `nextState=1` 会在代理本地处理，不需要先选中或连接后端。这样维护、动态 registry 为空、后端全挂时，客户端服务器列表仍能看到清晰状态。`online` 来自代理观测到的活跃玩家会话；`maxPlayers`、MOTD、协议显示、PNG 图标和 sample player 行由管理员配置。`favicon` 可以直接填 `data:image/png;base64,...`，`faviconPath` 按当前配置文件目录解析相对 PNG 路径。
 
 ## Minecraft 加密
 

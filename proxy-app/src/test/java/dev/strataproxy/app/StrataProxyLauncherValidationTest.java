@@ -294,6 +294,7 @@ final class StrataProxyLauncherValidationTest {
     @Test
     void startsRuntimeAndRespondsToMinecraftStatusWithoutBackend(@TempDir Path tempDir) throws Exception {
         var proxyPort = freePort();
+        Files.write(tempDir.resolve("favicon.png"), new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47});
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """
                 network:
@@ -314,6 +315,12 @@ final class StrataProxyLauncherValidationTest {
                   protocolName: "StrataProxy Ready"
                   protocolVersion: 763
                   maxPlayers: 500
+                  faviconPath: "favicon.png"
+                  samplePlayers:
+                    - name: "Survival"
+                      id: "00000000-0000-0000-0000-000000000001"
+                    - name: "Modded"
+                      id: "00000000-0000-0000-0000-000000000002"
                 servers: []
                 """.formatted(proxyPort));
         var loaded = new ConfigLoader().load(config);
@@ -336,6 +343,8 @@ final class StrataProxyLauncherValidationTest {
                 assertTrue(response.contains("\"online\":0"));
                 assertTrue(response.contains("\"max\":500"));
                 assertTrue(response.contains("Maintenance window"));
+                assertTrue(response.contains("\"favicon\":\"data:image/png;base64,iVBORw==\""));
+                assertTrue(response.contains("\"sample\":[{\"name\":\"Survival\",\"id\":\"00000000-0000-0000-0000-000000000001\"},{\"name\":\"Modded\",\"id\":\"00000000-0000-0000-0000-000000000002\"}]"));
 
                 client.getOutputStream().write(pingRequest(123456789L));
                 client.getOutputStream().flush();

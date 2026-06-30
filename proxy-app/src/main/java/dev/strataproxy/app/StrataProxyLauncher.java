@@ -447,6 +447,10 @@ public final class StrataProxyLauncher {
                 status.protocolName(),
                 status.protocolVersion(),
                 status.maxPlayers(),
+                status.favicon(),
+                status.samplePlayers().stream()
+                        .map(player -> new MinecraftStatusRuntime.SamplePlayer(player.name(), player.id()))
+                        .toList(),
                 () -> metrics.snapshot().playerSessions().size());
     }
 
