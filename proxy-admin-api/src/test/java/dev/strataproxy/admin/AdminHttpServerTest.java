@@ -823,7 +823,17 @@ final class AdminHttpServerTest {
         var metrics = new ProxyMetrics();
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 100, 0);
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 50, 0);
-        metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FABRIC_HANDSHAKE", "fabric:registry/sync", 300, 64);
+        metrics.customPayload(
+                "survival-1",
+                ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                "FABRIC_HANDSHAKE",
+                "fabric:registry/sync",
+                300,
+                64,
+                "Steve",
+                "127.0.0.1:50000",
+                "CONFIGURATION",
+                1);
         metrics.customPayload("lobby-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "UNKNOWN", "attacker:random", 25, 0);
         try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics, "", 2)) {
             admin.start();
@@ -840,7 +850,9 @@ final class AdminHttpServerTest {
             assertTrue(response.body().contains("\"server\":\"survival-1\",\"direction\":\"frontend_to_backend\",\"kind\":\"FORGE_HANDSHAKE\",\"channel\":\"fml:handshake\",\"packets\":2,\"payloadBytes\":150,\"compressedBytes\":0,\"maxPayloadBytes\":100,\"maxCompressedBytes\":0"));
             assertTrue(response.body().contains("\"firstSeen\":"));
             assertTrue(response.body().contains("\"lastSeen\":"));
-            assertTrue(!response.body().contains("\"server\":\"lobby-1\""));
+            assertTrue(response.body().contains("\"recentSamples\""));
+            assertTrue(response.body().contains("\"player\":\"Steve\",\"remoteAddress\":\"127.0.0.1:50000\",\"protocolState\":\"CONFIGURATION\",\"packetId\":1"));
+            assertTrue(!response.body().substring(0, response.body().indexOf("\"recentSamples\"")).contains("\"server\":\"lobby-1\""));
             assertTrue(response.body().indexOf("FABRIC_HANDSHAKE") < response.body().indexOf("FORGE_HANDSHAKE"));
         }
     }

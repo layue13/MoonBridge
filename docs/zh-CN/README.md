@@ -114,6 +114,12 @@ registry:
 - `proxy-native`：CPU/native runtime 能力探测和运行时决策
 - `proxy-app`：可运行应用入口和发行包
 
+## 模组 payload 诊断
+
+StrataProxy 会对 Forge/Fabric/registry/configuration 阶段的 custom payload 做轻量分类和带宽归因。分类只解析受限长度的 channel 名称，不解析完整模组语义，也不默认保存完整 payload。
+
+`GET /custom-payloads`、`GET /diagnostic-report` 和 `strataproxy-admin mod-payloads` 会返回按服务器、方向、类型和 channel 聚合的计数、字节数、最大包大小和首末次时间。`strataproxy-admin mod-payloads --samples` 额外输出最近 custom payload 元数据样本，包括 server、direction、kind、channel、payload size、compressed size、player、remote address、protocol state、packet id 和 timestamp。recent samples 固定最多保留 256 条，只保存元数据，不保存完整 payload 字节。
+
 ## Native 策略
 
 StrataProxy 当前不自带项目自研 JNI。原因是 Netty 和 JDK 已经覆盖核心需求：

@@ -91,6 +91,11 @@ final class ProxyMetricsTest {
         assertEquals(1, unknownPayload.packets());
         assertEquals(512, unknownPayload.payloadBytes());
         assertEquals(512, unknownPayload.maxPayloadBytes());
+        assertEquals(3, snapshot.recentCustomPayloads().size());
+        assertEquals("unknown", snapshot.recentCustomPayloads().getFirst().channel());
+        assertEquals("survival-1", snapshot.recentCustomPayloads().getFirst().server());
+        assertEquals("CONFIGURATION", snapshot.recentCustomPayloads().getFirst().protocolState());
+        assertEquals(-1, snapshot.recentCustomPayloads().getFirst().packetId());
         assertEquals(128, snapshot.frontendToBackendBytes());
         assertEquals(256, snapshot.backendToFrontendBytes());
         assertEquals(128, snapshot.serverTraffic().get("survival-1").frontendToBackendBytes());
@@ -131,6 +136,33 @@ final class ProxyMetricsTest {
         assertEquals(256, samples.size());
         assertEquals("rule-299", samples.getFirst().rule());
         assertEquals("rule-44", samples.getLast().rule());
+        assertTrue(samples.getFirst().sequence() > samples.getLast().sequence());
+    }
+
+    @Test
+    void keepsOnlyMostRecentCustomPayloadSamples() {
+        var metrics = new ProxyMetrics();
+        for (var i = 0; i < 300; i++) {
+            metrics.customPayload(
+                    "survival-1",
+                    ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                    "FABRIC_HANDSHAKE",
+                    "fabric:registry/sync",
+                    i,
+                    0,
+                    "Player" + i,
+                    "127.0.0.1:" + (50000 + i),
+                    "CONFIGURATION",
+                    1);
+        }
+
+        var samples = metrics.snapshot().recentCustomPayloads();
+
+        assertEquals(256, samples.size());
+        assertEquals(299, samples.getFirst().payloadBytes());
+        assertEquals("Player299", samples.getFirst().player());
+        assertEquals("127.0.0.1:50299", samples.getFirst().remoteAddress());
+        assertEquals(44, samples.getLast().payloadBytes());
         assertTrue(samples.getFirst().sequence() > samples.getLast().sequence());
     }
 

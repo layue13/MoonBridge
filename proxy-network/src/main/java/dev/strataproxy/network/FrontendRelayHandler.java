@@ -407,7 +407,11 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 classification.kind().name(),
                 classification.channel(),
                 classification.payloadBytes(),
-                Math.max(0, compressedSize));
+                Math.max(0, compressedSize),
+                identity.playerName(),
+                identity.remoteAddress(),
+                "CONFIGURATION",
+                classification.packetId());
     }
 
     private void recordBackpressureIfNeeded(Channel target, CompressionDirection direction) {

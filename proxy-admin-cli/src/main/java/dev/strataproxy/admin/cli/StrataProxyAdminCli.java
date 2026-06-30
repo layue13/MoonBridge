@@ -408,13 +408,20 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         @ParentCommand
         private StrataProxyAdminCli root;
 
+        @Option(names = "--samples", description = "Print recent custom payload metadata samples after the summary.")
+        private boolean samples;
+
         @Override
         public Integer call() {
             var response = root.request("GET", "/custom-payloads", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return root.print(response);
             }
-            System.out.print(CustomPayloadMetricsView.parseJson(response.body()).render());
+            var view = CustomPayloadMetricsView.parseJson(response.body());
+            System.out.print(view.render());
+            if (samples) {
+                System.out.print(view.renderSamples());
+            }
             return 0;
         }
     }
@@ -1532,6 +1539,10 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private static String value(String value) {
             return value == null || value.isBlank() ? "-" : value.replace(' ', '_');
         }
+
+        private static String text(com.fasterxml.jackson.databind.JsonNode node, String field) {
+            return node.has(field) ? node.get(field).asText() : "";
+        }
     }
 
     private record SloRow(String name, String actual, String expected, boolean passed) {
@@ -1601,6 +1612,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private static String value(String value) {
             return value == null || value.isBlank() ? "-" : value.replace(' ', '_');
         }
+
     }
 
     private static final class AnomalyMetricsView {
@@ -1852,6 +1864,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
 
     private static final class CustomPayloadMetricsView {
         private final List<CustomPayloadRow> rows = new ArrayList<>();
+        private final List<CustomPayloadSampleRow> samples = new ArrayList<>();
 
         static CustomPayloadMetricsView parseJson(String json) {
             var view = new CustomPayloadMetricsView();
@@ -1874,6 +1887,24 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
                             row.has("maxCompressedBytes") ? row.get("maxCompressedBytes").asLong() : 0L,
                             row.has("firstSeen") ? row.get("firstSeen").asText() : "",
                             row.has("lastSeen") ? row.get("lastSeen").asText() : ""));
+                }
+                var recentSamples = root.get("recentSamples");
+                if (recentSamples != null && recentSamples.isArray()) {
+                    for (var sample : recentSamples) {
+                        view.samples.add(new CustomPayloadSampleRow(
+                                sample.has("sequence") ? sample.get("sequence").asLong() : 0L,
+                                payloadText(sample, "server"),
+                                payloadText(sample, "direction"),
+                                payloadText(sample, "kind"),
+                                payloadText(sample, "channel"),
+                                sample.has("payloadBytes") ? sample.get("payloadBytes").asLong() : 0L,
+                                sample.has("compressedBytes") ? sample.get("compressedBytes").asLong() : 0L,
+                                payloadText(sample, "player"),
+                                payloadText(sample, "remoteAddress"),
+                                payloadText(sample, "protocolState"),
+                                sample.has("packetId") ? sample.get("packetId").asInt() : -1,
+                                payloadText(sample, "timestamp")));
+                    }
                 }
                 return view;
             } catch (IOException exception) {
@@ -1899,8 +1930,31 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             return output.toString();
         }
 
+        String renderSamples() {
+            var output = new StringBuilder("recent_samples\nsequence server direction kind channel payload_bytes compressed_bytes player remote state packet_id timestamp\n");
+            for (var sample : samples) {
+                output.append(sample.sequence()).append(' ')
+                        .append(value(sample.server())).append(' ')
+                        .append(value(sample.direction())).append(' ')
+                        .append(value(sample.kind())).append(' ')
+                        .append(value(sample.channel())).append(' ')
+                        .append(sample.payloadBytes()).append(' ')
+                        .append(sample.compressedBytes()).append(' ')
+                        .append(value(sample.player())).append(' ')
+                        .append(value(sample.remoteAddress())).append(' ')
+                        .append(value(sample.protocolState())).append(' ')
+                        .append(sample.packetId()).append(' ')
+                        .append(value(sample.timestamp())).append('\n');
+            }
+            return output.toString();
+        }
+
         private static String value(String value) {
             return value == null || value.isBlank() ? "-" : value.replace(' ', '_');
+        }
+
+        private static String payloadText(com.fasterxml.jackson.databind.JsonNode node, String field) {
+            return node.has(field) && !node.get(field).isNull() ? node.get(field).asText() : "";
         }
     }
 
@@ -1916,6 +1970,21 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             long maxCompressedBytes,
             String firstSeen,
             String lastSeen) {
+    }
+
+    private record CustomPayloadSampleRow(
+            long sequence,
+            String server,
+            String direction,
+            String kind,
+            String channel,
+            long payloadBytes,
+            long compressedBytes,
+            String player,
+            String remoteAddress,
+            String protocolState,
+            int packetId,
+            String timestamp) {
     }
 
     private static final class PlayerSessionMetricsView {
