@@ -1,0 +1,12 @@
+package dev.strataproxy.protocol;
+
+public enum PacketFlag {
+    CAN_FAST_FORWARD,
+    REQUIRES_ENTITY_REWRITE,
+    REQUIRES_INSPECTION,
+    CAN_COMPRESS,
+    HIGH_FREQUENCY,
+    SUSPICIOUS_WHEN_LARGE,
+    MUST_PRESERVE_ORDER,
+    MODDED_PAYLOAD
+}

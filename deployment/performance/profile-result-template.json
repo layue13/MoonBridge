@@ -1,0 +1,44 @@
+{
+  "profileId": "",
+  "strataproxyVersion": "",
+  "gitRevision": "",
+  "timestamp": "",
+  "host": {
+    "os": "",
+    "kernel": "",
+    "cpuModel": "",
+    "logicalCores": 0,
+    "memoryGiB": 0,
+    "ulimitNofile": 0
+  },
+  "runtime": {
+    "javaVersion": "",
+    "javaVendor": "",
+    "jvmOptions": [],
+    "nativeTransport": false,
+    "configSha256": ""
+  },
+  "commands": [
+    {
+      "name": "",
+      "exitCode": 0,
+      "stdoutJson": {},
+      "stderr": ""
+    }
+  ],
+  "observations": {
+    "metricsSnapshot": "",
+    "overviewJson": {},
+    "sloOutput": ""
+  },
+  "gateResults": [
+    {
+      "name": "",
+      "expected": "",
+      "observed": "",
+      "passed": false
+    }
+  ],
+  "passed": false,
+  "notes": ""
+}

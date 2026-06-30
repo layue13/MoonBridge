@@ -1,0 +1,63 @@
+{
+  "id": "compression-rewrite-linux-native-java25",
+  "description": "Focused profile for opt-in live compression rewrite throughput and split compressed-frame handling.",
+  "java": "25",
+  "transport": "linux-native-epoll",
+  "requiresNativeTransport": true,
+  "configOverrides": {
+    "compression.rewriteEnabled": true,
+    "compression.rewriteMaxEventLoopDelayMillis": 25
+  },
+  "jvmOptions": [
+    "-Xms2g",
+    "-Xmx2g",
+    "-XX:MaxDirectMemorySize=2g",
+    "-XX:+UseZGC",
+    "-XX:+AlwaysPreTouch",
+    "-XX:+ExitOnOutOfMemoryError"
+  ],
+  "commands": [
+    {
+      "name": "compression-rewrite-load",
+      "tool": "strataproxy-query",
+      "args": [
+        "--host", "127.0.0.1",
+        "--port", "25577",
+        "compression-rewrite-load",
+        "--connections", "1000",
+        "--parallelism", "256",
+        "--virtual-host", "play.example.net",
+        "--packets-per-connection", "200",
+        "--payload-bytes", "1024",
+        "--threshold", "256",
+        "--split-frames",
+        "--min-handshaken", "1000",
+        "--min-negotiated", "1000",
+        "--min-packets-sent", "200000",
+        "--max-failed", "0",
+        "--json"
+      ]
+    },
+    {
+      "name": "slo-gate",
+      "tool": "strataproxy-admin",
+      "args": [
+        "--base-url", "http://127.0.0.1:8080",
+        "slo",
+        "--require-ready",
+        "--max-event-loop-delay-ms", "25",
+        "--max-rejected", "0",
+        "--max-anomalies", "0"
+      ]
+    }
+  ],
+  "gates": {
+    "minActiveConnections": 1000,
+    "minNegotiatedCompressionConnections": 1000,
+    "minCompressedPackets": 200000,
+    "maxFailed": 0,
+    "maxEventLoopDelayMillis": 25,
+    "maxRejectedConnections": 0,
+    "maxPacketAnomalies": 0
+  }
+}

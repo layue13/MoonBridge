@@ -1,0 +1,454 @@
+package dev.strataproxy.app;
+
+import dev.strataproxy.admin.AdminHttpServer;
+import dev.strataproxy.admin.AdminRegistryService;
+import dev.strataproxy.admin.JsonRegistryStore;
+import dev.strataproxy.admin.NoopRegistryStore;
+import dev.strataproxy.admin.RegistryStore;
+import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
+import dev.strataproxy.bootstrap.ConfigLoader;
+import dev.strataproxy.bootstrap.ConfigValidationResult;
+import dev.strataproxy.bootstrap.ConfigValidator;
+import dev.strataproxy.bootstrap.ProxyConfig;
+import dev.strataproxy.compression.CompressionStrategies;
+import dev.strataproxy.network.NettyProxyNetworkServer;
+import dev.strataproxy.network.NetworkTuning;
+import dev.strataproxy.network.RoutingBackendResolver;
+import dev.strataproxy.observability.ProxyMetrics;
+import dev.strataproxy.registry.InMemoryServerRegistry;
+import dev.strataproxy.registry.TcpServerHealthChecker;
+import dev.strataproxy.routing.WeightedHealthAwareRouter;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+
+public final class StrataProxyLauncher {
+    private static final String VERSION = "0.1.0-SNAPSHOT";
+
+    private StrataProxyLauncher() {
+    }
+
+    public static void main(String[] args) throws Exception {
+        var code = run(args);
+        if (LauncherArguments.parse(args).terminalMode() || code != 0) {
+            System.exit(code);
+        }
+    }
+
+    static int run(String[] args) throws Exception {
+        var arguments = LauncherArguments.parse(args);
+        if (arguments.error() != null) {
+            System.err.println(arguments.error());
+            printUsage(System.err);
+            return 2;
+        }
+        if (arguments.help()) {
+            printUsage(System.out);
+            return 0;
+        }
+        if (arguments.version()) {
+            System.out.println("StrataProxy " + VERSION);
+            return 0;
+        }
+        var configPath = ConfigPathResolver.resolve(arguments.configArgs());
+        if ((arguments.validateConfig() || arguments.explicitConfig()) && Files.notExists(configPath)) {
+            System.err.println("StrataProxy config missing: " + configPath.toAbsolutePath());
+            return 1;
+        }
+        ConfigLoader.LoadedProxyConfig loaded;
+        ConfigValidationResult validation;
+        try {
+            loaded = new ConfigLoader().load(configPath);
+            loaded = resolveConfigRelativePaths(configPath, loaded);
+            validation = new ConfigValidator().validate(loaded);
+        } catch (Exception exception) {
+            if (arguments.validateConfig()) {
+                System.out.println("ERROR failed to parse config: " + exception.getMessage());
+                return 1;
+            }
+            System.err.println("StrataProxy config error: " + exception.getMessage());
+            return 1;
+        }
+        if (arguments.validateConfig()) {
+            for (var warning : validation.warnings()) {
+                System.out.println("WARN " + warning);
+            }
+            for (var error : validation.errors()) {
+                System.out.println("ERROR " + error);
+            }
+            if (validation.valid()) {
+                System.out.println("StrataProxy config OK: " + configPath.toAbsolutePath());
+                System.out.println("StrataProxy configured servers: " + loaded.servers().size());
+                return 0;
+            }
+            return 1;
+        }
+        if (!validation.valid()) {
+            System.err.println("StrataProxy config invalid: " + String.join("; ", validation.errors()));
+            return 1;
+        }
+        try {
+            try (var runtime = startRuntime(loaded, configPath, System.out, true)) {
+                runtime.awaitShutdown();
+            }
+            return 0;
+        } catch (Exception exception) {
+            System.err.println("StrataProxy startup failed: " + rootMessage(exception));
+            return 1;
+        }
+    }
+
+    static RunningProxy startRuntime(
+            ConfigLoader.LoadedProxyConfig loaded,
+            Path configPath,
+            java.io.PrintStream out,
+            boolean registerShutdownHooks) throws Exception {
+        loaded = resolveConfigRelativePaths(configPath, loaded);
+        var config = loaded.proxy();
+        var started = new ArrayList<AutoCloseable>();
+        try {
+            var registry = new InMemoryServerRegistry();
+            loaded.servers().forEach(registry::register);
+            var registryPersistencePath = config.registry().persistenceEnabled()
+                    ? Path.of(config.registry().persistencePath())
+                    : null;
+            RegistryStore registryStore = config.registry().persistenceEnabled()
+                    ? new JsonRegistryStore(registryPersistencePath)
+                    : NoopRegistryStore.INSTANCE;
+            for (var descriptor : loadPersistedRegistry(registryStore, registryPersistencePath, out)) {
+                if (registry.get(descriptor.name()).isEmpty()) {
+                    registry.register(descriptor);
+                }
+            }
+            var adminRegistry = new AdminRegistryService(registry, registryStore);
+            adminRegistry.persist();
+
+            var router = new WeightedHealthAwareRouter(registry);
+            var resolver = new RoutingBackendResolver(router);
+            var metrics = new ProxyMetrics(config.observability().anomalySampling());
+            var compressionStrategy = CompressionStrategies.from(config.compression().mode());
+            var customPayloadPolicy = new CustomPayloadAnomalyPolicy(
+                    config.packetAnalysis().largePayloadWarnBytes(),
+                    config.packetAnalysis().unknownChannelThrottleBytes(),
+                    config.packetAnalysis().moddedHandshakeWarnBytes(),
+                    config.packetAnalysis().customPayloadFloodMaxCount(),
+                    config.packetAnalysis().customPayloadFloodWindow());
+
+            out.println("StrataProxy config: " + configPath.toAbsolutePath());
+            out.println("StrataProxy servers: " + registry.snapshot().size());
+            out.println("StrataProxy compression: " + config.compression().mode()
+                    + " strategy=" + compressionStrategy.getClass().getSimpleName()
+                    + " thresholds=" + config.compression().minThreshold() + ".." + config.compression().maxThreshold()
+                    + " cpuGuard=" + config.compression().cpuGuard()
+                    + " rewriteEnabled=" + config.compression().rewriteEnabled()
+                    + " rewriteMaxEventLoopDelayMillis=" + config.compression().rewriteMaxEventLoopDelayMillis());
+            out.println("StrataProxy starting on " + config.bindAddress() + " with " + config.resolvedWorkerThreads() + " worker threads");
+
+            if (config.registry().healthCheckEnabled()) {
+                var healthChecker = new TcpServerHealthChecker(
+                        registry,
+                        config.registry().healthCheckInterval(),
+                        config.registry().healthCheckTimeout());
+                healthChecker.start();
+                started.add(healthChecker);
+                out.println("StrataProxy health checks every " + config.registry().healthCheckInterval());
+            }
+
+            if (config.admin().enabled()) {
+                var adminSslContext = adminSslContext(config.admin().tls());
+                var admin = new AdminHttpServer(
+                        config.admin().bindAddress(),
+                        adminRegistry,
+                        metrics,
+                        config.admin().bearerToken(),
+                        config.observability().packetTopN(),
+                        config.observability().prometheus(),
+                        adminSslContext,
+                        config.admin().tls().clientAuth());
+                admin.start();
+                started.add(admin);
+                out.println("StrataProxy admin listening on "
+                        + (adminSslContext == null ? "http://" : "https://")
+                        + config.admin().bindAddress()
+                        + (config.admin().tls().clientAuth() ? " with client certificate authentication" : ""));
+            }
+
+            var loadReporter = new ProxyObservedLoadReporter(registry, metrics, config.observability().flushInterval());
+            loadReporter.start();
+            started.add(loadReporter);
+            out.println("StrataProxy observed load flush interval " + config.observability().flushInterval());
+
+            var server = new NettyProxyNetworkServer(
+                    config.resolvedWorkerThreads(),
+                    resolver,
+                    metrics,
+                    new NetworkTuning(
+                            config.network().maxFrameBytes(),
+                            config.network().connectTimeoutMillis(),
+                            config.network().writeBufferLowBytes(),
+                            config.network().writeBufferHighBytes(),
+                            config.network().maxConnections(),
+                            config.network().maxConnectionsPerAddress(),
+                            config.network().initialHandshakeTimeoutMillis()),
+                    config.nativeTransport(),
+                    compressionStrategy,
+                    config.compression().minThreshold(),
+                    config.compression().maxThreshold(),
+                    config.compression().cpuGuard(),
+                    customPayloadPolicy,
+                    config.compression().rewriteEnabled(),
+                    config.compression().rewriteMaxEventLoopDelayMillis());
+            started.add(server);
+            server.bind(config.bindAddress()).toCompletableFuture().join();
+            out.println("StrataProxy bound on " + server.bindAddress() + " using " + server.transportName() + " transport");
+            var running = new RunningProxy(server, List.copyOf(started), metrics);
+            if (registerShutdownHooks) {
+                Runtime.getRuntime().addShutdownHook(new Thread(running::close, "strataproxy-shutdown"));
+            }
+            return running;
+        } catch (Exception exception) {
+            closeStarted(started);
+            throw exception;
+        }
+    }
+
+    private static void closeStarted(List<AutoCloseable> started) {
+        var reverse = new ArrayList<>(started);
+        Collections.reverse(reverse);
+        for (var resource : reverse) {
+            try {
+                resource.close();
+            } catch (Exception ignored) {
+                // Startup failure cleanup is best effort; the original startup error is more useful.
+            }
+        }
+    }
+
+    private static List<dev.strataproxy.api.server.ServerDescriptor> loadPersistedRegistry(
+            RegistryStore registryStore,
+            Path registryPersistencePath,
+            java.io.PrintStream out) throws Exception {
+        try {
+            return registryStore.load();
+        } catch (Exception exception) {
+            var quarantined = quarantineRegistry(registryPersistencePath);
+            out.println("WARN failed to load persisted registry"
+                    + (quarantined == null ? "" : "; moved bad file to " + quarantined)
+                    + ": " + rootMessage(exception));
+            return List.of();
+        }
+    }
+
+    private static Path quarantineRegistry(Path path) {
+        if (path == null || Files.notExists(path)) {
+            return null;
+        }
+        var timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now()).replace(':', '-');
+        var target = path.resolveSibling(path.getFileName() + ".invalid-" + timestamp);
+        try {
+            Files.move(path, target);
+            return target;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String rootMessage(Throwable throwable) {
+        var current = throwable;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        var message = current.getMessage();
+        return current.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+    }
+
+    private static SSLContext adminSslContext(ProxyConfig.AdminTlsConfig tls) throws Exception {
+        if (tls == null || !tls.enabled()) {
+            return null;
+        }
+        var keyStore = loadKeyStore(tls.keyStoreType(), tls.keyStorePath(), tls.keyStorePassword());
+        var keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keyManagerFactory.init(keyStore, tls.keyStorePassword().toCharArray());
+
+        TrustManagerFactory trustManagerFactory = null;
+        if (tls.clientAuth()) {
+            var trustStore = loadKeyStore(tls.trustStoreType(), tls.trustStorePath(), tls.trustStorePassword());
+            trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            trustManagerFactory.init(trustStore);
+        }
+
+        var context = SSLContext.getInstance("TLS");
+        context.init(
+                keyManagerFactory.getKeyManagers(),
+                trustManagerFactory == null ? null : trustManagerFactory.getTrustManagers(),
+                null);
+        return context;
+    }
+
+    private static KeyStore loadKeyStore(String type, String path, String password) throws Exception {
+        var store = KeyStore.getInstance(type);
+        try (var input = Files.newInputStream(Path.of(path))) {
+            store.load(input, password.toCharArray());
+        }
+        return store;
+    }
+
+    private static Path resolveConfigRelativePath(Path configPath, String configuredPath) {
+        var path = Path.of(configuredPath);
+        if (path.isAbsolute()) {
+            return path.normalize();
+        }
+        var parent = configPath.toAbsolutePath().normalize().getParent();
+        return (parent == null ? path.toAbsolutePath() : parent.resolve(path)).normalize();
+    }
+
+    private static ConfigLoader.LoadedProxyConfig resolveConfigRelativePaths(
+            Path configPath,
+            ConfigLoader.LoadedProxyConfig loaded) {
+        var config = loaded.proxy();
+        var registry = config.registry();
+        var resolvedRegistry = new ProxyConfig.RegistryConfig(
+                registry.staticServers(),
+                registry.persistenceEnabled(),
+                registry.persistencePath().isBlank()
+                        ? registry.persistencePath()
+                        : resolveConfigRelativePath(configPath, registry.persistencePath()).toString(),
+                registry.healthCheckEnabled(),
+                registry.healthCheckInterval(),
+                registry.healthCheckTimeout());
+
+        var admin = config.admin();
+        var tls = admin.tls();
+        var resolvedTls = new ProxyConfig.AdminTlsConfig(
+                tls.enabled(),
+                tls.keyStorePath().isBlank()
+                        ? tls.keyStorePath()
+                        : resolveConfigRelativePath(configPath, tls.keyStorePath()).toString(),
+                tls.keyStorePassword(),
+                tls.keyStoreType(),
+                tls.trustStorePath().isBlank()
+                        ? tls.trustStorePath()
+                        : resolveConfigRelativePath(configPath, tls.trustStorePath()).toString(),
+                tls.trustStorePassword(),
+                tls.trustStoreType(),
+                tls.clientAuth());
+        var resolvedAdmin = new ProxyConfig.AdminConfig(
+                admin.enabled(),
+                admin.bindAddress(),
+                admin.bearerToken(),
+                resolvedTls);
+        var resolvedConfig = new ProxyConfig(
+                config.bindAddress(),
+                config.workerThreads(),
+                config.nativeTransport(),
+                config.network(),
+                resolvedRegistry,
+                config.compression(),
+                config.packetAnalysis(),
+                config.observability(),
+                resolvedAdmin);
+        return new ConfigLoader.LoadedProxyConfig(resolvedConfig, loaded.servers());
+    }
+
+    private static void printUsage(java.io.PrintStream out) {
+        out.println("Usage: strataproxy [--help] [--version] [--validate-config] [config.yml]");
+        out.println();
+        out.println("Runs the StrataProxy Minecraft proxy.");
+        out.println();
+        out.println("Options:");
+        out.println("  -h, --help             Show this help message and exit.");
+        out.println("  -V, --version          Print version information and exit.");
+        out.println("      --validate-config  Validate config and exit without opening sockets.");
+        out.println();
+        out.println("Config lookup without an explicit path:");
+        out.println("  1. ./config/strataproxy.yml");
+        out.println("  2. $APP_HOME/config/strataproxy.yml");
+        out.println("  3. packaged application home config/strataproxy.yml");
+        out.println("  4. built-in defaults");
+    }
+
+    record RunningProxy(
+            NettyProxyNetworkServer server,
+            List<AutoCloseable> started,
+            ProxyMetrics metrics,
+            AtomicBoolean closed,
+            CountDownLatch stopped) implements AutoCloseable {
+        RunningProxy(NettyProxyNetworkServer server, List<AutoCloseable> started, ProxyMetrics metrics) {
+            this(server, started, metrics, new AtomicBoolean(), new CountDownLatch(1));
+        }
+
+        java.net.InetSocketAddress bindAddress() {
+            return server.bindAddress();
+        }
+
+        void awaitShutdown() throws InterruptedException {
+            stopped.await();
+        }
+
+        @Override
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                closeStarted(started);
+            } finally {
+                stopped.countDown();
+            }
+        }
+    }
+
+    private record LauncherArguments(
+            boolean validateConfig,
+            boolean help,
+            boolean version,
+            String[] configArgs,
+            String error) {
+        boolean explicitConfig() {
+            return configArgs.length > 0;
+        }
+
+        boolean terminalMode() {
+            return validateConfig || help || version;
+        }
+
+        private static LauncherArguments parse(String[] args) {
+            if (args == null || args.length == 0) {
+                return new LauncherArguments(false, false, false, new String[0], null);
+            }
+            var validate = false;
+            var help = false;
+            var version = false;
+            var configArgs = new ArrayList<String>();
+            for (var argument : Arrays.asList(args)) {
+                switch (argument) {
+                    case "--validate-config" -> validate = true;
+                    case "-h", "--help" -> help = true;
+                    case "-V", "--version" -> version = true;
+                    default -> {
+                        if (argument.startsWith("-")) {
+                            return new LauncherArguments(validate, help, version, new String[0], "Unknown option: " + argument);
+                        }
+                        configArgs.add(argument);
+                    }
+                }
+            }
+            if (configArgs.size() > 1) {
+                return new LauncherArguments(validate, help, version, configArgs.toArray(String[]::new), "Only one config path may be provided");
+            }
+            return new LauncherArguments(validate, help, version, configArgs.toArray(String[]::new), null);
+        }
+    }
+}

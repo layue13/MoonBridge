@@ -1,0 +1,188 @@
+{
+  "uid": "strataproxy-overview",
+  "title": "StrataProxy Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "timezone": "browser",
+  "tags": ["strataproxy", "minecraft", "proxy"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "server",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(strataproxy_server_connections_active, server)",
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Connections",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "strataproxy_connections_active", "legendFormat": "active"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Registered Servers",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "strataproxy_servers_registered", "legendFormat": "servers"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Event Loop Delay",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 0.025},
+              {"color": "red", "value": 0.1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {"expr": "strataproxy_event_loop_delay_seconds", "legendFormat": "delay"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Direct Memory",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {"unit": "bytes"},
+        "overrides": []
+      },
+      "targets": [
+        {"expr": "strataproxy_pooled_direct_memory_bytes", "legendFormat": "pooled"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Connection Lifecycle",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "strataproxy_connections_active", "legendFormat": "active"},
+        {"expr": "rate(strataproxy_connections_accepted_total[1m])", "legendFormat": "accepted/s"},
+        {"expr": "rate(strataproxy_connections_rejected_total[1m])", "legendFormat": "rejected/s"},
+        {"expr": "rate(strataproxy_connections_routed_total[1m])", "legendFormat": "routed/s"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Server Capacity",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "strataproxy_server_connections_active{server=~\"$server\"}", "legendFormat": "{{server}} active"},
+        {"expr": "strataproxy_server_players{server=~\"$server\"}", "legendFormat": "{{server}} players"},
+        {"expr": "strataproxy_server_soft_capacity{server=~\"$server\"}", "legendFormat": "{{server}} soft"},
+        {"expr": "strataproxy_server_hard_capacity{server=~\"$server\"}", "legendFormat": "{{server}} hard"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Bandwidth",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {"unit": "Bps"},
+        "overrides": []
+      },
+      "targets": [
+        {"expr": "rate(strataproxy_frontend_to_backend_bytes_total[1m])", "legendFormat": "frontend -> backend"},
+        {"expr": "rate(strataproxy_backend_to_frontend_bytes_total[1m])", "legendFormat": "backend -> frontend"},
+        {"expr": "sum by (server) (rate(strataproxy_server_frontend_to_backend_bytes_total{server=~\"$server\"}[1m]))", "legendFormat": "{{server}} f2b"},
+        {"expr": "sum by (server) (rate(strataproxy_server_backend_to_frontend_bytes_total{server=~\"$server\"}[1m]))", "legendFormat": "{{server}} b2f"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Compression Savings",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "datasource": "${datasource}",
+      "fieldConfig": {
+        "defaults": {"unit": "Bps"},
+        "overrides": []
+      },
+      "targets": [
+        {"expr": "rate(strataproxy_compression_saved_bytes_total[1m])", "legendFormat": "global saved/s"},
+        {"expr": "sum by (server) (rate(strataproxy_compression_saved_bytes_total{server=~\"$server\"}[1m]))", "legendFormat": "{{server}} saved/s"},
+        {"expr": "rate(strataproxy_compression_cpu_seconds_total[1m])", "legendFormat": "compression cpu/s"}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Packet Anomalies",
+      "gridPos": {"x": 0, "y": 20, "w": 8, "h": 8},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "sum by (rule) (rate(strataproxy_packet_anomalies_total[5m]))", "legendFormat": "{{rule}}"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Relay Backpressure",
+      "gridPos": {"x": 8, "y": 20, "w": 8, "h": 8},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "sum by (server, direction) (rate(strataproxy_relay_backpressure_events_total{server=~\"$server\"}[5m]))", "legendFormat": "{{server}} {{direction}}"}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Route and Backend Failures",
+      "gridPos": {"x": 16, "y": 20, "w": 8, "h": 8},
+      "datasource": "${datasource}",
+      "targets": [
+        {"expr": "rate(strataproxy_routes_failed_total[5m])", "legendFormat": "route failures"},
+        {"expr": "rate(strataproxy_backend_connect_failures_total[5m])", "legendFormat": "backend connect failures"},
+        {"expr": "rate(strataproxy_handshake_timeouts_total[5m])", "legendFormat": "handshake timeouts"}
+      ]
+    }
+  ]
+}
