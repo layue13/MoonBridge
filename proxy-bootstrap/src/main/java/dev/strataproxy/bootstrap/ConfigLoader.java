@@ -62,6 +62,7 @@ public final class ConfigLoader {
         public PacketAnalysisFile packetAnalysis = new PacketAnalysisFile();
         public ObservabilityFile observability = new ObservabilityFile();
         public AdminFile admin = new AdminFile();
+        public AuthFile auth = new AuthFile();
         @JsonProperty("native")
         public NativeFile nativeRuntime = new NativeFile();
         public List<ServerFile> servers = List.of();
@@ -115,6 +116,11 @@ public final class ConfigLoader {
                                     admin.tls.trustStorePassword,
                                     admin.tls.trustStoreType,
                                     admin.tls.clientAuth)),
+                    new ProxyConfig.AuthConfig(
+                            auth.onlineMode,
+                            auth.rsaKeyBits,
+                            auth.verifyTokenBytes,
+                            auth.sessionVerification),
                     new ProxyConfig.NativeConfig(
                             nativeFile.enabled,
                             nativeFile.autoDetect,
@@ -186,6 +192,13 @@ public final class ConfigLoader {
         public boolean preferNativeCompression = false;
         public Set<String> disabledFeatures = Set.of();
         public Set<String> forcedFeatures = Set.of();
+    }
+
+    public static final class AuthFile {
+        public boolean onlineMode = false;
+        public int rsaKeyBits = 1024;
+        public int verifyTokenBytes = 4;
+        public boolean sessionVerification = false;
     }
 
     public static final class AdminFile {

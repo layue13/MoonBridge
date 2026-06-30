@@ -11,6 +11,7 @@ import dev.strataproxy.bootstrap.ConfigValidationResult;
 import dev.strataproxy.bootstrap.ConfigValidator;
 import dev.strataproxy.bootstrap.ProxyConfig;
 import dev.strataproxy.compression.CompressionStrategies;
+import dev.strataproxy.network.MinecraftAuthRuntime;
 import dev.strataproxy.network.NettyProxyNetworkServer;
 import dev.strataproxy.network.NetworkTuning;
 import dev.strataproxy.network.RoutingBackendResolver;
@@ -171,6 +172,9 @@ public final class StrataProxyLauncher {
                     + " cpuGuard=" + config.compression().cpuGuard()
                     + " rewriteEnabled=" + config.compression().rewriteEnabled()
                     + " rewriteMaxEventLoopDelayMillis=" + config.compression().rewriteMaxEventLoopDelayMillis());
+            out.println("StrataProxy auth: onlineMode=" + config.auth().onlineMode()
+                    + " sessionVerification=" + config.auth().sessionVerification()
+                    + " rsaKeyBits=" + config.auth().rsaKeyBits());
             out.println("StrataProxy native runtime: enabled=" + nativeDecision.enabled()
                     + " os=" + nativeDecision.capabilities().os()
                     + " arch=" + nativeDecision.capabilities().arch()
@@ -234,6 +238,7 @@ public final class StrataProxyLauncher {
                     config.compression().maxThreshold(),
                     config.compression().cpuGuard(),
                     customPayloadPolicy,
+                    authRuntime(config.auth()),
                     config.compression().rewriteEnabled(),
                     config.compression().rewriteMaxEventLoopDelayMillis());
             started.add(server);
@@ -388,6 +393,7 @@ public final class StrataProxyLauncher {
                 config.packetAnalysis(),
                 config.observability(),
                 resolvedAdmin,
+                config.auth(),
                 config.nativeRuntime());
         return new ConfigLoader.LoadedProxyConfig(resolvedConfig, loaded.servers());
     }
@@ -403,6 +409,14 @@ public final class StrataProxyLauncher {
                 nativeConfig.preferNativeCompression(),
                 nativeFeatures(nativeConfig.disabledFeatures()),
                 nativeFeatures(nativeConfig.forcedFeatures()));
+    }
+
+    private static MinecraftAuthRuntime authRuntime(ProxyConfig.AuthConfig config) {
+        var auth = config == null ? ProxyConfig.AuthConfig.defaults() : config;
+        if (!auth.onlineMode()) {
+            return MinecraftAuthRuntime.offline();
+        }
+        return MinecraftAuthRuntime.online(auth.rsaKeyBits(), auth.verifyTokenBytes());
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

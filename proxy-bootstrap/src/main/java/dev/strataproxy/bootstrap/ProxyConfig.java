@@ -14,6 +14,7 @@ public record ProxyConfig(
         PacketAnalysisConfig packetAnalysis,
         ObservabilityConfig observability,
         AdminConfig admin,
+        AuthConfig auth,
         NativeConfig nativeRuntime) {
     public ProxyConfig(
             InetSocketAddress bindAddress,
@@ -35,7 +36,33 @@ public record ProxyConfig(
                 packetAnalysis,
                 observability,
                 admin,
+                AuthConfig.defaults(),
                 NativeConfig.defaults());
+    }
+
+    public ProxyConfig(
+            InetSocketAddress bindAddress,
+            int workerThreads,
+            boolean nativeTransport,
+            NetworkConfig network,
+            RegistryConfig registry,
+            CompressionConfig compression,
+            PacketAnalysisConfig packetAnalysis,
+            ObservabilityConfig observability,
+            AdminConfig admin,
+            NativeConfig nativeRuntime) {
+        this(
+                bindAddress,
+                workerThreads,
+                nativeTransport,
+                network,
+                registry,
+                compression,
+                packetAnalysis,
+                observability,
+                admin,
+                AuthConfig.defaults(),
+                nativeRuntime);
     }
 
     public ProxyConfig {
@@ -48,6 +75,7 @@ public record ProxyConfig(
         packetAnalysis = packetAnalysis == null ? PacketAnalysisConfig.defaults() : packetAnalysis;
         observability = observability == null ? ObservabilityConfig.defaults() : observability;
         admin = admin == null ? AdminConfig.defaults() : admin;
+        auth = auth == null ? AuthConfig.defaults() : auth;
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
     }
 
@@ -66,7 +94,18 @@ public record ProxyConfig(
                 PacketAnalysisConfig.defaults(),
                 ObservabilityConfig.defaults(),
                 AdminConfig.defaults(),
+                AuthConfig.defaults(),
                 NativeConfig.defaults());
+    }
+
+    public record AuthConfig(
+            boolean onlineMode,
+            int rsaKeyBits,
+            int verifyTokenBytes,
+            boolean sessionVerification) {
+        public static AuthConfig defaults() {
+            return new AuthConfig(false, 1024, 4, false);
+        }
     }
 
     public record NativeConfig(

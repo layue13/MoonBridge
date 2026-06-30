@@ -39,6 +39,12 @@ observability:
   anomalySampling: true
   flushIntervalSeconds: 5
 
+auth:
+  onlineMode: false
+  rsaKeyBits: 1024
+  verifyTokenBytes: 4
+  sessionVerification: false
+
 native:
   enabled: true
   autoDetect: true

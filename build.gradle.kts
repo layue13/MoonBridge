@@ -100,6 +100,9 @@ gradle.projectsEvaluated {
         )
         into(releaseStaging)
         from("README.md")
+        from("docs") {
+            into("docs")
+        }
         from("deployment") {
             into("deployment")
         }
@@ -144,6 +147,7 @@ gradle.projectsEvaluated {
         metadataFile.set(releaseMetadata)
         sbomFile.set(releaseSbom)
         checksumFile.set(releaseChecksum)
+        chineseReadme.set(layout.projectDirectory.file("docs/zh-CN/README.md"))
         runtimeArtifacts.from(app.configurations.getByName("runtimeClasspath"))
     }
 
@@ -215,7 +219,7 @@ abstract class ReleaseManifestTask : DefaultTask() {
             appArchive=${appArchive.get()}
             adminArchive=${adminArchive.get()}
             queryArchive=${queryArchive.get()}
-            includes=deployment,configs,observability,native-runtime,checksums
+            includes=docs,deployment,configs,observability,native-runtime,checksums
             """.trimIndent() + System.lineSeparator()
         )
     }
@@ -444,6 +448,9 @@ abstract class ReleaseAuditTask : DefaultTask() {
     @get:InputFile
     abstract val checksumFile: RegularFileProperty
 
+    @get:InputFile
+    abstract val chineseReadme: RegularFileProperty
+
     @get:InputFiles
     abstract val runtimeArtifacts: ConfigurableFileCollection
 
@@ -452,6 +459,10 @@ abstract class ReleaseAuditTask : DefaultTask() {
         val metadata = metadataFile.get().asFile.readText()
         val sbom = sbomFile.get().asFile.readText()
         val checksums = checksumFile.get().asFile.readText()
+        val chineseDocs = chineseReadme.get().asFile.readText()
+        listOf("StrataProxy 中文文档", "Native 策略", "Minecraft 加密", "负载与验收").forEach { token ->
+            require(chineseDocs.contains(token)) { "Chinese documentation missing $token" }
+        }
         listOf(
             "\"name\": \"strataproxy-",
             "\"java\": \"25\"",

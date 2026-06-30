@@ -123,6 +123,7 @@ public final class ConfigValidator {
         }
         validatePositive("observability.flushInterval", observability.flushInterval(), errors);
 
+        validateAuth(config.auth(), errors, warnings);
         validateNative(config.nativeRuntime(), errors, warnings);
 
         var admin = config.admin();
@@ -136,6 +137,24 @@ public final class ConfigValidator {
                 }
             }
             validateAdminTls(admin.tls(), errors, warnings);
+        }
+    }
+
+    private static void validateAuth(ProxyConfig.AuthConfig auth, ArrayList<String> errors, ArrayList<String> warnings) {
+        if (auth == null) {
+            return;
+        }
+        if (auth.rsaKeyBits() < 1024) {
+            errors.add("auth.rsaKeyBits must be at least 1024");
+        }
+        if (auth.verifyTokenBytes() <= 0 || auth.verifyTokenBytes() > 64) {
+            errors.add("auth.verifyTokenBytes must be between 1 and 64");
+        }
+        if (auth.sessionVerification() && !auth.onlineMode()) {
+            errors.add("auth.sessionVerification requires auth.onlineMode");
+        }
+        if (auth.onlineMode() && !auth.sessionVerification()) {
+            warnings.add("auth.onlineMode is enabled without Mojang session verification; use only for staged integration tests");
         }
     }
 

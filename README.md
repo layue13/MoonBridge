@@ -4,6 +4,8 @@ StrataProxy is a new Java 25 Minecraft proxy project for large modded networks. 
 
 The core model intentionally does not contain `modpackId`. Routing decisions are based on capabilities, tags, protocol range, load, health, drain state, and metadata. Pack identity can be stored in `metadata` when operators need it.
 
+Chinese documentation is available at `docs/zh-CN/README.md`.
+
 ## Technical Baseline
 
 - Gradle Kotlin DSL multi-module build
@@ -238,6 +240,18 @@ StrataProxy does not ship custom JNI code for the core data path while Netty and
 | Windows x86_64 / aarch64 | NIO | NIO |
 
 Windows support is intentionally NIO-first because Netty does not provide an IOCP server transport equivalent in the standard transport set. If future profiling shows Admin API TLS, proxy TLS, or a custom encrypted transport is CPU-bound, add Netty `netty-tcnative-boringssl-static` as a provider dependency before considering project-owned JNI. For Minecraft proxy packet forwarding, native epoll/kqueue plus JDK crypto/compression intrinsics are the default high-performance baseline.
+
+Minecraft Java online-mode encryption is protocol-level RSA plus AES/CFB8, not TLS. StrataProxy provides Minecraft AES/CFB8 Netty cipher handlers, RSA shared-secret/verify-token handling, server hash calculation, and an online-mode login handler that can send Encryption Request, validate Encryption Response, install stream ciphers, and then continue backend relay with the plaintext Handshake/Login Start. Enable the staged entry point with:
+
+```yaml
+auth:
+  onlineMode: true
+  rsaKeyBits: 1024
+  verifyTokenBytes: 4
+  sessionVerification: false
+```
+
+`sessionVerification` is intentionally explicit. Full Mojang session-server verification is still a remaining production item; until it is implemented, `onlineMode: true` should be treated as a staged integration mode rather than complete online-mode authentication.
 
 Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `/readyz` returns `200 READY` only when at least one registered backend can receive new connections; drained, down, maintenance, and hard-full backends make the proxy not ready when no other backend is available.
 
