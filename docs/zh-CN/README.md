@@ -143,7 +143,11 @@ forwarding:
   secret: "${STRATAPROXY_FORWARDING_SECRET}"
 ```
 
+支持的模式是 `none`、`velocity-modern`、`bungee-legacy` 和 `bungee-guard`。
+
 `velocity-modern` 会在压缩协商前拦截后端发来的 `velocity:player_info` Login Plugin Request，并回复带 HMAC-SHA256 签名的 Login Plugin Response。payload 内包含客户端地址、已校验 UUID、用户名和 Mojang profile properties。Paper 兼容后端应放在代理后面运行，后端 `server.properties` 使用 `online-mode=false`，Paper 的 Velocity forwarding 打开，并配置同一个 secret。当前实现覆盖 v1 身份/profile 转发；Minecraft 1.19+ 聊天签名公钥转发仍是独立兼容项，因为它需要解析并保留客户端 Login Start 中的 public-key 材料。
+
+`bungee-legacy` 会把发往后端的 Handshake host 字段改写为经典 BungeeCord NUL 分隔格式：原始请求 host、客户端地址、去横线 UUID、profile properties JSON。代理 offline-mode 运行时，它会先等待 Login Start，再连接后端，这样可以用玩家名生成 offline UUID，而不是把身份不完整的 legacy handshake 发给后端。`bungee-guard` 使用同样格式，并在最后追加配置的共享 secret。Spigot/Paper 后端使用 BungeeCord 风格 IP forwarding 时可以选择这些模式；后端支持 BungeeGuard 时优先用 `bungee-guard`。
 
 ## Admin API 和 CLI
 
@@ -228,7 +232,7 @@ JVM 起点：
 
 ## 当前未完成的高风险项
 
-- Velocity modern forwarding v1 已实现，Minecraft 1.19+ 聊天签名公钥转发还需要协议兼容补齐
+- Velocity modern forwarding v1、BungeeCord legacy forwarding 和 BungeeGuard forwarding 已实现；Minecraft 1.19+ 聊天签名公钥转发还需要协议兼容补齐
 - online-mode 还需要真实 Minecraft 客户端和 Mojang session server 的端到端验收
 - 10k idle / 2k active 的 Linux native acceptance 需要真实主机证据
 

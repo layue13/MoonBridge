@@ -6,10 +6,15 @@ import dev.strataproxy.api.server.ServerCapability;
 import dev.strataproxy.api.server.ServerDescriptor;
 import dev.strataproxy.api.server.ServerHealth;
 import dev.strataproxy.api.server.ServerLoad;
+import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
+import dev.strataproxy.compression.CompressionStrategies;
+import dev.strataproxy.codec.minecraft.MinecraftVarInts;
 import dev.strataproxy.observability.ProxyMetrics;
+import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -170,6 +175,74 @@ final class NettyProxyNetworkServerSmokeTest {
         }
     }
 
+    @Test
+    void rewritesSplitLoginHandshakeForBungeeLegacyForwardingOverRealTcp() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var loginStart = loginStartFrame("OfflineName");
+        var backendResponse = new byte[] {0x55, 0x66};
+        var backendExecutor = Executors.newSingleThreadExecutor();
+
+        try (var backendSocket = new ServerSocket(0)) {
+            backendSocket.setSoTimeout(5_000);
+            var backendPort = backendSocket.getLocalPort();
+            var backendRead = backendExecutor.submit(() -> {
+                try (var accepted = backendSocket.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var rewrittenHandshake = readMinecraftFrame(accepted.getInputStream());
+                    var forwardedLoginStart = readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(backendResponse);
+                    accepted.getOutputStream().flush();
+                    return List.of(rewrittenHandshake, forwardedLoginStart);
+                }
+            });
+
+            var selected = server("survival-1", backendPort);
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(2048, 1_000, 128, 1024, 100, 100, 5_000);
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    (request, remoteAddress) -> java.util.Optional.of(selected),
+                    metrics,
+                    tuning,
+                    false,
+                    CompressionStrategies.from("adaptive"),
+                    256,
+                    8192,
+                    0.75d,
+                    CustomPayloadAnomalyPolicy.defaults(),
+                    MinecraftAuthRuntime.offline(),
+                    new MinecraftForwardingRuntime("bungee-legacy", ""),
+                    false,
+                    25)) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(handshake);
+                    client.getOutputStream().flush();
+                    client.getOutputStream().write(loginStart);
+                    client.getOutputStream().flush();
+
+                    assertArrayEquals(backendResponse, client.getInputStream().readNBytes(backendResponse.length));
+                }
+
+                var frames = backendRead.get(5, TimeUnit.SECONDS);
+                var fields = handshakeHost(frames.get(0)).split("\0", -1);
+                assertEquals(4, fields.length);
+                assertEquals("play.example.net", fields[0]);
+                assertEquals("127.0.0.1", fields[1]);
+                assertEquals(offlineUuidNoDashes("OfflineName"), fields[2]);
+                assertEquals("[]", fields[3]);
+                assertArrayEquals(loginStart, frames.get(1));
+            }
+        } finally {
+            backendExecutor.shutdownNow();
+        }
+    }
+
     private static void awaitMetrics(ProxyMetrics metrics, int frontendBytes, int backendBytes) throws InterruptedException {
         var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (System.nanoTime() < deadline) {
@@ -286,6 +359,70 @@ final class NettyProxyNetworkServerSmokeTest {
         writeVarInt(frame, payloadBytes.length);
         frame.writeBytes(payloadBytes);
         return frame.toByteArray();
+    }
+
+    private static byte[] loginStartFrame(String username) {
+        var payload = new ByteArrayOutputStream();
+        writeVarInt(payload, 0);
+        writeString(payload, username);
+
+        var payloadBytes = payload.toByteArray();
+        var frame = new ByteArrayOutputStream();
+        writeVarInt(frame, payloadBytes.length);
+        frame.writeBytes(payloadBytes);
+        return frame.toByteArray();
+    }
+
+    private static byte[] readMinecraftFrame(InputStream input) throws java.io.IOException {
+        var lengthBytes = new ByteArrayOutputStream();
+        var value = 0;
+        var position = 0;
+        while (position < 5) {
+            var current = input.read();
+            if (current < 0) {
+                throw new java.io.EOFException("truncated frame length");
+            }
+            lengthBytes.write(current);
+            value |= (current & 0x7F) << (position * 7);
+            position++;
+            if ((current & 0x80) == 0) {
+                var body = input.readNBytes(value);
+                if (body.length != value) {
+                    throw new java.io.EOFException("truncated frame body");
+                }
+                var frame = new ByteArrayOutputStream();
+                frame.writeBytes(lengthBytes.toByteArray());
+                frame.writeBytes(body);
+                return frame.toByteArray();
+            }
+        }
+        throw new IllegalArgumentException("malformed frame length");
+    }
+
+    private static String handshakeHost(byte[] frameBytes) {
+        var frame = Unpooled.wrappedBuffer(frameBytes);
+        try {
+            var length = MinecraftVarInts.read(frame);
+            var body = frame.readSlice(length);
+            assertEquals(0, MinecraftVarInts.read(body));
+            MinecraftVarInts.read(body);
+            return readString(body);
+        } finally {
+            frame.release();
+        }
+    }
+
+    private static String readString(io.netty.buffer.ByteBuf input) {
+        var length = MinecraftVarInts.read(input);
+        var bytes = new byte[length];
+        input.readBytes(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static String offlineUuidNoDashes(String username) {
+        return java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8))
+                .toString()
+                .replace("-", "");
     }
 
     private static byte[] concat(byte[] first, byte[] second) {

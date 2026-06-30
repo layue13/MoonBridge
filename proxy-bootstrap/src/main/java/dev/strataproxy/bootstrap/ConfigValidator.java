@@ -165,11 +165,17 @@ public final class ConfigValidator {
             return;
         }
         var mode = forwarding.mode() == null ? "" : forwarding.mode().trim().toLowerCase(Locale.ROOT);
-        if (!mode.equals("none") && !mode.equals("velocity-modern")) {
-            errors.add("forwarding.mode must be one of: none, velocity-modern");
+        if (!mode.equals("none")
+                && !mode.equals("velocity-modern")
+                && !mode.equals("bungee-legacy")
+                && !mode.equals("bungee-guard")) {
+            errors.add("forwarding.mode must be one of: none, velocity-modern, bungee-legacy, bungee-guard");
         }
         if (mode.equals("velocity-modern") && forwarding.secret().isBlank()) {
             errors.add("forwarding.secret must not be blank when forwarding.mode is velocity-modern");
+        }
+        if (mode.equals("bungee-guard") && forwarding.secret().isBlank()) {
+            errors.add("forwarding.secret must not be blank when forwarding.mode is bungee-guard");
         }
     }
 

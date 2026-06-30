@@ -13,9 +13,11 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.WriteBufferWaterMark;
 import io.netty.handler.codec.ByteToMessageDecoder;
+import io.netty.util.ReferenceCountUtil;
 
 import java.net.SocketAddress;
 import java.util.List;
+import java.util.Optional;
 
 final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private static final String RULE_MALFORMED_FRAME = "initial-handshake-malformed-frame";
@@ -207,14 +209,17 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
 
         var pendingBytes = input.isReadable() ? input.readRetainedSlice(input.readableBytes()) : null;
         if (authRuntime.onlineMode() && handshake.nextState() == 2) {
-            beginOnlineModeLogin(context, firstFrame, pendingBytes, selected);
+            beginOnlineModeLogin(context, handshake, firstFrame, pendingBytes, selected);
+        } else if (forwardingRuntime.bungeeHandshakeForwarding() && handshake.nextState() == 2) {
+            beginBungeeLegacyLogin(context, handshake, firstFrame, pendingBytes, selected);
         } else {
-            connectBackend(context, firstFrame, pendingBytes, selected);
+            connectBackend(context, handshake, firstFrame, pendingBytes, selected);
         }
     }
 
     private void beginOnlineModeLogin(
             ChannelHandlerContext context,
+            MinecraftHandshake handshake,
             ByteBuf firstFrame,
             ByteBuf pendingBytes,
             RegisteredServer selected) {
@@ -237,7 +242,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                         identity.profile(profile == null
                                 ? new MinecraftSessionVerifier.GameProfile(null, username, List.of())
                                 : profile);
-                        connectBackend(authContext, firstFrame, loginStartFrame, selected, "online-mode-login", identity);
+                        connectBackend(authContext, handshake, firstFrame, loginStartFrame, selected, "online-mode-login", identity);
                     } else {
                         release(loginStartFrame);
                     }
@@ -256,16 +261,40 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
     }
 
-    private void connectBackend(
-            ChannelHandlerContext frontendContext,
+    private void beginBungeeLegacyLogin(
+            ChannelHandlerContext context,
+            MinecraftHandshake handshake,
             ByteBuf firstFrame,
             ByteBuf pendingBytes,
             RegisteredServer selected) {
-        connectBackend(frontendContext, firstFrame, pendingBytes, selected, null, null);
+        var handler = new BungeeLegacyLoginStartHandler(handshake, firstFrame, selected);
+        context.pipeline().replace(this, "bungee-legacy-login-start", handler);
+        if (pendingBytes != null && pendingBytes.isReadable()) {
+            var loginContext = context.pipeline().context("bungee-legacy-login-start");
+            try {
+                handler.channelRead(loginContext, pendingBytes);
+            } catch (Exception exception) {
+                loginContext.fireExceptionCaught(exception);
+                loginContext.close();
+            }
+        } else {
+            release(pendingBytes);
+            context.channel().read();
+        }
     }
 
     private void connectBackend(
             ChannelHandlerContext frontendContext,
+            MinecraftHandshake handshake,
+            ByteBuf firstFrame,
+            ByteBuf pendingBytes,
+            RegisteredServer selected) {
+        connectBackend(frontendContext, handshake, firstFrame, pendingBytes, selected, null, null);
+    }
+
+    private void connectBackend(
+            ChannelHandlerContext frontendContext,
+            MinecraftHandshake handshake,
             ByteBuf firstFrame,
             ByteBuf pendingBytes,
             RegisteredServer selected,
@@ -315,15 +344,33 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             var backend = future.channel();
             metrics.routedConnection();
             metrics.serverConnectionOpened(serverName);
-            metrics.frontendToBackendBytes(serverName, firstFrame.readableBytes());
-            if (pendingBytes != null) {
-                metrics.frontendToBackendBytes(serverName, pendingBytes.readableBytes());
-            }
-            recordInitialPacketTraffic(serverName, firstFrame, pendingBytes);
             var initialPlayerName = pendingBytes == null ? null : observeInitialLoginStart(frontend, serverName, pendingBytes);
             if (initialPlayerName != null && !initialPlayerName.isBlank()) {
                 identity.playerName(initialPlayerName);
             }
+            var outboundFirstFrame = firstFrame;
+            if (forwardingRuntime.bungeeHandshakeForwarding() && handshake.nextState() == 2) {
+                try {
+                    outboundFirstFrame = BungeeLegacyForwarding.rewriteHandshake(
+                            frontendContext.alloc(),
+                            handshake,
+                            forwardingRuntime,
+                            identity);
+                    release(firstFrame);
+                } catch (RuntimeException exception) {
+                    metrics.backendConnectFailure();
+                    release(firstFrame);
+                    release(pendingBytes);
+                    backend.close();
+                    frontend.close();
+                    return;
+                }
+            }
+            metrics.frontendToBackendBytes(serverName, outboundFirstFrame.readableBytes());
+            if (pendingBytes != null) {
+                metrics.frontendToBackendBytes(serverName, pendingBytes.readableBytes());
+            }
+            recordInitialPacketTraffic(serverName, outboundFirstFrame, pendingBytes);
             frontend.pipeline().remove("initial-handshake-timeout");
             var frontendRelay = new FrontendRelayHandler(
                     backend,
@@ -342,7 +389,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             } else {
                 frontend.pipeline().replace(frontendHandlerNameToReplace, "frontend-relay", frontendRelay);
             }
-            backend.write(firstFrame);
+            backend.write(outboundFirstFrame);
             if (pendingBytes != null) {
                 backend.write(pendingBytes);
             }
@@ -407,5 +454,117 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
 
     private static String remoteAddress(SocketAddress address) {
         return address == null ? "" : address.toString();
+    }
+
+    private final class BungeeLegacyLoginStartHandler extends io.netty.channel.ChannelInboundHandlerAdapter {
+        private final MinecraftHandshake handshake;
+        private final ByteBuf firstFrame;
+        private final RegisteredServer selected;
+        private ByteBuf pending = io.netty.buffer.Unpooled.buffer();
+        private boolean consumed;
+
+        private BungeeLegacyLoginStartHandler(
+                MinecraftHandshake handshake,
+                ByteBuf firstFrame,
+                RegisteredServer selected) {
+            this.handshake = handshake;
+            this.firstFrame = firstFrame;
+            this.selected = selected;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext context, Object message) {
+            if (!(message instanceof ByteBuf buffer)) {
+                ReferenceCountUtil.release(message);
+                context.close();
+                return;
+            }
+            try {
+                if (pending.readableBytes() + buffer.readableBytes() > tuning.maxFrameBytes() + 5) {
+                    throw new IllegalArgumentException("login start exceeded maximum frame size before bungee forwarding");
+                }
+                pending.writeBytes(buffer, buffer.readerIndex(), buffer.readableBytes());
+                var probe = MinecraftProtocolCodec.probeFrame(pending, tuning.maxFrameBytes());
+                if (!probe.complete()) {
+                    context.channel().read();
+                    return;
+                }
+                var loginStartFrame = pending.readRetainedSlice(probe.totalBytes());
+                var remaining = pending.isReadable() ? pending.readRetainedSlice(pending.readableBytes()) : null;
+                var outboundPending = combine(context, loginStartFrame, remaining);
+                var username = loginStartUsername(outboundPending);
+                var identity = new RelaySessionIdentity(remoteAddress(context.channel().remoteAddress()));
+                identity.playerName(username.orElse(""));
+                consumed = true;
+                releasePendingBuffer();
+                connectBackend(context, handshake, firstFrame, outboundPending, selected, "bungee-legacy-login-start", identity);
+            } catch (RuntimeException exception) {
+                metrics.packetAnomaly(
+                        RULE_MALFORMED_HANDSHAKE,
+                        remoteAddress(context.channel().remoteAddress()),
+                        selected.descriptor().name(),
+                        "frontend_to_backend",
+                        "LOGIN",
+                        0,
+                        pending.readableBytes(),
+                        -1,
+                        exception.getMessage());
+                metrics.failedRoute();
+                context.close();
+            } finally {
+                buffer.release();
+            }
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext context) {
+            releaseOwnedBuffers();
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
+            context.close();
+            releaseOwnedBuffers();
+        }
+
+        private ByteBuf combine(ChannelHandlerContext context, ByteBuf loginStartFrame, ByteBuf remaining) {
+            try {
+                if (remaining == null || !remaining.isReadable()) {
+                    return loginStartFrame.retain();
+                }
+                var combined = context.alloc().buffer(loginStartFrame.readableBytes() + remaining.readableBytes());
+                combined.writeBytes(loginStartFrame, loginStartFrame.readerIndex(), loginStartFrame.readableBytes());
+                combined.writeBytes(remaining, remaining.readerIndex(), remaining.readableBytes());
+                return combined;
+            } finally {
+                release(loginStartFrame);
+                release(remaining);
+            }
+        }
+
+        private Optional<String> loginStartUsername(ByteBuf loginStartFrame) {
+            var sampler = new MinecraftLoginStartSampler(tuning.maxFrameBytes());
+            try {
+                return sampler.observe(loginStartFrame);
+            } finally {
+                sampler.close();
+            }
+        }
+
+        private void releaseOwnedBuffers() {
+            if (consumed) {
+                return;
+            }
+            consumed = true;
+            release(firstFrame);
+            releasePendingBuffer();
+        }
+
+        private void releasePendingBuffer() {
+            if (pending.refCnt() > 0) {
+                pending.release();
+            }
+            pending = io.netty.buffer.Unpooled.EMPTY_BUFFER;
+        }
     }
 }

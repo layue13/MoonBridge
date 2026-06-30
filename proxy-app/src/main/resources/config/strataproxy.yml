@@ -47,6 +47,8 @@ auth:
   sessionVerificationTimeout: "5s"
 
 forwarding:
+  # Supported modes: none, velocity-modern, bungee-legacy, bungee-guard.
+  # velocity-modern and bungee-guard require a shared secret.
   mode: "none"
   secret: ""
 

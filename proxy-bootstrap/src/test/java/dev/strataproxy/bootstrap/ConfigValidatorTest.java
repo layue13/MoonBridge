@@ -159,6 +159,20 @@ final class ConfigValidatorTest {
     }
 
     @Test
+    void validatesForwardingModesAndSecrets() {
+        var bungeeLegacy = validateWithForwarding(new ProxyConfig.ForwardingConfig("bungee-legacy", ""));
+        assertTrue(bungeeLegacy.valid());
+
+        var missingBungeeGuardSecret = validateWithForwarding(new ProxyConfig.ForwardingConfig("bungee-guard", ""));
+        assertFalse(missingBungeeGuardSecret.valid());
+        assertTrue(missingBungeeGuardSecret.errors().stream().anyMatch(error -> error.contains("bungee-guard")));
+
+        var unknown = validateWithForwarding(new ProxyConfig.ForwardingConfig("not-real", ""));
+        assertFalse(unknown.valid());
+        assertTrue(unknown.errors().stream().anyMatch(error -> error.contains("forwarding.mode")));
+    }
+
+    @Test
     void validatesAdminTlsFiles() throws Exception {
         var keyStore = tempDir.resolve("admin.p12");
         var trustStore = tempDir.resolve("clients.p12");
@@ -253,6 +267,23 @@ final class ConfigValidatorTest {
                 ProxyConfig.PacketAnalysisConfig.defaults(),
                 ProxyConfig.ObservabilityConfig.defaults(),
                 new ProxyConfig.AdminConfig(true, new InetSocketAddress("127.0.0.1", 8080), "secret", tls));
+        return new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
+    }
+
+    private ConfigValidationResult validateWithForwarding(ProxyConfig.ForwardingConfig forwarding) {
+        var config = new ProxyConfig(
+                new InetSocketAddress("127.0.0.1", 25577),
+                0,
+                true,
+                ProxyConfig.NetworkConfig.defaults(),
+                ProxyConfig.RegistryConfig.defaults(),
+                ProxyConfig.CompressionConfig.defaults(),
+                ProxyConfig.PacketAnalysisConfig.defaults(),
+                ProxyConfig.ObservabilityConfig.defaults(),
+                new ProxyConfig.AdminConfig(true, new InetSocketAddress("127.0.0.1", 8080), "secret"),
+                ProxyConfig.AuthConfig.defaults(),
+                forwarding,
+                ProxyConfig.NativeConfig.defaults());
         return new ConfigValidator().validate(new ConfigLoader.LoadedProxyConfig(config, List.of(server("one"))));
     }
 
