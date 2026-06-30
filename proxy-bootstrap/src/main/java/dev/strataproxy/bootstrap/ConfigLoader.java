@@ -92,7 +92,8 @@ public final class ConfigLoader {
                             registry.persistencePath,
                             registry.healthCheckEnabled,
                             java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckInterval, 5_000)),
-                            java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckTimeout, 2_000))),
+                            java.time.Duration.ofMillis(parseDurationMillis(registry.healthCheckTimeout, 2_000)),
+                            registry.healthCheckMode),
                     new ProxyConfig.CompressionConfig(
                             compression.mode,
                             compression.minThreshold,
@@ -197,6 +198,7 @@ public final class ConfigLoader {
         public boolean healthCheckEnabled = true;
         public String healthCheckInterval = "5s";
         public String healthCheckTimeout = "2s";
+        public String healthCheckMode = "tcp";
     }
 
     public static final class CompressionFile {

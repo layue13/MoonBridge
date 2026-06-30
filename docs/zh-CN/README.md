@@ -64,6 +64,18 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 默认配置位于 `proxy-app/src/main/resources/config/strataproxy.yml`，生产参考配置位于 `proxy-app/src/main/resources/config/strataproxy-production.yml`。
 
+registry 健康检查支持两种模式：
+
+```yaml
+registry:
+  healthCheckEnabled: true
+  healthCheckInterval: "5s"
+  healthCheckTimeout: "2s"
+  healthCheckMode: "minecraft-status"
+```
+
+`tcp` 只检查后端端口能否建立连接，兼容性最好。`minecraft-status` 会发送 Minecraft server-list Handshake 和 Status Request，只有收到有效 Status Response 才标记为 UP，更适合作为生产路由安全检查，避免端口开着但 Minecraft 协议路径不可用的后端继续接收玩家。
+
 ## 模块说明
 
 - `proxy-api`：服务器、健康、负载、drain、能力和协议范围模型

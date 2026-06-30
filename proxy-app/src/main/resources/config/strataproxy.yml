@@ -17,6 +17,8 @@ registry:
   healthCheckEnabled: true
   healthCheckInterval: "5s"
   healthCheckTimeout: "2s"
+  # tcp keeps compatibility; minecraft-status verifies the backend speaks the Minecraft status protocol.
+  healthCheckMode: "tcp"
 
 compression:
   mode: adaptive

@@ -37,7 +37,7 @@ final class ConfigValidatorTest {
                 0,
                 true,
                 new ProxyConfig.NetworkConfig(64, 0, 1024, 1024, 10, 20, 0),
-                ProxyConfig.RegistryConfig.defaults(),
+                new ProxyConfig.RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2), "bad-mode"),
                 new ProxyConfig.CompressionConfig("unknown", 8192, 256, 1.5d),
                 new ProxyConfig.PacketAnalysisConfig(-1, -1, -1, -1, Duration.ZERO),
                 ProxyConfig.ObservabilityConfig.defaults(),
@@ -52,6 +52,7 @@ final class ConfigValidatorTest {
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("maxConnectionsPerAddress")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("compression.mode")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("cpuGuard")));
+        assertTrue(result.errors().stream().anyMatch(error -> error.contains("registry.healthCheckMode")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("packetAnalysis.largePayloadWarnBytes")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("packetAnalysis.unknownChannelThrottleBytes")));
         assertTrue(result.errors().stream().anyMatch(error -> error.contains("packetAnalysis.moddedHandshakeWarnBytes")));

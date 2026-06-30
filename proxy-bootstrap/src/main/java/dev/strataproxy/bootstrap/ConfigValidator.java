@@ -82,6 +82,10 @@ public final class ConfigValidator {
         }
         validatePositive("registry.healthCheckInterval", registry.healthCheckInterval(), errors);
         validatePositive("registry.healthCheckTimeout", registry.healthCheckTimeout(), errors);
+        var healthCheckMode = registry.healthCheckMode().trim().toLowerCase(Locale.ROOT);
+        if (!healthCheckMode.equals("tcp") && !healthCheckMode.equals("minecraft-status")) {
+            errors.add("registry.healthCheckMode must be one of: tcp, minecraft-status");
+        }
         if (registry.healthCheckTimeout().compareTo(registry.healthCheckInterval()) > 0) {
             warnings.add("registry.healthCheckTimeout is greater than healthCheckInterval");
         }

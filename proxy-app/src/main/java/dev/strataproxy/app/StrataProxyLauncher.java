@@ -197,10 +197,12 @@ public final class StrataProxyLauncher {
                 var healthChecker = new TcpServerHealthChecker(
                         registry,
                         config.registry().healthCheckInterval(),
-                        config.registry().healthCheckTimeout());
+                        config.registry().healthCheckTimeout(),
+                        config.registry().healthCheckMode());
                 healthChecker.start();
                 started.add(healthChecker);
-                out.println("StrataProxy health checks every " + config.registry().healthCheckInterval());
+                out.println("StrataProxy health checks every " + config.registry().healthCheckInterval()
+                        + " using " + config.registry().healthCheckMode());
             }
 
             if (config.admin().enabled()) {
@@ -370,7 +372,8 @@ public final class StrataProxyLauncher {
                         : resolveConfigRelativePath(configPath, registry.persistencePath()).toString(),
                 registry.healthCheckEnabled(),
                 registry.healthCheckInterval(),
-                registry.healthCheckTimeout());
+                registry.healthCheckTimeout(),
+                registry.healthCheckMode());
 
         var admin = config.admin();
         var tls = admin.tls();

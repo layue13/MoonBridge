@@ -17,6 +17,8 @@ registry:
   healthCheckEnabled: true
   healthCheckInterval: "5s"
   healthCheckTimeout: "2s"
+  # Use minecraft-status when backends should only receive traffic after a valid server-list response.
+  healthCheckMode: "minecraft-status"
 
 compression:
   mode: adaptive

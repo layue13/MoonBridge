@@ -233,15 +233,27 @@ public record ProxyConfig(
             String persistencePath,
             boolean healthCheckEnabled,
             Duration healthCheckInterval,
-            Duration healthCheckTimeout) {
+            Duration healthCheckTimeout,
+            String healthCheckMode) {
+        public RegistryConfig(
+                boolean staticServers,
+                boolean persistenceEnabled,
+                String persistencePath,
+                boolean healthCheckEnabled,
+                Duration healthCheckInterval,
+                Duration healthCheckTimeout) {
+            this(staticServers, persistenceEnabled, persistencePath, healthCheckEnabled, healthCheckInterval, healthCheckTimeout, "tcp");
+        }
+
         public RegistryConfig {
             persistencePath = persistencePath == null ? "" : persistencePath;
             healthCheckInterval = healthCheckInterval == null ? Duration.ofSeconds(5) : healthCheckInterval;
             healthCheckTimeout = healthCheckTimeout == null ? Duration.ofSeconds(2) : healthCheckTimeout;
+            healthCheckMode = healthCheckMode == null || healthCheckMode.isBlank() ? "tcp" : healthCheckMode;
         }
 
         public static RegistryConfig defaults() {
-            return new RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2));
+            return new RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2), "tcp");
         }
     }
 

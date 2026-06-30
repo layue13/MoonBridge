@@ -63,6 +63,22 @@ final class ConfigLoaderTest {
     }
 
     @Test
+    void parsesRegistryHealthCheckMode() throws Exception {
+        var config = tempDir.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                registry:
+                  healthCheckMode: "minecraft-status"
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+
+        var loaded = new ConfigLoader().load(config);
+
+        assertEquals("minecraft-status", loaded.proxy().registry().healthCheckMode());
+    }
+
+    @Test
     void parsesCompressionRewriteFlag() throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """

@@ -183,12 +183,14 @@ registry:
   healthCheckEnabled: true
   healthCheckInterval: "5s"
   healthCheckTimeout: "2s"
+  healthCheckMode: "minecraft-status"
 ```
 
 Static config is loaded first. Persisted dynamic entries are then replayed when their names are not already present in static config.
 Relative `registry.persistencePath` values are resolved from the directory containing the active config file, so the packaged default `data/registry.json` lives next to `config/strataproxy.yml` instead of depending on the process working directory.
 If the persisted registry file is corrupt or contains invalid entries, startup quarantines it with a `.invalid-<timestamp>` suffix, logs a warning, and continues from static config or an empty dynamic registry.
 Set `registry.staticServers: false` for dynamic-only deployments. In that mode `servers:` entries in YAML are ignored, the proxy may start with zero registered backends, and operators can add servers through the Admin API or persisted registry state. If the Admin API is disabled, at least one backend server must be configured.
+`healthCheckMode` accepts `tcp` or `minecraft-status`. `tcp` only verifies that the backend port accepts connections. `minecraft-status` sends a Minecraft server-list Handshake plus Status Request and marks the backend down unless it returns a valid Status Response, which is better for production backends whose process may keep the port open while the Minecraft protocol path is unhealthy.
 
 Custom payload anomaly thresholds are configurable and accept byte units:
 
@@ -364,7 +366,7 @@ Use `/healthz` for process liveness and `/readyz` for load balancer readiness. `
 - Validates Admin API JSON request bodies and returns 400 for malformed or unsafe registration, health, and load updates.
 - Treats `POST /servers` as an upsert: new servers return 201, existing names return 200 and replace descriptor fields while preserving current health/load samples.
 - Returns 404 for health/load updates to unknown servers and rolls back in-memory registration when registry persistence fails.
-- Runs optional TCP backend health checks and marks unreachable servers `DOWN`, causing routing to avoid them.
+- Runs optional backend health checks and marks unhealthy servers `DOWN`, causing routing to avoid them. Checks can use plain TCP connect or Minecraft status protocol validation.
 - Exposes:
   - `GET /healthz`
   - `GET /readyz`
@@ -581,6 +583,7 @@ Smoke-tested runtime:
 - covered app-level YAML startup smoke: temporary config -> running proxy -> Minecraft status request -> backend -> proxy -> client, with runtime resources closed inside the test
 - covered proxy-level Minecraft server-list status response and Pong without a backend route, including config-loaded favicon and sample player rows
 - covered config-relative registry persistence path resolution at runtime
+- covered TCP and Minecraft status backend health-check modes, including protocol-invalid backends being marked down
 - covered corrupt persisted registry quarantine plus successful runtime startup
 - covered environment placeholder expansion in YAML config values
 - covered installed distribution validation of both default and production-oriented packaged configs
