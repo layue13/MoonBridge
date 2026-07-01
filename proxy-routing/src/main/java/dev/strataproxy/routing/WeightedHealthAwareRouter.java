@@ -27,15 +27,23 @@ public final class WeightedHealthAwareRouter implements ServerRouter {
     @Override
     /** Provides route. */
     public RoutingDecision route(RoutingRequest request) {
-        return explain(request).stream()
-                .filter(RouteCandidate::eligible)
-                .filter(candidate -> candidate.effectiveWeight() > 0.0d)
-                .min(java.util.Comparator
-                        .comparingDouble(RouteCandidate::selectionKey)
-                        .thenComparing(RouteCandidate::serverName))
-                .map(candidate -> new RoutingDecision.Selected(candidate.server(), candidate.effectiveWeight()))
-                .<RoutingDecision>map(selected -> selected)
-                .orElseGet(() -> new RoutingDecision.Rejected("no healthy backend matched route constraints"));
+        RouteCandidate best = null;
+        for (var server : registry.snapshot()) {
+            var candidate = explain(request, server);
+            if (!candidate.eligible() || candidate.effectiveWeight() <= 0.0d) {
+                continue;
+            }
+            if (best == null
+                    || candidate.selectionKey() < best.selectionKey()
+                    || (candidate.selectionKey() == best.selectionKey()
+                    && candidate.serverName().compareTo(best.serverName()) < 0)) {
+                best = candidate;
+            }
+        }
+        if (best == null) {
+            return new RoutingDecision.Rejected("no healthy backend matched route constraints");
+        }
+        return new RoutingDecision.Selected(best.server(), best.effectiveWeight());
     }
 
     /**
