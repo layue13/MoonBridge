@@ -128,6 +128,8 @@ public final class ConnectionAdmissionControl {
     }
 
     /**
+     * Reports total accepted connections that have not yet been released.
+     *
      * @return current accepted connection count
      */
     public long activeConnections() {
@@ -135,6 +137,8 @@ public final class ConnectionAdmissionControl {
     }
 
     /**
+     * Reports active accepted connections for one normalized address key.
+     *
      * @param addressKey normalized client address key
      * @return active accepted connections for that address
      */

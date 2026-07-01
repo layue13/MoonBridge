@@ -23,6 +23,9 @@ public record CompressionContext(
         double historicalCompressionRatio,
         int minThreshold,
         int maxThreshold) {
+    /**
+     * Validates and normalizes record components.
+     */
     public CompressionContext {
         if (cpuLoad < 0.0d || cpuLoad > 1.0d) {
             throw new IllegalArgumentException("cpuLoad must be between 0 and 1");

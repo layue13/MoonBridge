@@ -10,6 +10,9 @@ import java.util.Objects;
  * @param displayName human-readable version label for dashboards and diagnostics
  */
 public record ProtocolRange(int minProtocol, int maxProtocol, String displayName) {
+    /**
+     * Validates and normalizes record components.
+     */
     public ProtocolRange {
         if (minProtocol < 0 || maxProtocol < 0) {
             throw new IllegalArgumentException("protocol versions must be non-negative");

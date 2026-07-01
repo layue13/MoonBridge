@@ -20,6 +20,9 @@ public record RoutingRequest(
         Set<ServerCapability> requiredCapabilities,
         int protocolVersion,
         InetSocketAddress remoteAddress) {
+    /**
+     * Validates and normalizes record components.
+     */
     public RoutingRequest {
         requiredTags = Set.copyOf(requiredTags == null ? Set.of() : requiredTags);
         requiredCapabilities = Set.copyOf(requiredCapabilities == null ? Set.of() : requiredCapabilities);

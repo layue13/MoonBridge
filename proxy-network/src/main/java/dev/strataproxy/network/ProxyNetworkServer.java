@@ -16,6 +16,8 @@ public interface ProxyNetworkServer extends AutoCloseable {
     CompletionStage<Void> bind(InetSocketAddress address);
 
     /**
+     * Returns the address selected by the server bind operation.
+     *
      * @return actual bound address, or {@code null} before bind completes
      */
     InetSocketAddress bindAddress();

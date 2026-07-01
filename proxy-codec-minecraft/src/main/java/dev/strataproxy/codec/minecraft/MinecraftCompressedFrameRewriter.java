@@ -22,6 +22,8 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param codec codec used for decode and encode operations
      */
     public MinecraftCompressedFrameRewriter(MinecraftCompressionCodec codec) {
@@ -173,6 +175,7 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
      * Releases the underlying codec.
      */
     @Override
+    /** Provides close. */
     public void close() {
         codec.close();
     }
@@ -218,11 +221,16 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
             int rewrittenFrameBytes,
             int rewrittenUncompressedBytes,
             int rewrittenCompressedPayloadBytes) implements AutoCloseable {
+        /**
+         * Validates and normalizes record components.
+         */
         public RewriteResult {
             Objects.requireNonNull(frame, "frame");
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return {@code true} when the original frame contained compressed payload bytes
          */
         public boolean wasCompressed() {
@@ -230,6 +238,8 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return {@code true} when the rewritten frame contains compressed payload bytes
          */
         public boolean isCompressed() {
@@ -237,6 +247,8 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return positive value when rewriting reduced envelope size
          */
         public int savedBytes() {
@@ -244,6 +256,7 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         @Override
+        /** Provides close. */
         public void close() {
             frame.release();
         }
@@ -274,11 +287,16 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
             int rewrittenFrameBytes,
             int rewrittenUncompressedBytes,
             int rewrittenCompressedPayloadBytes) implements AutoCloseable {
+        /**
+         * Validates and normalizes record components.
+         */
         public BatchRewriteResult {
             Objects.requireNonNull(frames, "frames");
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return {@code true} when any original frame contained compressed payload bytes
          */
         public boolean wasCompressed() {
@@ -286,6 +304,8 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return {@code true} when any rewritten frame contains compressed payload bytes
          */
         public boolean isCompressed() {
@@ -293,6 +313,8 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         /**
+ * Documents this public API element.
+ *
          * @return positive value when rewriting reduced total envelope size
          */
         public int savedBytes() {
@@ -300,6 +322,7 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
 
         @Override
+        /** Provides close. */
         public void close() {
             frames.release();
         }

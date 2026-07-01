@@ -63,6 +63,7 @@ final class ProxyObservedLoadReporter implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         executor.shutdownNow();
     }

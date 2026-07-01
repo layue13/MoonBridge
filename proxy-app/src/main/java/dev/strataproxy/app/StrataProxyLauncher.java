@@ -67,6 +67,12 @@ public final class StrataProxyLauncher {
     private StrataProxyLauncher() {
     }
 
+    /**
+     * Starts StrataProxy from command-line arguments.
+     *
+     * @param args launcher arguments
+     * @throws Exception when startup fails before the launcher can report a structured exit code
+     */
     public static void main(String[] args) throws Exception {
         var code = run(args);
         if (LauncherArguments.parse(args).terminalMode() || code != 0) {
@@ -526,6 +532,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides transfer. */
         public java.util.concurrent.CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer) {
             var current = server.get();
             if (current == null) {
@@ -541,6 +548,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides find. */
         public Optional<PlayerView> find(String playerName) {
             if (playerName == null || playerName.isBlank()) {
                 return Optional.empty();
@@ -552,6 +560,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides online players. */
         public Collection<PlayerView> onlinePlayers() {
             return metrics.snapshot().playerSessions().values().stream()
                     .map(session -> new PlayerView(session.player(), session.server(), session.remoteAddress()))
@@ -567,6 +576,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides find. */
         public Optional<ServerView> find(String serverName) {
             if (serverName == null || serverName.isBlank()) {
                 return Optional.empty();
@@ -575,6 +585,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides first with tag. */
         public Optional<ServerView> firstWithTag(String tag) {
             if (tag == null || tag.isBlank()) {
                 return Optional.empty();
@@ -586,6 +597,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides servers. */
         public Collection<ServerView> servers() {
             return registry.snapshot().stream().map(PluginServerService::view).toList();
         }
@@ -645,6 +657,7 @@ public final class StrataProxyLauncher {
         }
 
         @Override
+        /** Provides close. */
         public void close() {
             if (!closed.compareAndSet(false, true)) {
                 return;

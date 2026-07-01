@@ -25,6 +25,7 @@ public final class WeightedHealthAwareRouter implements ServerRouter {
     }
 
     @Override
+    /** Provides route. */
     public RoutingDecision route(RoutingRequest request) {
         return explain(request).stream()
                 .filter(RouteCandidate::eligible)

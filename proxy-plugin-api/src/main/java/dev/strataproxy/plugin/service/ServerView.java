@@ -20,6 +20,9 @@ public record ServerView(
         boolean drainMode,
         int softCapacity,
         int hardCapacity) {
+    /**
+     * Validates and normalizes record components.
+     */
     public ServerView {
         tags = tags == null ? Set.of() : Set.copyOf(tags);
     }

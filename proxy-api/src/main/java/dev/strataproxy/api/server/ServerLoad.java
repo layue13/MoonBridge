@@ -19,6 +19,9 @@ public record ServerLoad(
         long outboundBytesPerSecond,
         long packetsPerSecond,
         double eventLoopDelayMillis) {
+    /**
+     * Validates and normalizes record components.
+     */
     public ServerLoad {
         if (players < 0 || softCapacity < 0 || hardCapacity < 0) {
             throw new IllegalArgumentException("capacity values must be non-negative");
@@ -41,6 +44,8 @@ public record ServerLoad(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return {@code true} when hard capacity is enabled and current players meet or exceed it
      */
     public boolean isHardFull() {

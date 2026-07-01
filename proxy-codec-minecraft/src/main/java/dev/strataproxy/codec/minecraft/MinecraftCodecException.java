@@ -5,6 +5,8 @@ package dev.strataproxy.codec.minecraft;
  */
 public final class MinecraftCodecException extends RuntimeException {
     /**
+ * Documents this public API element.
+ *
      * @param message failure message
      */
     public MinecraftCodecException(String message) {
@@ -12,6 +14,8 @@ public final class MinecraftCodecException extends RuntimeException {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param message failure message
      * @param cause underlying cause
      */

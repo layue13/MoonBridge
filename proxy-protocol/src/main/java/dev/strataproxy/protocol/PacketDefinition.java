@@ -22,6 +22,9 @@ public record PacketDefinition(
         int maxProtocol,
         EnumSet<PacketFlag> flags,
         String name) {
+    /**
+     * Validates and normalizes record components.
+     */
     public PacketDefinition {
         state = Objects.requireNonNull(state, "state");
         direction = Objects.requireNonNull(direction, "direction");
@@ -33,6 +36,8 @@ public record PacketDefinition(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param protocolVersion Minecraft protocol version
      * @return {@code true} when this definition covers the version
      */
@@ -41,6 +46,8 @@ public record PacketDefinition(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param flag handling flag
      * @return {@code true} when the flag is set
      */

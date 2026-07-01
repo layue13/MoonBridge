@@ -36,6 +36,18 @@ public record ProxyConfig(
         AuthConfig auth,
         ForwardingConfig forwarding,
         NativeConfig nativeRuntime) {
+    /**
+     * Provides proxy config.
+      * @param bindAddress bind address value
+      * @param workerThreads worker threads value
+      * @param nativeTransport native transport value
+      * @param network network value
+      * @param registry registry value
+      * @param compression compression value
+      * @param packetAnalysis packet analysis value
+      * @param observability observability value
+      * @param admin admin value
+     */
     public ProxyConfig(
             InetSocketAddress bindAddress,
             int workerThreads,
@@ -62,6 +74,19 @@ public record ProxyConfig(
                 NativeConfig.defaults());
     }
 
+    /**
+     * Provides proxy config.
+      * @param bindAddress bind address value
+      * @param workerThreads worker threads value
+      * @param nativeTransport native transport value
+      * @param network network value
+      * @param registry registry value
+      * @param compression compression value
+      * @param packetAnalysis packet analysis value
+      * @param observability observability value
+      * @param admin admin value
+      * @param nativeRuntime native runtime value
+     */
     public ProxyConfig(
             InetSocketAddress bindAddress,
             int workerThreads,
@@ -89,6 +114,21 @@ public record ProxyConfig(
                 nativeRuntime);
     }
 
+    /**
+     * Provides proxy config.
+      * @param bindAddress bind address value
+      * @param workerThreads worker threads value
+      * @param nativeTransport native transport value
+      * @param network network value
+      * @param registry registry value
+      * @param compression compression value
+      * @param packetAnalysis packet analysis value
+      * @param observability observability value
+      * @param admin admin value
+      * @param auth auth value
+      * @param forwarding forwarding value
+      * @param nativeRuntime native runtime value
+     */
     public ProxyConfig(
             InetSocketAddress bindAddress,
             int workerThreads,
@@ -118,6 +158,9 @@ public record ProxyConfig(
                 nativeRuntime);
     }
 
+    /**
+     * Validates and normalizes record components.
+     */
     public ProxyConfig {
         if (workerThreads < 0) {
             throw new IllegalArgumentException("workerThreads must be >= 0");
@@ -135,6 +178,8 @@ public record ProxyConfig(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return concrete worker thread count after resolving automatic mode
      */
     public int resolvedWorkerThreads() {
@@ -142,6 +187,8 @@ public record ProxyConfig(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return production defaults used when no config file exists
      */
     public static ProxyConfig defaults() {
@@ -180,10 +227,21 @@ public record ProxyConfig(
             int maxPlayers,
             String favicon,
             List<StatusSamplePlayer> samplePlayers) {
+        /**
+         * Provides status config.
+          * @param enabled enabled value
+          * @param motd motd value
+          * @param protocolName protocol name value
+          * @param protocolVersion protocol version value
+          * @param maxPlayers max players value
+         */
         public StatusConfig(boolean enabled, String motd, String protocolName, int protocolVersion, int maxPlayers) {
             this(enabled, motd, protocolName, protocolVersion, maxPlayers, "", List.of());
         }
 
+        /**
+         * Validates and normalizes record components.
+         */
         public StatusConfig {
             motd = motd == null || motd.isBlank() ? "StrataProxy" : motd;
             protocolName = protocolName == null || protocolName.isBlank() ? "StrataProxy" : protocolName;
@@ -191,6 +249,10 @@ public record ProxyConfig(
             samplePlayers = samplePlayers == null ? List.of() : List.copyOf(samplePlayers);
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static StatusConfig defaults() {
             return new StatusConfig(true, "StrataProxy", "StrataProxy", -1, 1000, "", List.of());
         }
@@ -203,6 +265,9 @@ public record ProxyConfig(
      * @param id UUID string
      */
     public record StatusSamplePlayer(String name, String id) {
+        /**
+         * Validates and normalizes record components.
+         */
         public StatusSamplePlayer {
             name = name == null ? "" : name;
             id = id == null || id.isBlank() ? "00000000-0000-0000-0000-000000000000" : id;
@@ -224,10 +289,17 @@ public record ProxyConfig(
             int verifyTokenBytes,
             boolean sessionVerification,
             Duration sessionVerificationTimeout) {
+        /**
+         * Validates and normalizes record components.
+         */
         public AuthConfig {
             sessionVerificationTimeout = sessionVerificationTimeout == null ? Duration.ofSeconds(5) : sessionVerificationTimeout;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static AuthConfig defaults() {
             return new AuthConfig(false, 1024, 4, false, Duration.ofSeconds(5));
         }
@@ -240,11 +312,18 @@ public record ProxyConfig(
      * @param secret forwarding secret when the selected mode requires one
      */
     public record ForwardingConfig(String mode, String secret) {
+        /**
+         * Validates and normalizes record components.
+         */
         public ForwardingConfig {
             mode = mode == null || mode.isBlank() ? "none" : mode;
             secret = secret == null ? "" : secret;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static ForwardingConfig defaults() {
             return new ForwardingConfig("none", "");
         }
@@ -271,11 +350,18 @@ public record ProxyConfig(
             boolean preferNativeCompression,
             Set<String> disabledFeatures,
             Set<String> forcedFeatures) {
+        /**
+         * Validates and normalizes record components.
+         */
         public NativeConfig {
             disabledFeatures = disabledFeatures == null ? Set.of() : Set.copyOf(disabledFeatures);
             forcedFeatures = forcedFeatures == null ? Set.of() : Set.copyOf(forcedFeatures);
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static NativeConfig defaults() {
             return new NativeConfig(true, true, true, false, false, false, Set.of(), Set.of());
         }
@@ -306,6 +392,16 @@ public record ProxyConfig(
             int maxNewConnectionsPerAddressPerSecond,
             int initialHandshakeTimeoutMillis,
             boolean proxyProtocol) {
+        /**
+         * Provides network config.
+          * @param maxFrameBytes max frame bytes value
+          * @param connectTimeoutMillis connect timeout millis value
+          * @param writeBufferLowBytes write buffer low bytes value
+          * @param writeBufferHighBytes write buffer high bytes value
+          * @param maxConnections max connections value
+          * @param maxConnectionsPerAddress max connections per address value
+          * @param initialHandshakeTimeoutMillis initial handshake timeout millis value
+         */
         public NetworkConfig(
                 int maxFrameBytes,
                 int connectTimeoutMillis,
@@ -327,6 +423,17 @@ public record ProxyConfig(
                     false);
         }
 
+        /**
+         * Provides network config.
+          * @param maxFrameBytes max frame bytes value
+          * @param connectTimeoutMillis connect timeout millis value
+          * @param writeBufferLowBytes write buffer low bytes value
+          * @param writeBufferHighBytes write buffer high bytes value
+          * @param maxConnections max connections value
+          * @param maxConnectionsPerAddress max connections per address value
+          * @param initialHandshakeTimeoutMillis initial handshake timeout millis value
+          * @param proxyProtocol proxy protocol value
+         */
         public NetworkConfig(
                 int maxFrameBytes,
                 int connectTimeoutMillis,
@@ -349,6 +456,10 @@ public record ProxyConfig(
                     proxyProtocol);
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static NetworkConfig defaults() {
             return new NetworkConfig(
                     8 * 1024 * 1024,
@@ -383,6 +494,15 @@ public record ProxyConfig(
             Duration healthCheckInterval,
             Duration healthCheckTimeout,
             String healthCheckMode) {
+        /**
+         * Provides registry config.
+          * @param staticServers static servers value
+          * @param persistenceEnabled persistence enabled value
+          * @param persistencePath persistence path value
+          * @param healthCheckEnabled health check enabled value
+          * @param healthCheckInterval health check interval value
+          * @param healthCheckTimeout health check timeout value
+         */
         public RegistryConfig(
                 boolean staticServers,
                 boolean persistenceEnabled,
@@ -393,6 +513,9 @@ public record ProxyConfig(
             this(staticServers, persistenceEnabled, persistencePath, healthCheckEnabled, healthCheckInterval, healthCheckTimeout, "tcp");
         }
 
+        /**
+         * Validates and normalizes record components.
+         */
         public RegistryConfig {
             persistencePath = persistencePath == null ? "" : persistencePath;
             healthCheckInterval = healthCheckInterval == null ? Duration.ofSeconds(5) : healthCheckInterval;
@@ -400,6 +523,10 @@ public record ProxyConfig(
             healthCheckMode = healthCheckMode == null || healthCheckMode.isBlank() ? "tcp" : healthCheckMode;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static RegistryConfig defaults() {
             return new RegistryConfig(true, true, "data/registry.json", true, Duration.ofSeconds(5), Duration.ofSeconds(2), "tcp");
         }
@@ -428,14 +555,38 @@ public record ProxyConfig(
             String codec,
             int zstdLevel,
             String zstdDictionaryPath) {
+        /**
+         * Provides compression config.
+          * @param mode mode value
+          * @param minThreshold min threshold value
+          * @param maxThreshold max threshold value
+          * @param cpuGuard cpu guard value
+         */
         public CompressionConfig(String mode, int minThreshold, int maxThreshold, double cpuGuard) {
             this(mode, minThreshold, maxThreshold, cpuGuard, false, 25);
         }
 
+        /**
+         * Provides compression config.
+          * @param mode mode value
+          * @param minThreshold min threshold value
+          * @param maxThreshold max threshold value
+          * @param cpuGuard cpu guard value
+          * @param rewriteEnabled rewrite enabled value
+         */
         public CompressionConfig(String mode, int minThreshold, int maxThreshold, double cpuGuard, boolean rewriteEnabled) {
             this(mode, minThreshold, maxThreshold, cpuGuard, rewriteEnabled, 25);
         }
 
+        /**
+         * Provides compression config.
+          * @param mode mode value
+          * @param minThreshold min threshold value
+          * @param maxThreshold max threshold value
+          * @param cpuGuard cpu guard value
+          * @param rewriteEnabled rewrite enabled value
+          * @param rewriteMaxEventLoopDelayMillis rewrite max event loop delay millis value
+         */
         public CompressionConfig(
                 String mode,
                 int minThreshold,
@@ -446,11 +597,18 @@ public record ProxyConfig(
             this(mode, minThreshold, maxThreshold, cpuGuard, rewriteEnabled, rewriteMaxEventLoopDelayMillis, "zlib", 1, "");
         }
 
+        /**
+         * Validates and normalizes record components.
+         */
         public CompressionConfig {
             codec = codec == null || codec.isBlank() ? "zlib" : codec;
             zstdDictionaryPath = zstdDictionaryPath == null ? "" : zstdDictionaryPath;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static CompressionConfig defaults() {
             return new CompressionConfig("adaptive", 256, 8192, 0.75d, false, 25, "zlib", 1, "");
         }
@@ -471,10 +629,17 @@ public record ProxyConfig(
             int moddedHandshakeWarnBytes,
             int customPayloadFloodMaxCount,
             Duration customPayloadFloodWindow) {
+        /**
+         * Validates and normalizes record components.
+         */
         public PacketAnalysisConfig {
             customPayloadFloodWindow = customPayloadFloodWindow == null ? Duration.ofSeconds(10) : customPayloadFloodWindow;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static PacketAnalysisConfig defaults() {
             return new PacketAnalysisConfig(1024 * 1024, 256 * 1024, 2 * 1024 * 1024, 200, Duration.ofSeconds(10));
         }
@@ -489,6 +654,10 @@ public record ProxyConfig(
      * @param flushInterval event flush interval
      */
     public record ObservabilityConfig(boolean prometheus, int packetTopN, boolean anomalySampling, Duration flushInterval) {
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static ObservabilityConfig defaults() {
             return new ObservabilityConfig(true, 50, true, Duration.ofSeconds(5));
         }
@@ -503,15 +672,28 @@ public record ProxyConfig(
      * @param tls TLS configuration for the admin API
      */
     public record AdminConfig(boolean enabled, InetSocketAddress bindAddress, String bearerToken, AdminTlsConfig tls) {
+        /**
+         * Validates and normalizes record components.
+         */
         public AdminConfig {
             bearerToken = bearerToken == null ? "" : bearerToken;
             tls = tls == null ? AdminTlsConfig.defaults() : tls;
         }
 
+        /**
+         * Provides admin config.
+          * @param enabled enabled value
+          * @param bindAddress bind address value
+          * @param bearerToken bearer token value
+         */
         public AdminConfig(boolean enabled, InetSocketAddress bindAddress, String bearerToken) {
             this(enabled, bindAddress, bearerToken, AdminTlsConfig.defaults());
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static AdminConfig defaults() {
             return new AdminConfig(true, new InetSocketAddress("127.0.0.1", 8080), "", AdminTlsConfig.defaults());
         }
@@ -538,6 +720,9 @@ public record ProxyConfig(
             String trustStorePassword,
             String trustStoreType,
             boolean clientAuth) {
+        /**
+         * Validates and normalizes record components.
+         */
         public AdminTlsConfig {
             keyStorePath = keyStorePath == null ? "" : keyStorePath;
             keyStorePassword = keyStorePassword == null ? "" : keyStorePassword;
@@ -547,6 +732,10 @@ public record ProxyConfig(
             trustStoreType = trustStoreType == null || trustStoreType.isBlank() ? "PKCS12" : trustStoreType;
         }
 
+        /**
+         * Provides defaults.
+          * @return result of the operation
+         */
         public static AdminTlsConfig defaults() {
             return new AdminTlsConfig(false, "", "", "PKCS12", "", "", "PKCS12", false);
         }

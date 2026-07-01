@@ -154,6 +154,7 @@ final class BungeeConnectRequestSampler implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         if (closed) {
             return;

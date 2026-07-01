@@ -25,6 +25,16 @@ public record MinecraftStatusRuntime(
         String favicon,
         List<SamplePlayer> samplePlayers,
         IntSupplier onlinePlayers) {
+    /**
+     * Creates status settings without favicon or sample players.
+     *
+     * @param enabled whether status responses are enabled
+     * @param motd message of the day
+     * @param protocolName displayed protocol name
+     * @param protocolVersion displayed protocol version
+     * @param maxPlayers displayed maximum player count
+     * @param onlinePlayers supplier for the current online player count
+     */
     public MinecraftStatusRuntime(
             boolean enabled,
             String motd,
@@ -35,6 +45,9 @@ public record MinecraftStatusRuntime(
         this(enabled, motd, protocolName, protocolVersion, maxPlayers, "", List.of(), onlinePlayers);
     }
 
+    /**
+     * Normalizes optional status fields and installs a zero-player supplier when none is provided.
+     */
     public MinecraftStatusRuntime {
         motd = motd == null || motd.isBlank() ? "StrataProxy" : motd;
         protocolName = protocolName == null || protocolName.isBlank() ? "StrataProxy" : protocolName;
@@ -45,6 +58,8 @@ public record MinecraftStatusRuntime(
     }
 
     /**
+     * Creates a status runtime that does not answer status requests.
+     *
      * @return disabled status runtime that reports no local status response
      */
     public static MinecraftStatusRuntime disabled() {
@@ -58,6 +73,9 @@ public record MinecraftStatusRuntime(
      * @param id UUID string
      */
     public record SamplePlayer(String name, String id) {
+        /**
+         * Normalizes blank sample-player fields.
+         */
         public SamplePlayer {
             name = name == null ? "" : name;
             id = id == null || id.isBlank() ? "00000000-0000-0000-0000-000000000000" : id;

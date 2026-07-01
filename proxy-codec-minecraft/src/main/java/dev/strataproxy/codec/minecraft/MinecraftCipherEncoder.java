@@ -13,6 +13,8 @@ public final class MinecraftCipherEncoder extends MessageToByteEncoder<ByteBuf> 
     private final Cipher cipher;
 
     /**
+ * Documents this public API element.
+ *
      * @param sharedSecret 16-byte Minecraft shared secret
      */
     public MinecraftCipherEncoder(byte[] sharedSecret) {
@@ -20,6 +22,8 @@ public final class MinecraftCipherEncoder extends MessageToByteEncoder<ByteBuf> 
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param cipher initialized encrypt cipher
      */
     public MinecraftCipherEncoder(Cipher cipher) {

@@ -38,6 +38,7 @@ final class MojangMinecraftSessionVerifier implements MinecraftSessionVerifier {
     }
 
     @Override
+    /** Provides verify. */
     public CompletionStage<SessionVerificationResult> verify(String username, String serverHash, SocketAddress remoteAddress) {
         if (username == null || username.isBlank()) {
             return java.util.concurrent.CompletableFuture.completedFuture(SessionVerificationResult.denied("missing username"));

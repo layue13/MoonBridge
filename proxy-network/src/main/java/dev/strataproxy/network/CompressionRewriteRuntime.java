@@ -219,6 +219,7 @@ final class CompressionRewriteRuntime implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         closePending();
         rewriter.close();
@@ -233,6 +234,7 @@ final class CompressionRewriteRuntime implements AutoCloseable {
 
     private record RewriteInput(ByteBuf frames, boolean owned) implements AutoCloseable {
         @Override
+        /** Provides close. */
         public void close() {
             if (owned && frames.refCnt() > 0) {
                 frames.release();

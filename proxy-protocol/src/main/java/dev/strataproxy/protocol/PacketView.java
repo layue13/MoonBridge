@@ -19,6 +19,9 @@ public record PacketView(
         int rawSize,
         int compressedSize,
         boolean compressed) {
+    /**
+     * Validates and normalizes record components.
+     */
     public PacketView {
         if (rawSize < 0 || compressedSize < 0) {
             throw new IllegalArgumentException("packet sizes must be non-negative");

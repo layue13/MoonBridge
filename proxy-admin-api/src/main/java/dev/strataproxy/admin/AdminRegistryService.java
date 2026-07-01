@@ -19,6 +19,8 @@ public final class AdminRegistryService {
     private final RegistryStore store;
 
     /**
+ * Documents this public API element.
+ *
      * @param registry registry to mutate
      * @param store persistence store; no-op persistence is used when {@code null}
      */
@@ -66,14 +68,31 @@ public final class AdminRegistryService {
         return changed;
     }
 
+    /**
+     * Updates health.
+      * @param name name value
+      * @param health health value
+     */
     public void updateHealth(String name, ServerHealth health) {
         registry.updateHealth(name, health);
     }
 
+    /**
+     * Updates load.
+      * @param name name value
+      * @param load load value
+     */
     public void updateLoad(String name, ServerLoad load) {
         registry.updateLoad(name, load);
     }
 
+    /**
+     * Updates drain mode.
+      * @param name name value
+      * @param drainMode drain mode value
+      * @return result of the operation
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public boolean updateDrainMode(String name, boolean drainMode) throws IOException {
         if (registry.get(name).isEmpty()) {
             return false;
@@ -83,14 +102,27 @@ public final class AdminRegistryService {
         return true;
     }
 
+    /**
+     * Gets value.
+      * @param name name value
+      * @return result of the operation
+     */
     public Optional<RegisteredServer> get(String name) {
         return registry.get(name);
     }
 
+    /**
+     * Provides snapshot.
+      * @return result of the operation
+     */
     public Collection<RegisteredServer> snapshot() {
         return registry.snapshot();
     }
 
+    /**
+     * Provides persist.
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public void persist() throws IOException {
         store.save(registry.snapshot());
     }

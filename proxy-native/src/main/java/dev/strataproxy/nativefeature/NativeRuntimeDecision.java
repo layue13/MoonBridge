@@ -22,6 +22,9 @@ public record NativeRuntimeDecision(
         boolean requireNativeTransport,
         String tlsProvider,
         String compressionProvider) {
+    /**
+     * Validates and normalizes record components.
+     */
     public NativeRuntimeDecision {
         enabledFeatures = enabledFeatures == null ? Set.of() : Set.copyOf(enabledFeatures);
     }

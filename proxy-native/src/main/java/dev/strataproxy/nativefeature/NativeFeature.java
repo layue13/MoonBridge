@@ -6,21 +6,37 @@ import java.util.Locale;
  * CPU or platform feature that can influence native transport, TLS, or compression choices.
  */
 public enum NativeFeature {
+    /** Native feature constant for aes. */
     AES("aes"),
+    /** Native feature constant for vaes. */
     VAES("vaes"),
+    /** Native feature constant for pclmulqdq. */
     PCLMULQDQ("pclmulqdq"),
+    /** Native feature constant for vpclmulqdq. */
     VPCLMULQDQ("vpclmulqdq"),
+    /** Native feature constant for sha ni. */
     SHA_NI("sha_ni"),
+    /** Native feature constant for crc32. */
     CRC32("crc32"),
+    /** Native feature constant for sse4 2. */
     SSE4_2("sse4_2"),
+    /** Native feature constant for avx2. */
     AVX2("avx2"),
+    /** Native feature constant for avx512f. */
     AVX512F("avx512f"),
+    /** Native feature constant for bmi1. */
     BMI1("bmi1"),
+    /** Native feature constant for bmi2. */
     BMI2("bmi2"),
+    /** Native feature constant for lzcnt. */
     LZCNT("lzcnt"),
+    /** Native feature constant for popcnt. */
     POPCNT("popcnt"),
+    /** Native feature constant for neon. */
     NEON("neon"),
+    /** Native feature constant for arm aes. */
     ARM_AES("arm_aes"),
+    /** Native feature constant for arm sha. */
     ARM_SHA("arm_sha");
 
     private final String label;
@@ -30,6 +46,8 @@ public enum NativeFeature {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return stable lowercase label used in configuration and diagnostics
      */
     public String label() {

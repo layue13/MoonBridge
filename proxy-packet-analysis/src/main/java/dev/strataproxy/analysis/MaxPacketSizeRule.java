@@ -16,6 +16,7 @@ import java.util.Optional;
  */
 public record MaxPacketSizeRule(String id, ProtocolState state, int maxBytes, AnomalyAction action) implements PacketRule {
     @Override
+    /** Provides evaluate. */
     public Optional<PacketAnomaly> evaluate(PacketView packet) {
         if (packet.state() == state && packet.rawSize() > maxBytes) {
             var explanation = "packet exceeded " + maxBytes + " bytes in " + state + " state";

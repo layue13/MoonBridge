@@ -33,6 +33,9 @@ public record ServerDescriptor(
         int hardCapacity,
         boolean drainMode,
         Map<String, String> metadata) {
+    /**
+     * Validates and normalizes record components.
+     */
     public ServerDescriptor {
         name = requireName(name);
         address = Objects.requireNonNull(address, "address");

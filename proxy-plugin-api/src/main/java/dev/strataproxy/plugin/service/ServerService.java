@@ -8,6 +8,8 @@ import java.util.Optional;
  */
 public interface ServerService {
     /**
+ * Provides find.
+ *
      * @param serverName backend name
      * @return backend view when registered
      */
@@ -22,6 +24,8 @@ public interface ServerService {
     Optional<ServerView> firstWithTag(String tag);
 
     /**
+ * Provides servers.
+ *
      * @return snapshot of registered backend views
      */
     Collection<ServerView> servers();

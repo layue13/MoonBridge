@@ -16,6 +16,8 @@ public final class MinecraftCompressionFrameDecoder extends ByteToMessageDecoder
     private final MinecraftCompressionCodec codec;
 
     /**
+ * Documents this public API element.
+ *
      * @param threshold negotiated compression threshold
      * @param maxFrameBytes maximum compressed frame envelope size
      * @param maxUncompressedBytes maximum decoded packet payload size

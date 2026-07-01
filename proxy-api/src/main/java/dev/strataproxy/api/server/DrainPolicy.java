@@ -10,6 +10,9 @@ import java.time.Duration;
  * @param gracePeriod maximum time allowed for graceful migration before removal continues
  */
 public record DrainPolicy(boolean rejectNewConnections, boolean migrateExistingPlayers, Duration gracePeriod) {
+    /**
+     * Validates and normalizes record components.
+     */
     public DrainPolicy {
         gracePeriod = gracePeriod == null ? Duration.ZERO : gracePeriod;
     }

@@ -40,6 +40,7 @@ final class NetworkRuntimeMonitor implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         scheduler.shutdownNow();
     }

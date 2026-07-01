@@ -131,11 +131,13 @@ final class BackendReplacementController {
         frontend.config().setAutoRead(false);
         var listener = new BackendSwitchLoginHandler.Listener() {
             @Override
+            /** Provides backend login ready. */
             public void backendLoginReady(Channel nextBackend) {
                 completeReplacement(frontend, oldBackend, currentServerName, nextServerName, nextBackend, nextCompressionAudit, result);
             }
 
             @Override
+            /** Provides backend login failed. */
             public void backendLoginFailed(Channel nextBackend, String outcome) {
                 metrics.backendReplacement(outcome);
                 session.finishBackendReplacement();

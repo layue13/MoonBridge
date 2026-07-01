@@ -18,6 +18,8 @@ public final class MinecraftPacketDefinitions {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return default packet registry used by protocol-aware routing, inspection, and compression samples
      */
     public static PacketRegistry modernDefaults() {

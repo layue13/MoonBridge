@@ -626,6 +626,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
 
         @Override
+        /** Provides channel read. */
         public void channelRead(ChannelHandlerContext context, Object message) {
             if (!(message instanceof ByteBuf buffer)) {
                 ReferenceCountUtil.release(message);
@@ -673,11 +674,13 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
 
         @Override
+        /** Provides channel inactive. */
         public void channelInactive(ChannelHandlerContext context) {
             releaseOwnedBuffers();
         }
 
         @Override
+        /** Provides exception caught. */
         public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
             context.close();
             releaseOwnedBuffers();
@@ -735,6 +738,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
 
         @Override
+        /** Provides channel read. */
         public void channelRead(ChannelHandlerContext context, Object message) {
             if (!(message instanceof ByteBuf buffer)) {
                 ReferenceCountUtil.release(message);
@@ -759,11 +763,13 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         }
 
         @Override
+        /** Provides channel inactive. */
         public void channelInactive(ChannelHandlerContext context) {
             releasePending();
         }
 
         @Override
+        /** Provides exception caught. */
         public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
             context.close();
             releasePending();

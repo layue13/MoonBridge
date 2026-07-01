@@ -190,6 +190,7 @@ public final class TcpServerHealthChecker implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         scheduler.shutdownNow();
     }

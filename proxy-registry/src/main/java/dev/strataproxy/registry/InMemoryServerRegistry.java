@@ -15,9 +15,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * Concurrent in-memory implementation of {@link ServerRegistry}.
  */
 public final class InMemoryServerRegistry implements ServerRegistry {
+    /**
+     * Creates InMemoryServerRegistry.
+     */
+    public InMemoryServerRegistry() {
+    }
+
     private final ConcurrentHashMap<String, MutableRegisteredServer> servers = new ConcurrentHashMap<>();
 
     @Override
+    /** Provides register. */
     public RegisteredServer register(ServerDescriptor descriptor) {
         var server = new MutableRegisteredServer(descriptor);
         var existing = servers.putIfAbsent(descriptor.name(), server);
@@ -28,6 +35,7 @@ public final class InMemoryServerRegistry implements ServerRegistry {
     }
 
     @Override
+    /** Provides register or replace. */
     public RegisteredServer registerOrReplace(ServerDescriptor descriptor) {
         return servers.compute(descriptor.name(), (ignored, existing) -> {
             if (existing == null) {
@@ -39,6 +47,7 @@ public final class InMemoryServerRegistry implements ServerRegistry {
     }
 
     @Override
+    /** Provides unregister. */
     public boolean unregister(String name, DrainPolicy policy) {
         var server = servers.get(name);
         if (server == null) {
@@ -52,28 +61,33 @@ public final class InMemoryServerRegistry implements ServerRegistry {
     }
 
     @Override
+    /** Gets value. */
     public Optional<RegisteredServer> get(String name) {
         return Optional.ofNullable(servers.get(name)).map(RegisteredServer.class::cast);
     }
 
     @Override
+    /** Provides snapshot. */
     public Collection<RegisteredServer> snapshot() {
         return servers.values().stream().map(RegisteredServer.class::cast).toList();
     }
 
     @Override
+    /** Updates health. */
     public void updateHealth(String name, ServerHealth health) {
         var server = requireServer(name);
         server.updateHealth(health);
     }
 
     @Override
+    /** Updates load. */
     public void updateLoad(String name, ServerLoad load) {
         var server = requireServer(name);
         server.updateLoad(load);
     }
 
     @Override
+    /** Updates drain mode. */
     public void updateDrainMode(String name, boolean drainMode) {
         var server = requireServer(name);
         server.updateDrainMode(drainMode);

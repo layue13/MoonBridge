@@ -10,7 +10,8 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 2. [Configuration Guide](configuration.md): every important YAML section explained with copyable examples.
 3. [Command Reference](commands.md): Admin CLI and query/load-test commands grouped by task.
 4. [Zstd Compression Tuning](compression-zstd.md): optional modded-client Zstd codec, sample collection, dictionary training, and rollout guidance.
-5. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
+5. [JavaDoc Reference](javadoc.md): source-level API documentation scope and generation workflow.
+6. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
 
 ## Common Tasks
 
@@ -35,6 +36,7 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 | [Configuration Guide](configuration.md) | Practical YAML configuration reference |
 | [Command Reference](commands.md) | Operator command cookbook |
 | [Plugins and In-Game Commands](plugins.md) | Player commands and plugin jar entry points |
+| [JavaDoc Reference](javadoc.md) | Source-level API documentation scope and generation workflow |
 | [Operations Manual](operations-manual.md) | Complete production runbook |
 | [Zstd Compression Tuning](compression-zstd.md) | Minecraft-specific Zstd and dictionary workflow |
 | [Deployment Notes](../deployment/README.md) | Linux service, container, JVM, and release bundle notes |

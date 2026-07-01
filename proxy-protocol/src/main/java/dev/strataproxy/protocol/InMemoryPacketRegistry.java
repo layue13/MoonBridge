@@ -10,6 +10,8 @@ public final class InMemoryPacketRegistry implements PacketRegistry {
     private final List<PacketDefinition> definitions;
 
     /**
+ * Documents this public API element.
+ *
      * @param definitions packet metadata definitions to search
      */
     public InMemoryPacketRegistry(List<PacketDefinition> definitions) {
@@ -17,6 +19,7 @@ public final class InMemoryPacketRegistry implements PacketRegistry {
     }
 
     @Override
+    /** Provides find. */
     public Optional<PacketDefinition> find(PacketView packet) {
         return definitions.stream()
                 .filter(definition -> definition.id() == packet.packetId())

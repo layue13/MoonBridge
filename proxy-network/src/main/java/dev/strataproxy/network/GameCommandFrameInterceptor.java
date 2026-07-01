@@ -152,6 +152,7 @@ final class GameCommandFrameInterceptor implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         compressionCodec.close();
         releasePending();

@@ -19,9 +19,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * Thread-safe in-memory command registry and dispatcher.
  */
 public final class DefaultCommandRegistry implements CommandRegistry {
+    /**
+     * Creates DefaultCommandRegistry.
+     */
+    public DefaultCommandRegistry() {
+    }
+
     private final Map<String, CommandSpec> commands = new ConcurrentHashMap<>();
 
     @Override
+    /** Provides register. */
     public void register(CommandSpec command) {
         commands.put(command.name(), command);
         for (var alias : command.aliases()) {
@@ -30,6 +37,7 @@ public final class DefaultCommandRegistry implements CommandRegistry {
     }
 
     @Override
+    /** Provides unregister. */
     public boolean unregister(String name) {
         var normalized = normalize(name);
         var command = commands.remove(normalized);
@@ -41,11 +49,13 @@ public final class DefaultCommandRegistry implements CommandRegistry {
     }
 
     @Override
+    /** Provides commands. */
     public Collection<CommandSpec> commands() {
         return commands.values().stream().distinct().toList();
     }
 
     @Override
+    /** Provides execute. */
     public CompletionStage<CommandResult> execute(CommandSource source, String input) {
         var parsed = ParsedCommand.parse(input);
         if (parsed == null) {

@@ -60,14 +60,38 @@ public final class AdminHttpServer implements AutoCloseable {
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(InetSocketAddress bindAddress, ServerRegistry registry, ProxyMetrics metrics) throws IOException {
         this(bindAddress, registry, metrics, "");
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(InetSocketAddress bindAddress, ServerRegistry registry, ProxyMetrics metrics, String bearerToken) throws IOException {
         this(bindAddress, new AdminRegistryService(registry, NoopRegistryStore.INSTANCE), metrics, bearerToken);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             ServerRegistry registry,
@@ -77,6 +101,16 @@ public final class AdminHttpServer implements AutoCloseable {
         this(bindAddress, new AdminRegistryService(registry, NoopRegistryStore.INSTANCE), metrics, bearerToken, packetTopN);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @param prometheusEnabled prometheus enabled value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             ServerRegistry registry,
@@ -87,10 +121,27 @@ public final class AdminHttpServer implements AutoCloseable {
         this(bindAddress, new AdminRegistryService(registry, NoopRegistryStore.INSTANCE), metrics, bearerToken, packetTopN, prometheusEnabled);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(InetSocketAddress bindAddress, AdminRegistryService registry, ProxyMetrics metrics, String bearerToken) throws IOException {
         this(bindAddress, registry, metrics, bearerToken, 50);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             AdminRegistryService registry,
@@ -100,6 +151,16 @@ public final class AdminHttpServer implements AutoCloseable {
         this(bindAddress, registry, metrics, bearerToken, packetTopN, true);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @param prometheusEnabled prometheus enabled value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             AdminRegistryService registry,
@@ -110,6 +171,18 @@ public final class AdminHttpServer implements AutoCloseable {
         this(bindAddress, registry, metrics, bearerToken, packetTopN, prometheusEnabled, null, false);
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @param prometheusEnabled prometheus enabled value
+      * @param sslContext ssl context value
+      * @param requireClientAuth require client auth value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             AdminRegistryService registry,
@@ -131,6 +204,19 @@ public final class AdminHttpServer implements AutoCloseable {
                 PlayerTransferService.unavailable());
     }
 
+    /**
+     * Provides admin http server.
+      * @param bindAddress bind address value
+      * @param registry registry value
+      * @param metrics metrics value
+      * @param bearerToken bearer token value
+      * @param packetTopN packet top n value
+      * @param prometheusEnabled prometheus enabled value
+      * @param sslContext ssl context value
+      * @param requireClientAuth require client auth value
+      * @param playerTransfers player transfers value
+      * @throws java.io.IOException if the operation cannot be completed
+     */
     public AdminHttpServer(
             InetSocketAddress bindAddress,
             AdminRegistryService registry,
@@ -176,6 +262,7 @@ public final class AdminHttpServer implements AutoCloseable {
         var https = HttpsServer.create(bindAddress, 128);
         https.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
             @Override
+            /** Provides configure. */
             public void configure(HttpsParameters parameters) {
                 var engine = getSSLContext().createSSLEngine();
                 var sslParameters = getSSLContext().getDefaultSSLParameters();
@@ -188,15 +275,21 @@ public final class AdminHttpServer implements AutoCloseable {
         return https;
     }
 
+    /** Provides start. */
     public void start() {
         server.start();
     }
 
+    /**
+     * Provides bind address.
+      * @return result of the operation
+     */
     public InetSocketAddress bindAddress() {
         return server.getAddress();
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
@@ -1031,41 +1124,49 @@ public final class AdminHttpServer implements AutoCloseable {
     private ServerRegistry readOnlyRegistry() {
         return new ServerRegistry() {
             @Override
+            /** Provides register. */
             public RegisteredServer register(ServerDescriptor descriptor) {
                 throw new UnsupportedOperationException("read-only registry");
             }
 
             @Override
+            /** Provides register or replace. */
             public RegisteredServer registerOrReplace(ServerDescriptor descriptor) {
                 throw new UnsupportedOperationException("read-only registry");
             }
 
             @Override
+            /** Provides unregister. */
             public boolean unregister(String name, DrainPolicy policy) {
                 throw new UnsupportedOperationException("read-only registry");
             }
 
             @Override
+            /** Gets value. */
             public java.util.Optional<RegisteredServer> get(String name) {
                 return registry.get(name);
             }
 
             @Override
+            /** Provides snapshot. */
             public java.util.Collection<RegisteredServer> snapshot() {
                 return registry.snapshot();
             }
 
             @Override
+            /** Updates health. */
             public void updateHealth(String name, ServerHealth health) {
                 throw new UnsupportedOperationException("read-only registry");
             }
 
             @Override
+            /** Updates load. */
             public void updateLoad(String name, ServerLoad load) {
                 throw new UnsupportedOperationException("read-only registry");
             }
 
             @Override
+            /** Updates drain mode. */
             public void updateDrainMode(String name, boolean drainMode) {
                 throw new UnsupportedOperationException("read-only registry");
             }
@@ -1128,16 +1229,33 @@ public final class AdminHttpServer implements AutoCloseable {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
+    /** Documents this public API element. */
     public static final class ServerRequest {
+        /**
+         * Creates an empty server request for JSON binding.
+         */
+        public ServerRequest() {
+        }
+
+        /** Public field for name. */
         public String name;
+        /** Public field for address. */
         public String address;
+        /** Public field for tags. */
         public Set<String> tags = Set.of();
+        /** Public field for capabilities. */
         public Set<String> capabilities = Set.of();
+        /** Public field for protocol range. */
         public String protocolRange = "any";
+        /** Public field for weight. */
         public int weight = 100;
+        /** Public field for soft capacity. */
         public int softCapacity = 500;
+        /** Public field for hard capacity. */
         public int hardCapacity = 600;
+        /** Public field for drain mode. */
         public boolean drainMode = false;
+        /** Public field for metadata. */
         public Map<String, String> metadata = Map.of();
 
         ServerDescriptor toDescriptor() {
@@ -1174,10 +1292,21 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /** Documents this public API element. */
     public static final class HealthRequest {
+        /**
+         * Creates an empty health request for JSON binding.
+         */
+        public HealthRequest() {
+        }
+
+        /** Public field for status. */
         public String status = "UP";
+        /** Public field for backend ping millis. */
         public long backendPingMillis = -1;
+        /** Public field for recent failure rate. */
         public double recentFailureRate = 0.0d;
+        /** Public field for reason. */
         public String reason = "";
 
         ServerHealth toHealth() {
@@ -1193,15 +1322,31 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /** Documents this public API element. */
     public static final class ServerPatchRequest {
+        /**
+         * Creates an empty server patch request for JSON binding.
+         */
+        public ServerPatchRequest() {
+        }
+
+        /** Public field for address. */
         public String address;
+        /** Public field for tags. */
         public Set<String> tags;
+        /** Public field for capabilities. */
         public Set<String> capabilities;
+        /** Public field for protocol range. */
         public String protocolRange;
+        /** Public field for weight. */
         public Integer weight;
+        /** Public field for soft capacity. */
         public Integer softCapacity;
+        /** Public field for hard capacity. */
         public Integer hardCapacity;
+        /** Public field for drain mode. */
         public Boolean drainMode;
+        /** Public field for metadata. */
         public Map<String, String> metadata;
 
         ServerDescriptor patch(ServerDescriptor current) {
@@ -1235,13 +1380,27 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /** Documents this public API element. */
     public static final class LoadRequest {
+        /**
+         * Creates an empty load request for JSON binding.
+         */
+        public LoadRequest() {
+        }
+
+        /** Public field for players. */
         public int players;
+        /** Public field for soft capacity. */
         public int softCapacity;
+        /** Public field for hard capacity. */
         public int hardCapacity;
+        /** Public field for inbound bytes per second. */
         public long inboundBytesPerSecond;
+        /** Public field for outbound bytes per second. */
         public long outboundBytesPerSecond;
+        /** Public field for packets per second. */
         public long packetsPerSecond;
+        /** Public field for event loop delay millis. */
         public double eventLoopDelayMillis;
 
         ServerLoad toLoad() {
@@ -1267,7 +1426,17 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Admin response view of a registered backend server.
-     */
+ * @param name name
+ * @param address address
+ * @param tags tags
+ * @param capabilities capabilities
+ * @param protocolRange protocol range
+ * @param weight weight
+ * @param draining draining
+ * @param health health
+ * @param load load
+ * @param metadata metadata
+ */
     public record ServerView(
             String name,
             String address,
@@ -1297,7 +1466,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Admin response view of backend health.
-     */
+ * @param status status
+ * @param backendPingMillis backend ping millis
+ * @param recentFailureRate recent failure rate
+ * @param reason reason
+ * @param updatedAt updated at
+ */
     public record HealthView(
             ServerHealthStatus status,
             long backendPingMillis,
@@ -1316,7 +1490,25 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * High-level admin overview response.
-     */
+ * @param status status
+ * @param servers servers
+ * @param activeConnections active connections
+ * @param routedConnections routed connections
+ * @param rejectedConnections rejected connections
+ * @param rejectedConnectionsByReason rejected connections by reason
+ * @param failedRoutes failed routes
+ * @param backendConnectFailures backend connect failures
+ * @param frontendToBackendBytes frontend to backend bytes
+ * @param backendToFrontendBytes backend to frontend bytes
+ * @param compressionNegotiations compression negotiations
+ * @param compressionSavedBytes compression saved bytes
+ * @param compressionRatio compression ratio
+ * @param packetAnomalies packet anomalies
+ * @param eventLoopDelaySeconds event loop delay seconds
+ * @param pooledDirectMemoryBytes pooled direct memory bytes
+ * @param transport transport
+ * @param nativeTransport native transport
+ */
     public record OverviewView(
             String status,
             long servers,
@@ -1340,7 +1532,16 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Admin response view of native runtime state.
-     */
+ * @param enabled enabled
+ * @param os os
+ * @param arch arch
+ * @param detectionSource detection source
+ * @param tlsProvider tls provider
+ * @param compressionProvider compression provider
+ * @param preferNativeTransport prefer native transport
+ * @param requireNativeTransport require native transport
+ * @param features features
+ */
     public record NativeRuntimeView(
             boolean enabled,
             String os,
@@ -1373,13 +1574,25 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Readiness endpoint response.
-     */
+ * @param status status
+ * @param readyServers ready servers
+ * @param registeredServers registered servers
+ * @param timestamp timestamp
+ */
     public record ReadinessView(String status, long readyServers, long registeredServers, String timestamp) {
     }
 
     /**
      * Route-preview endpoint response.
-     */
+ * @param selected selected
+ * @param server server
+ * @param score score
+ * @param reason reason
+ * @param route route
+ * @param protocolVersion protocol version
+ * @param remoteAddress remote address
+ * @param candidates candidates
+ */
     public record RoutePreviewView(
             boolean selected,
             String server,
@@ -1393,7 +1606,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Route candidate row used in route-preview responses.
-     */
+ * @param server server
+ * @param eligible eligible
+ * @param reason reason
+ * @param effectiveWeight effective weight
+ * @param selectionKey selection key
+ */
     public record RouteCandidateView(
             String server,
             boolean eligible,
@@ -1404,7 +1622,19 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Full diagnostic report response.
-     */
+ * @param generatedAt generated at
+ * @param overview overview
+ * @param admission admission
+ * @param servers servers
+ * @param nativeRuntime native runtime
+ * @param compression compression
+ * @param packetTraffic packet traffic
+ * @param customPayloads custom payloads
+ * @param packetAnomalies packet anomalies
+ * @param relayBackpressure relay backpressure
+ * @param payloadCaptures payload captures
+ * @param playerSessions player sessions
+ */
     public record DiagnosticReport(
             String generatedAt,
             OverviewView overview,
@@ -1422,7 +1652,9 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Admission rejection summary.
-     */
+ * @param rejectedConnections rejected connections
+ * @param rejectedConnectionsByReason rejected connections by reason
+ */
     public record RejectionReport(long rejectedConnections, Map<String, Long> rejectedConnectionsByReason) {
     }
 
@@ -1438,13 +1670,19 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Active player session report.
-     */
+ * @param active active
+ * @param players players
+ */
     public record PlayerSessionReport(int active, List<PlayerSessionView> players) {
     }
 
     /**
      * Admin response view of one player session.
-     */
+ * @param player player
+ * @param server server
+ * @param remoteAddress remote address
+ * @param connectedAt connected at
+ */
     public record PlayerSessionView(String player, String server, String remoteAddress, String connectedAt) {
         static PlayerSessionView from(ProxyMetrics.PlayerSession session) {
             return new PlayerSessionView(
@@ -1455,8 +1693,17 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /** Documents this public API element. */
     public static final class PlayerTransferRequest {
+        /**
+         * Creates an empty player transfer request for JSON binding.
+         */
+        public PlayerTransferRequest() {
+        }
+
+        /** Public field for server. */
         public String server = "";
+        /** Public field for target server. */
         public String targetServer = "";
 
         String targetServer() {
@@ -1469,7 +1716,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Admin response view of a player transfer attempt.
-     */
+ * @param success success
+ * @param outcome outcome
+ * @param player player
+ * @param sourceServer source server
+ * @param targetServer target server
+ */
     public record PlayerTransferView(
             boolean success,
             String outcome,
@@ -1502,19 +1754,35 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Packet anomaly report response.
-     */
+ * @param total total
+ * @param rules rules
+ * @param recentSamples recent samples
+ */
     public record PacketAnomalyReport(long total, List<PacketAnomalyView> rules, List<PacketAnomalySampleView> recentSamples) {
     }
 
     /**
      * Packet anomaly count for one rule.
-     */
+ * @param rule rule
+ * @param count count
+ */
     public record PacketAnomalyView(String rule, long count) {
     }
 
     /**
      * Recent packet anomaly sample view.
-     */
+ * @param sequence sequence
+ * @param rule rule
+ * @param remoteAddress remote address
+ * @param server server
+ * @param direction direction
+ * @param protocolState protocol state
+ * @param packetId packet id
+ * @param rawSize raw size
+ * @param compressedSize compressed size
+ * @param detail detail
+ * @param timestamp timestamp
+ */
     public record PacketAnomalySampleView(
             long sequence,
             String rule,
@@ -1545,7 +1813,11 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Packet traffic report response.
-     */
+ * @param totalPackets total packets
+ * @param totalRawBytes total raw bytes
+ * @param totalCompressedBytes total compressed bytes
+ * @param top top
+ */
     public record PacketTrafficReport(
             long totalPackets,
             long totalRawBytes,
@@ -1555,7 +1827,14 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Packet traffic row in admin reports.
-     */
+ * @param server server
+ * @param direction direction
+ * @param protocolState protocol state
+ * @param packetId packet id
+ * @param packets packets
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ */
     public record PacketTrafficView(
             String server,
             String direction,
@@ -1578,7 +1857,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Custom payload report response.
-     */
+ * @param totalPackets total packets
+ * @param totalPayloadBytes total payload bytes
+ * @param totalCompressedBytes total compressed bytes
+ * @param top top
+ * @param recentSamples recent samples
+ */
     public record CustomPayloadReport(
             long totalPackets,
             long totalPayloadBytes,
@@ -1589,7 +1873,18 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Custom payload aggregate row.
-     */
+ * @param server server
+ * @param direction direction
+ * @param kind kind
+ * @param channel channel
+ * @param packets packets
+ * @param payloadBytes payload bytes
+ * @param compressedBytes compressed bytes
+ * @param maxPayloadBytes max payload bytes
+ * @param maxCompressedBytes max compressed bytes
+ * @param firstSeen first seen
+ * @param lastSeen last seen
+ */
     public record CustomPayloadView(
             String server,
             String direction,
@@ -1620,7 +1915,19 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Recent custom payload sample view.
-     */
+ * @param sequence sequence
+ * @param server server
+ * @param direction direction
+ * @param kind kind
+ * @param channel channel
+ * @param payloadBytes payload bytes
+ * @param compressedBytes compressed bytes
+ * @param player player
+ * @param remoteAddress remote address
+ * @param protocolState protocol state
+ * @param packetId packet id
+ * @param timestamp timestamp
+ */
     public record CustomPayloadSampleView(
             long sequence,
             String server,
@@ -1653,13 +1960,20 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Relay backpressure report response.
-     */
+ * @param totalEvents total events
+ * @param top top
+ */
     public record RelayBackpressureReport(long totalEvents, List<RelayBackpressureView> top) {
     }
 
     /**
      * Relay backpressure row.
-     */
+ * @param server server
+ * @param direction direction
+ * @param events events
+ * @param lastBytesBeforeWritable last bytes before writable
+ * @param maxBytesBeforeWritable max bytes before writable
+ */
     public record RelayBackpressureView(
             String server,
             String direction,
@@ -1676,24 +1990,40 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /** Documents this public API element. */
     public static final class PayloadCaptureRequest {
+        /**
+         * Creates an empty payload capture request for JSON binding.
+         */
+        public PayloadCaptureRequest() {
+        }
+
+        /** Public field for id. */
         public String id = "";
+        /** Public field for server. */
         public String server = "";
+        /** Public field for direction. */
         public String direction = "";
+        /** Public field for max samples. */
         public int maxSamples = 64;
+        /** Public field for max bytes per sample. */
         public int maxBytesPerSample = 256;
+        /** Public field for duration millis. */
         public long durationMillis = 30_000;
     }
 
     /**
      * Active payload capture report.
-     */
+ * @param captures captures
+ */
     public record PayloadCaptureReport(List<PayloadCaptureView> captures) {
     }
 
     /**
      * Payload capture export response.
-     */
+ * @param capture capture
+ * @param samples samples
+ */
     public record PayloadCaptureExport(PayloadCaptureView capture, List<PayloadCaptureSampleView> samples) {
         static PayloadCaptureExport from(ProxyMetrics.PayloadCapture capture, List<ProxyMetrics.PayloadCaptureSample> samples) {
             return new PayloadCaptureExport(
@@ -1704,7 +2034,14 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Payload capture configuration and sample count view.
-     */
+ * @param id id
+ * @param server server
+ * @param direction direction
+ * @param maxSamples max samples
+ * @param maxBytesPerSample max bytes per sample
+ * @param expiresAt expires at
+ * @param sampleCount sample count
+ */
     public record PayloadCaptureView(
             String id,
             String server,
@@ -1727,7 +2064,17 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Payload capture sample response view.
-     */
+ * @param sequence sequence
+ * @param captureId capture id
+ * @param server server
+ * @param direction direction
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ * @param prefixBase64 prefix base64
+ * @param player player
+ * @param remoteAddress remote address
+ * @param timestamp timestamp
+ */
     public record PayloadCaptureSampleView(
             long sequence,
             String captureId,
@@ -1756,7 +2103,10 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Compression report response.
-     */
+ * @param rows rows
+ * @param decisions decisions
+ * @param rewrites rewrites
+ */
     public record CompressionReport(
             List<CompressionReportRow> rows,
             List<CompressionDecisionView> decisions,
@@ -1765,7 +2115,16 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Compression aggregate row.
-     */
+ * @param scope scope
+ * @param direction direction
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ * @param savedBytes saved bytes
+ * @param ratio ratio
+ * @param samples samples
+ * @param threshold threshold
+ * @param negotiations negotiations
+ */
     public record CompressionReportRow(
             String scope,
             String direction,
@@ -1797,7 +2156,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Compression decision aggregate row.
-     */
+ * @param scope scope
+ * @param direction direction
+ * @param action action
+ * @param threshold threshold
+ * @param count count
+ */
     public record CompressionDecisionView(
             String scope,
             String direction,
@@ -1816,7 +2180,12 @@ public final class AdminHttpServer implements AutoCloseable {
 
     /**
      * Compression rewrite aggregate row.
-     */
+ * @param scope scope
+ * @param direction direction
+ * @param outcome outcome
+ * @param count count
+ * @param cpuNanos cpu nanos
+ */
     public record CompressionRewriteView(
             String scope,
             String direction,

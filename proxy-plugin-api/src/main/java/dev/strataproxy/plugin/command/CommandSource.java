@@ -5,11 +5,15 @@ package dev.strataproxy.plugin.command;
  */
 public interface CommandSource {
     /**
+ * Provides name.
+ *
      * @return display name for diagnostics and feedback
      */
     String name();
 
     /**
+ * Provides player.
+ *
      * @return {@code true} when the source represents an in-game player
      */
     default boolean player() {

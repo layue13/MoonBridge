@@ -8,11 +8,16 @@ package dev.strataproxy.plugin.command;
  * @param message optional feedback for the command source
  */
 public record CommandResult(boolean handled, boolean success, String message) {
+    /**
+     * Validates and normalizes record components.
+     */
     public CommandResult {
         message = message == null ? "" : message;
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return result for input that did not match a command
      */
     public static CommandResult ignored() {
@@ -20,6 +25,8 @@ public record CommandResult(boolean handled, boolean success, String message) {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return successful handled result with no message
      */
     public static CommandResult ok() {
@@ -27,6 +34,8 @@ public record CommandResult(boolean handled, boolean success, String message) {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param message feedback to send to the command source
      * @return successful handled result
      */
@@ -35,6 +44,8 @@ public record CommandResult(boolean handled, boolean success, String message) {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param message error feedback to send to the command source
      * @return failed handled result
      */

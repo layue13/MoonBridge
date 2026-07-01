@@ -166,6 +166,7 @@ final class MinecraftCompressedCustomPayloadInspectionSampler implements AutoClo
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         if (closed) {
             return;

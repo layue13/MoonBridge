@@ -22,6 +22,7 @@ final class InitialHandshakeTimeoutHandler extends ReadTimeoutHandler {
     }
 
     @Override
+    /** Provides exception caught. */
     public void exceptionCaught(ChannelHandlerContext context, Throwable cause) throws Exception {
         if (cause instanceof ReadTimeoutException) {
             metrics.handshakeTimeout();

@@ -17,6 +17,9 @@ public record CommandSpec(
         String permission,
         String description,
         CommandExecutor executor) {
+    /**
+     * Validates and normalizes record components.
+     */
     public CommandSpec {
         name = normalizeName(name);
         var primaryName = name;

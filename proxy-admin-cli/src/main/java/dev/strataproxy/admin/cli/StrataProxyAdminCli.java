@@ -64,6 +64,12 @@ import javax.net.ssl.TrustManagerFactory;
 public final class StrataProxyAdminCli implements Callable<Integer> {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * Creates the root admin CLI command for picocli.
+     */
+    public StrataProxyAdminCli() {
+    }
+
     @Option(names = "--base-url", defaultValue = "http://127.0.0.1:8080", description = "Admin API base URL.")
     private URI baseUrl;
 
@@ -93,11 +99,16 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
 
     private HttpClient client;
 
+    /**
+     * Runs this command-line entry point.
+      * @param args args value
+     */
     public static void main(String[] args) {
         System.exit(new CommandLine(new StrataProxyAdminCli()).execute(args));
     }
 
     @Override
+    /** Provides call. */
     public Integer call() {
         CommandLine.usage(this, System.out);
         return 0;
@@ -217,6 +228,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             return root.print(root.request("GET", "/healthz", null));
         }
@@ -228,6 +240,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             return root.print(root.request("GET", "/readyz", null));
         }
@@ -239,6 +252,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var overview = root.request("GET", "/overview", null);
             if (overview.statusCode() >= 200 && overview.statusCode() < 300) {
@@ -286,6 +300,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private boolean requireReady;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var overview = root.request("GET", "/overview", null);
             OverviewMetricsView view;
@@ -328,6 +343,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             return root.print(root.request("GET", "/diagnostic-report", null));
         }
@@ -339,6 +355,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             return root.print(root.request("GET", "/metrics", null));
         }
@@ -350,6 +367,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/native-capabilities", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -366,6 +384,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var report = root.request("GET", "/compression-report", null);
             if (report.statusCode() >= 200 && report.statusCode() < 300) {
@@ -391,6 +410,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/packet-traffic", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -418,6 +438,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private boolean samples;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/custom-payloads", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -440,6 +461,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/player-sessions", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -461,6 +483,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String server;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 json.put("server", server);
@@ -485,6 +508,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private boolean samples;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/packet-anomalies", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -513,6 +537,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var diagnostics = root.request("GET", "/diagnostic-report", null);
             if (diagnostics.statusCode() >= 200 && diagnostics.statusCode() < 300) {
@@ -541,6 +566,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var response = root.request("GET", "/payload-captures", null);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -574,6 +600,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private long durationMillis;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 if (id != null && !id.isBlank()) {
@@ -603,6 +630,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String id;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var response = captures.root.request("GET", "/payload-captures/" + id, null);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -622,6 +650,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String id;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return captures.root.print(captures.root.request("DELETE", "/payload-captures/" + id, null));
             }
@@ -641,6 +670,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             CommandLine.usage(this, System.out);
             return 0;
@@ -652,6 +682,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private ZstdSamplesCommand samples;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var response = samples.root.request("GET", "/payload-captures", null);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -686,6 +717,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private long durationMillis;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 json.put("id", id);
@@ -713,6 +745,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String id;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var response = samples.root.request("GET", "/payload-captures/" + id, null);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -732,6 +765,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String id;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return samples.root.print(samples.root.request("DELETE", "/payload-captures/" + id, null));
             }
@@ -749,6 +783,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private Path outputDirectory;
 
             @Override
+            /** Provides call. */
             public Integer call() throws IOException {
                 var response = samples.root.request("GET", "/payload-captures/" + id, null);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -779,6 +814,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private int level;
 
             @Override
+            /** Provides call. */
             public Integer call() throws IOException {
                 var samples = ZstdSampleFiles.readSamples(inputDirectory);
                 var dictionary = MinecraftZstdDictionaryTrainer.train(samples, maxDictionaryBytes, level);
@@ -804,6 +840,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             CommandLine.usage(this, System.out);
             return 0;
@@ -830,6 +867,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private List<String> capabilities = List.of();
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var response = routes.root.request("GET", path(), null);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -888,6 +926,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         private StrataProxyAdminCli root;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             return root.print(root.request("GET", "/servers", null));
         }
@@ -898,6 +937,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private ServersCommand servers;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return servers.root.print(servers.root.request("GET", "/servers", null));
             }
@@ -912,6 +952,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String name;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return servers.root.print(servers.root.request("GET", "/servers/" + name, null));
             }
@@ -953,6 +994,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private List<String> metadata = List.of();
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 json.put("name", name);
@@ -1005,6 +1047,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private List<String> metadata;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 if (address != null) {
@@ -1047,6 +1090,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String name;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return servers.root.print(servers.root.request("DELETE", "/servers/" + name, null));
             }
@@ -1061,6 +1105,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String name;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return servers.root.print(servers.root.request("POST", "/servers/" + name + "/drain", "{}"));
             }
@@ -1075,6 +1120,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String name;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 return servers.root.print(servers.root.request("POST", "/servers/" + name + "/undrain", "{}"));
             }
@@ -1101,6 +1147,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private String reason;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 var json = MAPPER.createObjectNode();
                 json.put("status", status);
@@ -1141,6 +1188,7 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             private double eventLoopDelayMillis;
 
             @Override
+            /** Provides call. */
             public Integer call() {
                 ObjectNode json = MAPPER.createObjectNode();
                 json.put("players", players);

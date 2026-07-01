@@ -150,6 +150,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel read. */
     public void channelRead(ChannelHandlerContext context, Object message) {
         if (!frontend.isActive()) {
             ReferenceCountUtil.release(message);
@@ -240,6 +241,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel inactive. */
     public void channelInactive(ChannelHandlerContext context) {
         closeBackendSide();
         if (!Boolean.TRUE.equals(context.channel().attr(BackendReplacementController.MIGRATING_BACKEND).get()) && frontend.isOpen()) {
@@ -248,6 +250,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides exception caught. */
     public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
         context.close();
         closeBackendSide();

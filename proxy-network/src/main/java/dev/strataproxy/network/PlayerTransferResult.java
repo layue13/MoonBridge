@@ -16,6 +16,8 @@ public record PlayerTransferResult(
         String sourceServer,
         String targetServer) {
     /**
+     * Creates a successful transfer result.
+     *
      * @param player player name
      * @param sourceServer source backend name
      * @param targetServer target backend name
@@ -26,6 +28,8 @@ public record PlayerTransferResult(
     }
 
     /**
+     * Creates a failed transfer result.
+     *
      * @param outcome failure outcome
      * @param player player name
      * @param sourceServer source backend name

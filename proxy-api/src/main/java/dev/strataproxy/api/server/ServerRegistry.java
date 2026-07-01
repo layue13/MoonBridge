@@ -34,12 +34,16 @@ public interface ServerRegistry {
     boolean unregister(String name, DrainPolicy policy);
 
     /**
+ * Gets value.
+ *
      * @param name server name
      * @return the matching registered server, if present
      */
     Optional<RegisteredServer> get(String name);
 
     /**
+ * Provides snapshot.
+ *
      * @return point-in-time snapshot of registered servers
      */
     Collection<RegisteredServer> snapshot();

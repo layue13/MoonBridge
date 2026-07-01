@@ -7,6 +7,9 @@ package dev.strataproxy.network;
  * @param secret forwarding secret for modes that require one
  */
 public record MinecraftForwardingRuntime(String mode, String secret) {
+    /**
+     * Normalizes blank forwarding modes and null secrets.
+     */
     public MinecraftForwardingRuntime {
         mode = mode == null || mode.isBlank() ? "none" : mode.trim();
         secret = secret == null ? "" : secret;

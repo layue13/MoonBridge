@@ -27,6 +27,8 @@ public final class MinecraftZstdCompressionCodec {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param level zstd compression level
      * @param dictionary optional zstd dictionary bytes
      */

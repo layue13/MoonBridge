@@ -14,6 +14,8 @@ public final class MinecraftCipherDecoder extends ByteToMessageDecoder {
     private final Cipher cipher;
 
     /**
+ * Documents this public API element.
+ *
      * @param sharedSecret 16-byte Minecraft shared secret
      */
     public MinecraftCipherDecoder(byte[] sharedSecret) {
@@ -21,6 +23,8 @@ public final class MinecraftCipherDecoder extends ByteToMessageDecoder {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param cipher initialized decrypt cipher
      */
     public MinecraftCipherDecoder(Cipher cipher) {

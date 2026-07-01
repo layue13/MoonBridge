@@ -11,6 +11,8 @@ public final class PacketAnalyzer {
     private final List<PacketRule> rules;
 
     /**
+ * Documents this public API element.
+ *
      * @param rules rules to apply in order
      */
     public PacketAnalyzer(List<PacketRule> rules) {

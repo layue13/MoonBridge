@@ -12,6 +12,9 @@ import java.nio.file.Path;
  * @param source plugin archive or directory, or {@code null} for built-in plugins
  */
 public record PluginMetadata(String id, String name, String version, String mainClass, Path source) {
+    /**
+     * Validates and normalizes record components.
+     */
     public PluginMetadata {
         id = normalizeId(id);
         name = name == null || name.isBlank() ? id : name.trim();

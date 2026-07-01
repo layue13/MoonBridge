@@ -45,6 +45,12 @@ import java.util.concurrent.atomic.AtomicInteger;
                 StrataProxyQueryCli.SlowSinkCommand.class
         })
 public final class StrataProxyQueryCli implements Callable<Integer> {
+    /**
+     * Creates StrataProxyQueryCli.
+     */
+    public StrataProxyQueryCli() {
+    }
+
     @Option(names = "--host", defaultValue = "127.0.0.1", description = "Target host.")
     private String host;
 
@@ -54,11 +60,16 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
     @Option(names = "--timeout-ms", defaultValue = "5000", description = "Connect/read timeout in milliseconds.")
     private int timeoutMillis;
 
+    /**
+     * Runs this command-line entry point.
+      * @param args args value
+     */
     public static void main(String[] args) {
         System.exit(new CommandLine(new StrataProxyQueryCli()).execute(args));
     }
 
     @Override
+    /** Provides call. */
     public Integer call() {
         CommandLine.usage(this, System.out);
         return 0;
@@ -84,6 +95,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private String virtualHost;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             var address = root.address();
             var handshakeHost = virtualHost == null || virtualHost.isBlank() ? address.getHostString() : virtualHost;
@@ -147,6 +159,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             validateLoadOptions(connections, parallelism, settleMillis, probeTimeoutMillis);
             validateAcceptance("min-handshaken", minHandshaken);
@@ -308,6 +321,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             validateLoadOptions(connections, parallelism, settleMillis, probeTimeoutMillis);
             if (routes <= 0) {
@@ -501,6 +515,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             validateLoadOptions(connections, parallelism, 0, 1);
             if (packetsPerConnection < 0) {
@@ -725,6 +740,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             validateLoadOptions(connections, parallelism, 0, 1);
             if (packetsPerConnection < 0) {
@@ -926,6 +942,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() {
             var selectedProfile = profile.toLowerCase(Locale.ROOT);
             if (!selectedProfile.equals("smoke") && !selectedProfile.equals("acceptance")) {
@@ -1086,6 +1103,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private boolean json;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             validateLoadOptions(connections, parallelism, settleMillis, probeTimeoutMillis);
             validateAcceptance("min-connected", minConnected);
@@ -1209,6 +1227,7 @@ public final class StrataProxyQueryCli implements Callable<Integer> {
         private int backlog;
 
         @Override
+        /** Provides call. */
         public Integer call() throws Exception {
             if (durationMillis < 0) {
                 throw new IllegalArgumentException("duration-ms must not be negative");

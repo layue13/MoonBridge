@@ -192,6 +192,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel read. */
     public void channelRead(ChannelHandlerContext context, Object message) {
         if (!backend.isActive()) {
             ReferenceCountUtil.release(message);
@@ -261,12 +262,14 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel inactive. */
     public void channelInactive(ChannelHandlerContext context) {
         closeFrontendSide(true);
         closeBackend();
     }
 
     @Override
+    /** Provides exception caught. */
     public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
         context.close();
         closeFrontendSide(true);
@@ -554,11 +557,13 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
 
         @Override
+        /** Provides name. */
         public String name() {
             return name;
         }
 
         @Override
+        /** Provides send message. */
         public void sendMessage(String message) {
             var write = (Runnable) () -> {
                 var frame = MinecraftPlayMessages.systemChatFrame(

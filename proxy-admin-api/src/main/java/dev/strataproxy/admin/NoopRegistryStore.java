@@ -15,11 +15,13 @@ public enum NoopRegistryStore implements RegistryStore {
     INSTANCE;
 
     @Override
+    /** Provides load. */
     public List<ServerDescriptor> load() {
         return List.of();
     }
 
     @Override
+    /** Provides save. */
     public void save(Collection<RegisteredServer> servers) throws IOException {
     }
 }

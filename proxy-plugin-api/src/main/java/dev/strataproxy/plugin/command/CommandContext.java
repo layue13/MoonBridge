@@ -11,6 +11,9 @@ import java.util.List;
  * @param input original command line
  */
 public record CommandContext(CommandSource source, String label, List<String> arguments, String input) {
+    /**
+     * Validates and normalizes record components.
+     */
     public CommandContext {
         if (source == null) {
             throw new IllegalArgumentException("source must not be null");

@@ -13,6 +13,9 @@ public record MinecraftHandshake(
         String requestedHost,
         int requestedPort,
         int nextState) {
+    /**
+     * Validates host and port values parsed from the handshake packet.
+     */
     public MinecraftHandshake {
         if (requestedHost == null || requestedHost.isBlank()) {
             throw new IllegalArgumentException("requestedHost must not be blank");

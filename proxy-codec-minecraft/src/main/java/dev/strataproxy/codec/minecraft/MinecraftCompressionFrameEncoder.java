@@ -14,6 +14,8 @@ public final class MinecraftCompressionFrameEncoder extends MessageToMessageEnco
     private final MinecraftCompressionCodec codec;
 
     /**
+ * Documents this public API element.
+ *
      * @param threshold negotiated compression threshold
      */
     public MinecraftCompressionFrameEncoder(int threshold) {
@@ -30,6 +32,7 @@ public final class MinecraftCompressionFrameEncoder extends MessageToMessageEnco
     }
 
     @Override
+    /** Provides handler removed. */
     public void handlerRemoved(ChannelHandlerContext context) {
         codec.close();
     }

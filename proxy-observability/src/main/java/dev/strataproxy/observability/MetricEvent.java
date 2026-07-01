@@ -16,6 +16,9 @@ public record MetricEvent(
         Map<String, String> attributes,
         double value,
         Instant timestamp) {
+    /**
+     * Validates and normalizes record components.
+     */
     public MetricEvent {
         attributes = Map.copyOf(attributes == null ? Map.of() : attributes);
         timestamp = timestamp == null ? Instant.now() : timestamp;

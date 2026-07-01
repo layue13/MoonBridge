@@ -36,6 +36,8 @@ public final class MinecraftAuthRuntime {
     }
 
     /**
+     * Creates an offline-mode authentication runtime.
+     *
      * @return runtime that accepts offline-mode logins without encryption
      */
     public static MinecraftAuthRuntime offline() {

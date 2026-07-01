@@ -110,6 +110,7 @@ public final class MinecraftCompressionCodec implements AutoCloseable {
      * Releases the underlying deflater and inflater.
      */
     @Override
+    /** Provides close. */
     public void close() {
         deflater.end();
         inflater.end();

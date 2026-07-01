@@ -13,36 +13,50 @@ import java.util.logging.Logger;
  */
 public interface PluginContext {
     /**
+ * Provides metadata.
+ *
      * @return metadata loaded for the current plugin
      */
     PluginMetadata metadata();
 
     /**
+ * Provides commands.
+ *
      * @return command registry used to expose plugin commands
      */
     CommandRegistry commands();
 
     /**
+ * Provides events.
+ *
      * @return event bus for subscribing to proxy lifecycle and player events
      */
     EventBus events();
 
     /**
+ * Provides players.
+ *
      * @return player lookup and transfer service
      */
     PlayerService players();
 
     /**
+ * Provides servers.
+ *
      * @return backend server lookup service
      */
     ServerService servers();
 
     /**
+ * Provides scheduler.
+ *
      * @return scheduler for asynchronous and repeating plugin tasks
      */
     Scheduler scheduler();
 
     /**
+ * Provides logger.
+ *
      * @return plugin-scoped logger
      */
     Logger logger();

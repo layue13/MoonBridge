@@ -73,11 +73,13 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
     }
 
     @Override
+    /** Provides exception caught. */
     public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
         fail(context, "backend_login_exception");
     }
 
     @Override
+    /** Provides channel inactive. */
     public void channelInactive(ChannelHandlerContext context) {
         if (!terminal) {
             listener.backendLoginFailed(context.channel(), "backend_login_closed");

@@ -12,6 +12,12 @@ import java.util.concurrent.TimeUnit;
  * Scheduled executor-backed plugin scheduler.
  */
 public final class DefaultScheduler implements Scheduler, AutoCloseable {
+    /**
+     * Creates DefaultScheduler.
+     */
+    public DefaultScheduler() {
+    }
+
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
             task -> {
@@ -21,11 +27,13 @@ public final class DefaultScheduler implements Scheduler, AutoCloseable {
             });
 
     @Override
+    /** Provides run async. */
     public CompletableFuture<Void> runAsync(Runnable task) {
         return CompletableFuture.runAsync(task, executor);
     }
 
     @Override
+    /** Provides schedule repeating. */
     public AutoCloseable scheduleRepeating(Runnable task, Duration initialDelay, Duration interval) {
         var future = executor.scheduleAtFixedRate(
                 task,
@@ -36,6 +44,7 @@ public final class DefaultScheduler implements Scheduler, AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         executor.shutdownNow();
     }

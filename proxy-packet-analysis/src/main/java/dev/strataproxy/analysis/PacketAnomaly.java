@@ -19,6 +19,9 @@ public record PacketAnomaly(
         AnomalyAction action,
         String explanation,
         Instant timestamp) {
+    /**
+     * Validates and normalizes record components.
+     */
     public PacketAnomaly {
         timestamp = timestamp == null ? Instant.now() : timestamp;
     }

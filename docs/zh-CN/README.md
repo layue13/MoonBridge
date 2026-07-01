@@ -11,6 +11,7 @@ StrataProxy 是面向大型 Minecraft 模组服网络的新代理项目，不以
 - [命令速查](commands.md)：按任务整理 Admin CLI 和 query/load-test 命令。
 - [插件和游戏内命令](plugins.md)：玩家命令、插件 jar 入口和扩展点。
 - [Zstd 压缩调参指南](compression-zstd.md)：样本采集、dictionary 训练和上线建议。
+- [JavaDoc 参考](javadoc.md)：源码级 API 文档范围和生成流程。
 - [运维说明书](operations-manual.md)：完整生产运维、观测、排障和验收。
 - [英文文档目录](../README.md)
 

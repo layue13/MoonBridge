@@ -19,6 +19,8 @@ public final class RoutingBackendResolver implements BackendResolver, ServerTarg
     private final ServerRegistry registry;
 
     /**
+     * Creates a resolver without explicit transfer-target lookup.
+     *
      * @param router router used for handshake-based backend selection
      */
     public RoutingBackendResolver(ServerRouter router) {
@@ -26,6 +28,8 @@ public final class RoutingBackendResolver implements BackendResolver, ServerTarg
     }
 
     /**
+     * Creates a resolver with optional explicit transfer-target lookup.
+     *
      * @param router router used for handshake-based backend selection
      * @param registry optional registry used for explicit transfer targets
      */
@@ -35,6 +39,7 @@ public final class RoutingBackendResolver implements BackendResolver, ServerTarg
     }
 
     @Override
+    /** Provides resolve. */
     public Optional<RegisteredServer> resolve(MinecraftHandshake handshake, SocketAddress remoteAddress) {
         var inetRemote = remoteAddress instanceof InetSocketAddress inet ? inet : InetSocketAddress.createUnresolved("unknown", 0);
         var route = normalizeRouteHost(handshake.requestedHost());
@@ -57,6 +62,7 @@ public final class RoutingBackendResolver implements BackendResolver, ServerTarg
     }
 
     @Override
+    /** Provides resolve target. */
     public Optional<RegisteredServer> resolveTarget(String serverName) {
         if (registry == null || serverName == null || serverName.isBlank()) {
             return Optional.empty();

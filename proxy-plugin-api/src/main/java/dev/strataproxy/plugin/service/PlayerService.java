@@ -18,12 +18,16 @@ public interface PlayerService {
     CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer);
 
     /**
+ * Provides find.
+ *
      * @param playerName player name
      * @return player view when the player is currently online
      */
     Optional<PlayerView> find(String playerName);
 
     /**
+ * Provides online players.
+ *
      * @return snapshot of online players known to the proxy
      */
     Collection<PlayerView> onlinePlayers();

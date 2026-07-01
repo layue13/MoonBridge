@@ -70,28 +70,50 @@ public final class CustomPayloadAnomalyPolicy {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return production-oriented default policy thresholds
      */
     public static CustomPayloadAnomalyPolicy defaults() {
         return new CustomPayloadAnomalyPolicy(1 * 1024 * 1024, 256 * 1024, 2 * 1024 * 1024, 200, Duration.ofSeconds(10));
     }
 
+    /**
+     * Provides large payload warn bytes.
+      * @return result of the operation
+     */
     public int largePayloadWarnBytes() {
         return largePayloadWarnBytes;
     }
 
+    /**
+     * Provides unknown channel throttle bytes.
+      * @return result of the operation
+     */
     public int unknownChannelThrottleBytes() {
         return unknownChannelThrottleBytes;
     }
 
+    /**
+     * Provides modded handshake warn bytes.
+      * @return result of the operation
+     */
     public int moddedHandshakeWarnBytes() {
         return moddedHandshakeWarnBytes;
     }
 
+    /**
+     * Provides custom payload flood max count.
+      * @return result of the operation
+     */
     public int customPayloadFloodMaxCount() {
         return customPayloadFloodMaxCount;
     }
 
+    /**
+     * Provides custom payload flood window.
+      * @return result of the operation
+     */
     public Duration customPayloadFloodWindow() {
         return customPayloadFloodWindow;
     }

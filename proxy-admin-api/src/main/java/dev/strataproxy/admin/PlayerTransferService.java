@@ -17,6 +17,8 @@ public interface PlayerTransferService {
     CompletionStage<TransferResult> transferPlayer(String playerName, String targetServer);
 
     /**
+ * Provides unavailable.
+ *
      * @return service implementation that reports transfer support as unavailable
      */
     static PlayerTransferService unavailable() {
@@ -43,6 +45,8 @@ public interface PlayerTransferService {
             String sourceServer,
             String targetServer) {
         /**
+ * Documents this public API element.
+ *
          * @param player player name
          * @param sourceServer source backend name
          * @param targetServer target backend name
@@ -53,6 +57,8 @@ public interface PlayerTransferService {
         }
 
         /**
+ * Documents this public API element.
+ *
          * @param outcome failure outcome
          * @param player player name
          * @param sourceServer source backend name

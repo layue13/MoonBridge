@@ -68,47 +68,74 @@ public final class ProxyMetrics {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param packetAnomalySampling whether recent anomaly samples should be retained
      */
     public ProxyMetrics(boolean packetAnomalySampling) {
         this.packetAnomalySampling = packetAnomalySampling;
     }
 
+    /** Provides accepted connection. */
     public void acceptedConnection() {
         acceptedConnections.increment();
         activeConnections.incrementAndGet();
     }
 
+    /** Provides closed connection. */
     public void closedConnection() {
         decrementGauge(activeConnections);
     }
 
+    /** Provides rejected connection. */
     public void rejectedConnection() {
         rejectedConnection("unspecified");
     }
 
+    /**
+     * Provides rejected connection.
+      * @param reason reason value
+     */
     public void rejectedConnection(String reason) {
         var normalized = reason == null || reason.isBlank() ? "unspecified" : sanitize(reason.trim());
         rejectedConnections.increment();
         rejectedConnectionsByReason.computeIfAbsent(normalized, ignored -> new LongAdder()).increment();
     }
 
+    /** Provides handshake timeout. */
     public void handshakeTimeout() {
         handshakeTimeouts.increment();
     }
 
+    /**
+     * Provides routed connection.
+     */
     public void routedConnection() {
         routedConnections.increment();
     }
 
+    /**
+     * Provides server connection opened.
+      * @param server server value
+     */
     public void serverConnectionOpened(String server) {
         serverConnections(server).connectionOpened();
     }
 
+    /**
+     * Provides server connection closed.
+      * @param server server value
+     */
     public void serverConnectionClosed(String server) {
         serverConnections(server).connectionClosed();
     }
 
+    /**
+     * Provides player session started.
+      * @param player player value
+      * @param server server value
+      * @param remoteAddress remote address value
+     */
     public void playerSessionStarted(String player, String server, String remoteAddress) {
         if (player == null || player.isBlank()) {
             throw new IllegalArgumentException("player must not be blank");
@@ -123,47 +150,93 @@ public final class ProxyMetrics {
                 Instant.now()));
     }
 
+    /**
+     * Provides player session closed.
+      * @param player player value
+     */
     public void playerSessionClosed(String player) {
         if (player != null && !player.isBlank()) {
             playerSessions.remove(player.trim());
         }
     }
 
+    /** Provides failed route. */
     public void failedRoute() {
         failedRoutes.increment();
     }
 
+    /**
+     * Provides backend connect failure.
+     */
     public void backendConnectFailure() {
         backendConnectFailures.increment();
     }
 
+    /**
+     * Provides backend replacement.
+      * @param outcome outcome value
+     */
     public void backendReplacement(String outcome) {
         var normalized = outcome == null || outcome.isBlank() ? "unspecified" : sanitize(outcome.trim());
         backendReplacements.computeIfAbsent(normalized, ignored -> new LongAdder()).increment();
     }
 
+    /**
+     * Provides frontend to backend bytes.
+      * @param bytes bytes value
+     */
     public void frontendToBackendBytes(long bytes) {
         frontendToBackendBytes.add(bytes);
     }
 
+    /**
+     * Provides backend to frontend bytes.
+      * @param bytes bytes value
+     */
     public void backendToFrontendBytes(long bytes) {
         backendToFrontendBytes.add(bytes);
     }
 
+    /**
+     * Provides frontend to backend bytes.
+      * @param server server value
+      * @param bytes bytes value
+     */
     public void frontendToBackendBytes(String server, long bytes) {
         frontendToBackendBytes(bytes);
         serverTraffic(server).frontendToBackendBytes.add(bytes);
     }
 
+    /**
+     * Provides backend to frontend bytes.
+      * @param server server value
+      * @param bytes bytes value
+     */
     public void backendToFrontendBytes(String server, long bytes) {
         backendToFrontendBytes(bytes);
         serverTraffic(server).backendToFrontendBytes.add(bytes);
     }
 
+    /**
+     * Provides packet anomaly.
+      * @param rule rule value
+     */
     public void packetAnomaly(String rule) {
         packetAnomaly(rule, "", "", "", "", -1, -1, -1, "");
     }
 
+    /**
+     * Provides packet anomaly.
+      * @param rule rule value
+      * @param remoteAddress remote address value
+      * @param server server value
+      * @param direction direction value
+      * @param protocolState protocol state value
+      * @param packetId packet id value
+      * @param rawSize raw size value
+      * @param compressedSize compressed size value
+      * @param detail detail value
+     */
     public void packetAnomaly(
             String rule,
             String remoteAddress,
@@ -194,6 +267,15 @@ public final class ProxyMetrics {
                 Instant.now()));
     }
 
+    /**
+     * Provides packet traffic.
+      * @param server server value
+      * @param direction direction value
+      * @param protocolState protocol state value
+      * @param packetId packet id value
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+     */
     public void packetTraffic(
             String server,
             CompressionDirection direction,
@@ -218,6 +300,15 @@ public final class ProxyMetrics {
                 ignored -> new PacketTrafficCounters()).add(rawBytes, compressedBytes);
     }
 
+    /**
+     * Provides custom payload.
+      * @param server server value
+      * @param direction direction value
+      * @param kind kind value
+      * @param channel channel value
+      * @param payloadBytes payload bytes value
+      * @param compressedBytes compressed bytes value
+     */
     public void customPayload(
             String server,
             CompressionDirection direction,
@@ -228,6 +319,19 @@ public final class ProxyMetrics {
         customPayload(server, direction, kind, channel, payloadBytes, compressedBytes, "", "", "CONFIGURATION", -1);
     }
 
+    /**
+     * Provides custom payload.
+      * @param server server value
+      * @param direction direction value
+      * @param kind kind value
+      * @param channel channel value
+      * @param payloadBytes payload bytes value
+      * @param compressedBytes compressed bytes value
+      * @param player player value
+      * @param remoteAddress remote address value
+      * @param protocolState protocol state value
+      * @param packetId packet id value
+     */
     public void customPayload(
             String server,
             CompressionDirection direction,
@@ -273,6 +377,12 @@ public final class ProxyMetrics {
                 Instant.now()));
     }
 
+    /**
+     * Provides relay backpressure.
+      * @param server server value
+      * @param direction direction value
+      * @param bytesBeforeWritable bytes before writable value
+     */
     public void relayBackpressure(String server, CompressionDirection direction, long bytesBeforeWritable) {
         if (server == null || server.isBlank()) {
             throw new IllegalArgumentException("server must not be blank");
@@ -285,6 +395,16 @@ public final class ProxyMetrics {
                 ignored -> new RelayBackpressureCounters()).record(Math.max(0, bytesBeforeWritable));
     }
 
+    /**
+     * Provides start payload capture.
+      * @param id id value
+      * @param server server value
+      * @param direction direction value
+      * @param maxSamples max samples value
+      * @param maxBytesPerSample max bytes per sample value
+      * @param expiresAt expires at value
+      * @return result of the operation
+     */
     public PayloadCapture startPayloadCapture(
             String id,
             String server,
@@ -315,10 +435,19 @@ public final class ProxyMetrics {
         return capture;
     }
 
+    /**
+     * Provides stop payload capture.
+      * @param id id value
+      * @return result of the operation
+     */
     public boolean stopPayloadCapture(String id) {
         return id != null && payloadCaptures.remove(id) != null;
     }
 
+    /**
+     * Provides payload captures.
+      * @return result of the operation
+     */
     public List<PayloadCapture> payloadCaptures() {
         expirePayloadCaptures();
         return payloadCaptures.values().stream()
@@ -327,12 +456,23 @@ public final class ProxyMetrics {
                 .toList();
     }
 
+    /**
+     * Provides payload capture samples.
+      * @param id id value
+      * @return result of the operation
+     */
     public List<PayloadCaptureSample> payloadCaptureSamples(String id) {
         expirePayloadCaptures();
         var capture = payloadCaptures.get(id);
         return capture == null ? List.of() : capture.samples();
     }
 
+    /**
+     * Provides payload capture request.
+      * @param server server value
+      * @param direction direction value
+      * @return result of the operation
+     */
     public PayloadCaptureRequest payloadCaptureRequest(String server, CompressionDirection direction) {
         if (server == null || server.isBlank() || direction == null || payloadCaptures.isEmpty()) {
             return PayloadCaptureRequest.none();
@@ -352,6 +492,14 @@ public final class ProxyMetrics {
         return maxBytes <= 0 ? PayloadCaptureRequest.none() : new PayloadCaptureRequest(true, maxBytes);
     }
 
+    /**
+     * Provides payload captured.
+      * @param server server value
+      * @param direction direction value
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+      * @param prefixBytes prefix bytes value
+     */
     public void payloadCaptured(
             String server,
             CompressionDirection direction,
@@ -361,6 +509,16 @@ public final class ProxyMetrics {
         payloadCaptured(server, direction, rawBytes, compressedBytes, prefixBytes, "", "");
     }
 
+    /**
+     * Provides payload captured.
+      * @param server server value
+      * @param direction direction value
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+      * @param prefixBytes prefix bytes value
+      * @param player player value
+      * @param remoteAddress remote address value
+     */
     public void payloadCaptured(
             String server,
             CompressionDirection direction,
@@ -387,20 +545,46 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Provides compression sample.
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+      * @param cpuNanos cpu nanos value
+     */
     public void compressionSample(long rawBytes, long compressedBytes, long cpuNanos) {
         compression.add(rawBytes, compressedBytes, cpuNanos);
     }
 
+    /**
+     * Provides compression sample.
+      * @param server server value
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+      * @param cpuNanos cpu nanos value
+     */
     public void compressionSample(String server, long rawBytes, long compressedBytes, long cpuNanos) {
         compressionSample(rawBytes, compressedBytes, cpuNanos);
         serverCompression(server).add(rawBytes, compressedBytes, cpuNanos);
     }
 
+    /**
+     * Provides compression sample.
+      * @param server server value
+      * @param direction direction value
+      * @param rawBytes raw bytes value
+      * @param compressedBytes compressed bytes value
+      * @param cpuNanos cpu nanos value
+     */
     public void compressionSample(String server, CompressionDirection direction, long rawBytes, long compressedBytes, long cpuNanos) {
         compressionSample(server, rawBytes, compressedBytes, cpuNanos);
         serverCompression(server, direction).add(rawBytes, compressedBytes, cpuNanos);
     }
 
+    /**
+     * Provides compression negotiated.
+      * @param server server value
+      * @param threshold threshold value
+     */
     public void compressionNegotiated(String server, int threshold) {
         if (threshold < 0) {
             throw new IllegalArgumentException("compression threshold must be non-negative");
@@ -409,6 +593,13 @@ public final class ProxyMetrics {
         serverCompressionThreshold(server).set(threshold);
     }
 
+    /**
+     * Provides compression decision.
+      * @param server server value
+      * @param direction direction value
+      * @param action action value
+      * @param threshold threshold value
+     */
     public void compressionDecision(String server, CompressionDirection direction, String action, int threshold) {
         if (server == null || server.isBlank()) {
             throw new IllegalArgumentException("server must not be blank");
@@ -424,10 +615,23 @@ public final class ProxyMetrics {
                 ignored -> new LongAdder()).increment();
     }
 
+    /**
+     * Provides compression rewrite.
+      * @param server server value
+      * @param direction direction value
+      * @param outcome outcome value
+     */
     public void compressionRewrite(String server, CompressionDirection direction, String outcome) {
         compressionRewrite(server, direction, outcome, 0);
     }
 
+    /**
+     * Provides compression rewrite.
+      * @param server server value
+      * @param direction direction value
+      * @param outcome outcome value
+      * @param cpuNanos cpu nanos value
+     */
     public void compressionRewrite(String server, CompressionDirection direction, String outcome, long cpuNanos) {
         if (server == null || server.isBlank()) {
             throw new IllegalArgumentException("server must not be blank");
@@ -446,19 +650,36 @@ public final class ProxyMetrics {
                 ignored -> new CompressionRewriteCounters()).add(cpuNanos);
     }
 
+    /**
+     * Provides current event loop delay nanos.
+      * @return result of the operation
+     */
     public long currentEventLoopDelayNanos() {
         return eventLoopDelayNanos.get();
     }
 
+    /**
+     * Provides event loop delay nanos.
+      * @param nanos nanos value
+     */
     public void eventLoopDelayNanos(long nanos) {
         eventLoopDelayNanos.set(Math.max(0, nanos));
         maxEventLoopDelayNanos.accumulateAndGet(Math.max(0, nanos), Math::max);
     }
 
+    /**
+     * Provides pooled direct memory bytes.
+      * @param bytes bytes value
+     */
     public void pooledDirectMemoryBytes(long bytes) {
         pooledDirectMemoryBytes.set(Math.max(0, bytes));
     }
 
+    /**
+     * Provides network transport.
+      * @param name name value
+      * @param nativeTransport native transport value
+     */
     public void networkTransport(String name, boolean nativeTransport) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("transport name must not be blank");
@@ -466,6 +687,18 @@ public final class ProxyMetrics {
         networkTransport.set(new NetworkTransport(name, nativeTransport));
     }
 
+    /**
+     * Provides native runtime.
+      * @param enabled enabled value
+      * @param os os value
+      * @param arch arch value
+      * @param detectionSource detection source value
+      * @param tlsProvider tls provider value
+      * @param compressionProvider compression provider value
+      * @param preferNativeTransport prefer native transport value
+      * @param requireNativeTransport require native transport value
+      * @param features features value
+     */
     public void nativeRuntime(
             boolean enabled,
             String os,
@@ -488,6 +721,10 @@ public final class ProxyMetrics {
                 features == null ? Map.of() : Map.copyOf(features)));
     }
 
+    /**
+     * Provides snapshot.
+      * @return result of the operation
+     */
     public Snapshot snapshot() {
         expirePayloadCaptures();
         return new Snapshot(
@@ -661,7 +898,9 @@ public final class ProxyMetrics {
 
     /**
      * Per-server byte counters split by relay direction.
-     */
+ * @param frontendToBackendBytes frontend to backend bytes
+ * @param backendToFrontendBytes backend to frontend bytes
+ */
     public record ServerTraffic(long frontendToBackendBytes, long backendToFrontendBytes) {
     }
 
@@ -685,13 +924,19 @@ public final class ProxyMetrics {
 
     /**
      * Per-server routed and active connection counters.
-     */
+ * @param routedConnections routed connections
+ * @param activeConnections active connections
+ */
     public record ServerConnections(long routedConnections, long activeConnections) {
     }
 
     /**
      * Active player session tracked by the relay.
-     */
+ * @param player player
+ * @param server server
+ * @param remoteAddress remote address
+ * @param connectedAt connected at
+ */
     public record PlayerSession(String player, String server, String remoteAddress, Instant connectedAt) {
     }
 
@@ -713,7 +958,10 @@ public final class ProxyMetrics {
 
     /**
      * Aggregated packet traffic counters.
-     */
+ * @param packets packets
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ */
     public record PacketTraffic(long packets, long rawBytes, long compressedBytes) {
     }
 
@@ -751,7 +999,14 @@ public final class ProxyMetrics {
 
     /**
      * Aggregated custom payload traffic counters.
-     */
+ * @param packets packets
+ * @param payloadBytes payload bytes
+ * @param compressedBytes compressed bytes
+ * @param maxPayloadBytes max payload bytes
+ * @param maxCompressedBytes max compressed bytes
+ * @param firstSeen first seen
+ * @param lastSeen last seen
+ */
     public record CustomPayloadTraffic(
             long packets,
             long payloadBytes,
@@ -764,7 +1019,19 @@ public final class ProxyMetrics {
 
     /**
      * Recent custom payload sample retained for diagnostics.
-     */
+ * @param sequence sequence
+ * @param server server
+ * @param direction direction
+ * @param kind kind
+ * @param channel channel
+ * @param payloadBytes payload bytes
+ * @param compressedBytes compressed bytes
+ * @param player player
+ * @param remoteAddress remote address
+ * @param protocolState protocol state
+ * @param packetId packet id
+ * @param timestamp timestamp
+ */
     public record CustomPayloadSample(
             long sequence,
             String server,
@@ -798,7 +1065,10 @@ public final class ProxyMetrics {
 
     /**
      * Aggregated relay backpressure counters.
-     */
+ * @param events events
+ * @param lastBytesBeforeWritable last bytes before writable
+ * @param maxBytesBeforeWritable max bytes before writable
+ */
     public record RelayBackpressure(long events, long lastBytesBeforeWritable, long maxBytesBeforeWritable) {
     }
 
@@ -853,7 +1123,13 @@ public final class ProxyMetrics {
 
     /**
      * Active payload capture configuration.
-     */
+ * @param id id
+ * @param server server
+ * @param direction direction
+ * @param maxSamples max samples
+ * @param maxBytesPerSample max bytes per sample
+ * @param expiresAt expires at
+ */
     public record PayloadCapture(
             String id,
             String server,
@@ -865,7 +1141,9 @@ public final class ProxyMetrics {
 
     /**
      * Per-key payload capture request state.
-     */
+ * @param enabled enabled
+ * @param maxBytesPerSample max bytes per sample
+ */
     public record PayloadCaptureRequest(boolean enabled, int maxBytesPerSample) {
         private static PayloadCaptureRequest none() {
             return new PayloadCaptureRequest(false, 0);
@@ -874,7 +1152,17 @@ public final class ProxyMetrics {
 
     /**
      * Captured payload prefix sample.
-     */
+ * @param sequence sequence
+ * @param captureId capture id
+ * @param server server
+ * @param direction direction
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ * @param prefixBytes prefix bytes
+ * @param player player
+ * @param remoteAddress remote address
+ * @param timestamp timestamp
+ */
     public record PayloadCaptureSample(
             long sequence,
             String captureId,
@@ -913,13 +1201,22 @@ public final class ProxyMetrics {
 
     /**
      * Compression byte and CPU accounting.
-     */
+ * @param samples samples
+ * @param rawBytes raw bytes
+ * @param compressedBytes compressed bytes
+ * @param savedBytes saved bytes
+ * @param cpuNanos cpu nanos
+ */
     public record CompressionAudit(
             long samples,
             long rawBytes,
             long compressedBytes,
             long savedBytes,
             long cpuNanos) {
+        /**
+         * Provides ratio.
+          * @return result of the operation
+         */
         public double ratio() {
             return rawBytes == 0 ? 1.0d : (double) compressedBytes / rawBytes;
         }
@@ -927,13 +1224,24 @@ public final class ProxyMetrics {
 
     /**
      * Network transport currently selected by the server.
-     */
+ * @param name name
+ * @param nativeTransport native transport
+ */
     public record NetworkTransport(String name, boolean nativeTransport) {
     }
 
     /**
      * Native runtime state reported in metrics snapshots.
-     */
+ * @param enabled enabled
+ * @param os os
+ * @param arch arch
+ * @param detectionSource detection source
+ * @param tlsProvider tls provider
+ * @param compressionProvider compression provider
+ * @param preferNativeTransport prefer native transport
+ * @param requireNativeTransport require native transport
+ * @param features features
+ */
     public record NativeRuntimeInfo(
             boolean enabled,
             String os,
@@ -951,7 +1259,18 @@ public final class ProxyMetrics {
 
     /**
      * Recent packet anomaly sample retained for diagnostics.
-     */
+ * @param sequence sequence
+ * @param rule rule
+ * @param remoteAddress remote address
+ * @param server server
+ * @param direction direction
+ * @param protocolState protocol state
+ * @param packetId packet id
+ * @param rawSize raw size
+ * @param compressedSize compressed size
+ * @param detail detail
+ * @param timestamp timestamp
+ */
     public record PacketAnomalySample(
             long sequence,
             String rule,
@@ -970,7 +1289,13 @@ public final class ProxyMetrics {
      * Relay direction used by compression and traffic metrics.
      */
     public enum CompressionDirection {
+        /**
+         * Enum constant for frontend to backend.
+         */
         FRONTEND_TO_BACKEND("frontend_to_backend"),
+        /**
+         * Enum constant for backend to frontend.
+         */
         BACKEND_TO_FRONTEND("backend_to_frontend");
 
         private final String label;
@@ -979,6 +1304,10 @@ public final class ProxyMetrics {
             this.label = label;
         }
 
+        /**
+         * Provides label.
+          * @return result of the operation
+         */
         public String label() {
             return label;
         }
@@ -986,19 +1315,28 @@ public final class ProxyMetrics {
 
     /**
      * Map key for per-server compression metrics split by direction.
-     */
+ * @param server server
+ * @param direction direction
+ */
     public record CompressionDirectionKey(String server, CompressionDirection direction) {
     }
 
     /**
      * Map key for compression strategy decisions.
-     */
+ * @param server server
+ * @param direction direction
+ * @param action action
+ * @param threshold threshold
+ */
     public record CompressionDecisionKey(String server, CompressionDirection direction, String action, int threshold) {
     }
 
     /**
      * Map key for compressed-frame rewrite outcomes.
-     */
+ * @param server server
+ * @param direction direction
+ * @param outcome outcome
+ */
     public record CompressionRewriteKey(String server, CompressionDirection direction, String outcome) {
     }
 
@@ -1018,31 +1356,77 @@ public final class ProxyMetrics {
 
     /**
      * Aggregated compressed-frame rewrite counters.
-     */
+ * @param count count
+ * @param cpuNanos cpu nanos
+ */
     public record CompressionRewrite(long count, long cpuNanos) {
     }
 
     /**
      * Map key for packet traffic metrics.
-     */
+ * @param server server
+ * @param direction direction
+ * @param protocolState protocol state
+ * @param packetId packet id
+ */
     public record PacketTrafficKey(String server, CompressionDirection direction, String protocolState, int packetId) {
     }
 
     /**
      * Map key for custom payload metrics.
-     */
+ * @param server server
+ * @param direction direction
+ * @param kind kind
+ * @param channel channel
+ */
     public record CustomPayloadKey(String server, CompressionDirection direction, String kind, String channel) {
     }
 
     /**
      * Map key for relay backpressure metrics.
-     */
+ * @param server server
+ * @param direction direction
+ */
     public record RelayBackpressureKey(String server, CompressionDirection direction) {
     }
 
     /**
      * Complete point-in-time metrics snapshot.
-     */
+ * @param acceptedConnections accepted connections
+ * @param activeConnections active connections
+ * @param rejectedConnections rejected connections
+ * @param rejectedConnectionsByReason rejected connections by reason
+ * @param handshakeTimeouts handshake timeouts
+ * @param routedConnections routed connections
+ * @param failedRoutes failed routes
+ * @param backendConnectFailures backend connect failures
+ * @param backendReplacements backend replacements
+ * @param frontendToBackendBytes frontend to backend bytes
+ * @param backendToFrontendBytes backend to frontend bytes
+ * @param compressionNegotiations compression negotiations
+ * @param eventLoopDelayNanos event loop delay nanos
+ * @param maxEventLoopDelayNanos max event loop delay nanos
+ * @param pooledDirectMemoryBytes pooled direct memory bytes
+ * @param networkTransport network transport
+ * @param nativeRuntime native runtime
+ * @param packetAnomalies packet anomalies
+ * @param recentPacketAnomalies recent packet anomalies
+ * @param serverTraffic server traffic
+ * @param serverConnections server connections
+ * @param playerSessions player sessions
+ * @param packetTraffic packet traffic
+ * @param customPayloads custom payloads
+ * @param recentCustomPayloads recent custom payloads
+ * @param relayBackpressure relay backpressure
+ * @param compression compression
+ * @param serverCompression server compression
+ * @param serverCompressionByDirection server compression by direction
+ * @param serverCompressionThresholds server compression thresholds
+ * @param compressionDecisions compression decisions
+ * @param compressionRewrites compression rewrites
+ * @param payloadCaptures payload captures
+ * @param payloadCaptureSamples payload capture samples
+ */
     public record Snapshot(
             long acceptedConnections,
             long activeConnections,

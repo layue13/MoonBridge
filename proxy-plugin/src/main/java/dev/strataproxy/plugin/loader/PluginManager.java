@@ -133,6 +133,8 @@ public final class PluginManager implements AutoCloseable {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return metadata for currently loaded plugins
      */
     public List<PluginMetadata> plugins() {
@@ -140,6 +142,7 @@ public final class PluginManager implements AutoCloseable {
     }
 
     @Override
+    /** Provides close. */
     public void close() {
         var reverse = new ArrayList<>(plugins);
         java.util.Collections.reverse(reverse);

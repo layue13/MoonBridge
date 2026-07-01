@@ -21,6 +21,9 @@ public record AdminSnapshot(
         List<RegisteredServer> servers,
         List<MetricEvent> recentEvents,
         Instant createdAt) {
+    /**
+     * Validates and normalizes record components.
+     */
     public AdminSnapshot {
         servers = List.copyOf(servers == null ? List.of() : servers);
         recentEvents = List.copyOf(recentEvents == null ? List.of() : recentEvents);

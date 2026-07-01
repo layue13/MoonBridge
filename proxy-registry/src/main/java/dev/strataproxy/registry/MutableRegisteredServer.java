@@ -23,6 +23,7 @@ final class MutableRegisteredServer implements RegisteredServer {
     }
 
     @Override
+    /** Provides descriptor. */
     public ServerDescriptor descriptor() {
         var descriptor = this.descriptor.get();
         var drainMode = draining.get();
@@ -43,16 +44,19 @@ final class MutableRegisteredServer implements RegisteredServer {
     }
 
     @Override
+    /** Provides health. */
     public ServerHealth health() {
         return health.get();
     }
 
     @Override
+    /** Provides load. */
     public ServerLoad load() {
         return load.get();
     }
 
     @Override
+    /** Provides draining. */
     public boolean draining() {
         return draining.get();
     }

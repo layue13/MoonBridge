@@ -23,6 +23,8 @@ public interface CommandRegistry {
     boolean unregister(String name);
 
     /**
+ * Provides commands.
+ *
      * @return snapshot of registered command definitions
      */
     Collection<CommandSpec> commands();

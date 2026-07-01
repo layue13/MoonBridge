@@ -27,6 +27,8 @@ public final class JsonRegistryStore implements RegistryStore {
     private final Path path;
 
     /**
+ * Documents this public API element.
+ *
      * @param path JSON registry file path
      */
     public JsonRegistryStore(Path path) {
@@ -34,6 +36,7 @@ public final class JsonRegistryStore implements RegistryStore {
     }
 
     @Override
+    /** Provides load. */
     public List<ServerDescriptor> load() throws IOException {
         if (Files.notExists(path)) {
             return List.of();
@@ -43,6 +46,7 @@ public final class JsonRegistryStore implements RegistryStore {
     }
 
     @Override
+    /** Provides save. */
     public void save(java.util.Collection<RegisteredServer> servers) throws IOException {
         var parent = path.toAbsolutePath().getParent();
         if (parent != null) {
@@ -64,17 +68,35 @@ public final class JsonRegistryStore implements RegistryStore {
      * Jackson-bound persisted registry entry.
      */
     public static final class RegistryEntry {
+        /**
+         * Creates an empty registry entry for JSON binding.
+         */
+        public RegistryEntry() {
+        }
+
+        /** Public field for name. */
         public String name;
+        /** Public field for address. */
         public String address;
+        /** Public field for tags. */
         public Set<String> tags = Set.of();
+        /** Public field for capabilities. */
         public Set<String> capabilities = Set.of();
+        /** Public field for min protocol. */
         public int minProtocol;
+        /** Public field for max protocol. */
         public int maxProtocol;
+        /** Public field for protocol name. */
         public String protocolName = "any";
+        /** Public field for weight. */
         public int weight = 100;
+        /** Public field for soft capacity. */
         public int softCapacity = 500;
+        /** Public field for hard capacity. */
         public int hardCapacity = 600;
+        /** Public field for drain mode. */
         public boolean drainMode = false;
+        /** Public field for metadata. */
         public Map<String, String> metadata = Map.of();
 
         static RegistryEntry from(ServerDescriptor descriptor) {

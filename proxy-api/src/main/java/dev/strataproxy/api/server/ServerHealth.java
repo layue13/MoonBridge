@@ -18,6 +18,9 @@ public record ServerHealth(
         double recentFailureRate,
         String reason,
         Instant updatedAt) {
+    /**
+     * Validates and normalizes record components.
+     */
     public ServerHealth {
         status = Objects.requireNonNull(status, "status");
         reason = reason == null ? "" : reason;
@@ -41,6 +44,8 @@ public record ServerHealth(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return {@code true} when routers may still send new players to this server
      */
     public boolean canReceiveNewConnections() {

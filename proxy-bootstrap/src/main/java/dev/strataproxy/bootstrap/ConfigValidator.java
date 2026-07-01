@@ -15,6 +15,12 @@ import java.util.UUID;
  * Performs semantic validation of loaded configuration before startup.
  */
 public final class ConfigValidator {
+    /**
+     * Creates ConfigValidator.
+     */
+    public ConfigValidator() {
+    }
+
     private static final int MIN_SAFE_MAX_FRAME_BYTES = 1_024;
     private static final java.util.Set<String> NATIVE_FEATURES = java.util.Set.of(
             "aes",

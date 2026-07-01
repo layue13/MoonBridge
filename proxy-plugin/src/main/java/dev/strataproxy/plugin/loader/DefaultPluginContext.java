@@ -36,36 +36,43 @@ final class DefaultPluginContext implements PluginContext {
     }
 
     @Override
+    /** Provides metadata. */
     public PluginMetadata metadata() {
         return metadata;
     }
 
     @Override
+    /** Provides commands. */
     public CommandRegistry commands() {
         return commands;
     }
 
     @Override
+    /** Provides events. */
     public EventBus events() {
         return events;
     }
 
     @Override
+    /** Provides players. */
     public PlayerService players() {
         return players;
     }
 
     @Override
+    /** Provides servers. */
     public ServerService servers() {
         return servers;
     }
 
     @Override
+    /** Provides scheduler. */
     public Scheduler scheduler() {
         return scheduler;
     }
 
     @Override
+    /** Provides logger. */
     public Logger logger() {
         return logger;
     }

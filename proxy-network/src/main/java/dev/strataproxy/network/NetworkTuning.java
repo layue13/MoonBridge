@@ -25,6 +25,17 @@ public record NetworkTuning(
         int maxNewConnectionsPerAddressPerSecond,
         int initialHandshakeTimeoutMillis,
         boolean proxyProtocol) {
+    /**
+     * Creates tuning with connection rate limits disabled and PROXY protocol disabled.
+     *
+     * @param maxFrameBytes maximum inbound frame size
+     * @param connectTimeoutMillis backend connect timeout
+     * @param writeBufferLowBytes low write-buffer watermark
+     * @param writeBufferHighBytes high write-buffer watermark
+     * @param maxConnections global concurrent connection limit
+     * @param maxConnectionsPerAddress concurrent connection limit per client address
+     * @param initialHandshakeTimeoutMillis timeout for the initial Minecraft handshake
+     */
     public NetworkTuning(
             int maxFrameBytes,
             int connectTimeoutMillis,
@@ -46,6 +57,18 @@ public record NetworkTuning(
                 false);
     }
 
+    /**
+     * Creates tuning with connection rate limits disabled.
+     *
+     * @param maxFrameBytes maximum inbound frame size
+     * @param connectTimeoutMillis backend connect timeout
+     * @param writeBufferLowBytes low write-buffer watermark
+     * @param writeBufferHighBytes high write-buffer watermark
+     * @param maxConnections global concurrent connection limit
+     * @param maxConnectionsPerAddress concurrent connection limit per client address
+     * @param initialHandshakeTimeoutMillis timeout for the initial Minecraft handshake
+     * @param proxyProtocol whether frontend connections may start with HAProxy PROXY protocol v1
+     */
     public NetworkTuning(
             int maxFrameBytes,
             int connectTimeoutMillis,
@@ -68,6 +91,9 @@ public record NetworkTuning(
                 proxyProtocol);
     }
 
+    /**
+     * Validates the network bounds used by Netty handlers.
+     */
     public NetworkTuning {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
@@ -90,6 +116,8 @@ public record NetworkTuning(
     }
 
     /**
+     * Creates the default production-oriented network tuning.
+     *
      * @return default production network tuning
      */
     public static NetworkTuning defaults() {

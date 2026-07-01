@@ -71,11 +71,13 @@ record MinecraftLoginStart(String username, Optional<ChatSessionKey> chatSession
         }
 
         @Override
+        /** Provides encoded public key. */
         public byte[] encodedPublicKey() {
             return encodedPublicKey.clone();
         }
 
         @Override
+        /** Provides signature. */
         public byte[] signature() {
             return signature.clone();
         }

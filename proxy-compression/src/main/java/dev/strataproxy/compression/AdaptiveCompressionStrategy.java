@@ -4,10 +4,17 @@ package dev.strataproxy.compression;
  * Compression strategy that adapts thresholds from packet size, CPU load, latency, and compression history.
  */
 public final class AdaptiveCompressionStrategy implements CompressionStrategy {
+    /**
+     * Creates AdaptiveCompressionStrategy.
+     */
+    public AdaptiveCompressionStrategy() {
+    }
+
     private static final int SMALL_HIGH_FREQUENCY_CUTOFF = 384;
     private static final int LARGE_PAYLOAD_CUTOFF = 1_048_576;
 
     @Override
+    /** Provides choose. */
     public CompressionAction choose(CompressionContext context) {
         var packet = context.packet();
         if (packet.rawSize() < SMALL_HIGH_FREQUENCY_CUTOFF) {

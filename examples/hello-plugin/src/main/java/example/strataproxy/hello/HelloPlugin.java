@@ -9,9 +9,16 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public final class HelloPlugin implements ProxyPlugin {
+    /**
+     * Creates HelloPlugin.
+     */
+    public HelloPlugin() {
+    }
+
     private PluginContext context;
 
     @Override
+    /** Provides on load. */
     public void onLoad(PluginContext context) {
         this.context = context;
         context.commands().register(new CommandSpec(
@@ -23,6 +30,7 @@ public final class HelloPlugin implements ProxyPlugin {
     }
 
     @Override
+    /** Provides on enable. */
     public void onEnable() {
         context.logger().info("Hello plugin enabled");
     }

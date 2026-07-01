@@ -9,6 +9,8 @@ public final class MetadataPacketClassifier {
     private final PacketRegistry registry;
 
     /**
+ * Documents this public API element.
+ *
      * @param registry packet metadata registry
      */
     public MetadataPacketClassifier(PacketRegistry registry) {

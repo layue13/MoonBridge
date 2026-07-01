@@ -23,6 +23,7 @@ final class ConnectionAdmissionHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel active. */
     public void channelActive(ChannelHandlerContext context) throws Exception {
         if (waitForProxyProtocol) {
             context.read();
@@ -32,6 +33,7 @@ final class ConnectionAdmissionHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides user event triggered. */
     public void userEventTriggered(ChannelHandlerContext context, Object event) throws Exception {
         if (event == ProxyProtocolV1Handler.ProxyProtocolReady.INSTANCE) {
             acquire(context, ClientAddress.socketAddress(context.channel()));
@@ -58,6 +60,7 @@ final class ConnectionAdmissionHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    /** Provides channel inactive. */
     public void channelInactive(ChannelHandlerContext context) throws Exception {
         if (!released) {
             released = true;

@@ -23,12 +23,17 @@ public record NativeRuntimeOptions(
         boolean preferNativeCompression,
         Set<NativeFeature> disabledFeatures,
         Set<NativeFeature> forcedFeatures) {
+    /**
+     * Validates and normalizes record components.
+     */
     public NativeRuntimeOptions {
         disabledFeatures = disabledFeatures == null ? Set.of() : Set.copyOf(disabledFeatures);
         forcedFeatures = forcedFeatures == null ? Set.of() : Set.copyOf(forcedFeatures);
     }
 
     /**
+ * Documents this public API element.
+ *
      * @return default runtime options for production startup
      */
     public static NativeRuntimeOptions defaults() {

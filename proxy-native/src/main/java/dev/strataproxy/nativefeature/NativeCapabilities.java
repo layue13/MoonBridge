@@ -21,6 +21,9 @@ public record NativeCapabilities(
         String detectionSource,
         String preferredTlsProvider,
         String preferredCompressionProvider) {
+    /**
+     * Validates and normalizes record components.
+     */
     public NativeCapabilities {
         os = os == null || os.isBlank() ? "unknown" : os;
         arch = arch == null || arch.isBlank() ? "unknown" : arch;
@@ -31,6 +34,8 @@ public record NativeCapabilities(
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param feature feature to test
      * @return {@code true} when the feature was detected
      */

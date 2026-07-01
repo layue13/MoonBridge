@@ -25,6 +25,8 @@ public final class SimpleEventBus implements EventBus {
     }
 
     /**
+ * Documents this public API element.
+ *
      * @param logger logger used when listeners throw
      */
     public SimpleEventBus(Logger logger) {
@@ -32,6 +34,7 @@ public final class SimpleEventBus implements EventBus {
     }
 
     @Override
+    /** Provides subscribe. */
     public <T extends ProxyEvent> AutoCloseable subscribe(Class<T> eventType, EventListener<T> listener) {
         listeners.computeIfAbsent(eventType, ignored -> new CopyOnWriteArrayList<>()).add(listener);
         return () -> {
@@ -41,6 +44,7 @@ public final class SimpleEventBus implements EventBus {
     }
 
     @Override
+    /** Provides publish. */
     public void publish(ProxyEvent event) {
         if (event == null) {
             return;
