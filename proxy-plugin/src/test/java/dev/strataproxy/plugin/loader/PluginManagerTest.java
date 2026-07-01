@@ -11,6 +11,7 @@ import dev.strataproxy.plugin.command.CommandSpec;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.ServerService;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.util.concurrent.CompletableFuture;
@@ -19,7 +20,6 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.List;
 import java.util.Optional;
-import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,7 +34,7 @@ final class PluginManagerTest {
                 emptyPlayers(),
                 emptyServers(),
                 scheduler,
-                Logger.getAnonymousLogger())) {
+                LoggerFactory.getLogger("test"))) {
             var loaded = manager.loadDirectory(Files.createTempDirectory("strataproxy-plugins").resolve("missing"));
 
             assertTrue(loaded.isEmpty());
@@ -56,7 +56,7 @@ final class PluginManagerTest {
                 emptyPlayers(),
                 emptyServers(),
                 scheduler,
-                Logger.getAnonymousLogger())) {
+                LoggerFactory.getLogger("test"))) {
             var loaded = manager.loadDirectory(directory);
 
             assertTrue(loaded.isEmpty());
@@ -91,7 +91,7 @@ final class PluginManagerTest {
                 emptyPlayers(),
                 emptyServers(),
                 scheduler,
-                Logger.getAnonymousLogger())) {
+                LoggerFactory.getLogger("test"))) {
             var loaded = manager.loadDirectory(directory);
 
             assertEquals(1, loaded.size());

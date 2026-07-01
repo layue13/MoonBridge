@@ -21,7 +21,8 @@ import java.util.List;
 import java.util.Properties;
 import java.util.ServiceLoader;
 import java.util.jar.JarFile;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Loads plugin jars, invokes plugin lifecycle methods, and releases plugin class loaders on shutdown.
@@ -59,7 +60,7 @@ public final class PluginManager implements AutoCloseable {
         this.players = players;
         this.servers = servers;
         this.scheduler = scheduler;
-        this.logger = logger == null ? Logger.getLogger(PluginManager.class.getName()) : logger;
+        this.logger = logger == null ? LoggerFactory.getLogger(PluginManager.class) : logger;
     }
 
     /**
@@ -86,8 +87,7 @@ public final class PluginManager implements AutoCloseable {
                 try {
                     loaded.add(loadJar(jar));
                 } catch (IOException exception) {
-                    logger.warning("Skipping StrataProxy plugin jar " + jar.toAbsolutePath().normalize()
-                            + ": " + exception.getMessage());
+                    logger.warn("Skipping StrataProxy plugin jar {}", jar.toAbsolutePath().normalize(), exception);
                 }
             }
             return List.copyOf(loaded);
@@ -117,14 +117,14 @@ public final class PluginManager implements AutoCloseable {
                     scheduler));
             loaded.instance().onEnable();
             plugins.add(loaded);
-            logger.info(() -> "Loaded StrataProxy plugin " + loaded.metadata().id() + " from " + source);
+            logger.info("Loaded StrataProxy plugin {} from {}", loaded.metadata().id(), source);
             return loaded.metadata();
         } catch (IOException | ReflectiveOperationException | RuntimeException | LinkageError exception) {
             if (plugin != null) {
                 try {
                     plugin.onDisable();
                 } catch (RuntimeException disableException) {
-                    logger.warning("Plugin failed during rollback disable after load failure: " + disableException.getMessage());
+                    logger.warn("Plugin failed during rollback disable after load failure", disableException);
                 }
             }
             closeClassLoader(classLoader);
@@ -150,7 +150,7 @@ public final class PluginManager implements AutoCloseable {
             try {
                 plugin.instance().onDisable();
             } catch (RuntimeException exception) {
-                logger.warning("Plugin " + plugin.metadata().id() + " failed during disable: " + exception.getMessage());
+                logger.warn("Plugin {} failed during disable", plugin.metadata().id(), exception);
             } finally {
                 closeClassLoader(plugin.classLoader());
             }

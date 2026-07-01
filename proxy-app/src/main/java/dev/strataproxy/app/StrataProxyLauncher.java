@@ -57,6 +57,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
+import org.slf4j.LoggerFactory;
 
 /**
  * Main application entry point that wires configuration, registry, network, plugins, admin API, and shutdown.
@@ -185,7 +186,7 @@ public final class StrataProxyLauncher {
                     pluginPlayers,
                     pluginServers,
                     scheduler,
-                    java.util.logging.Logger.getLogger("dev.strataproxy.plugin"));
+                    LoggerFactory.getLogger("dev.strataproxy.plugin"));
             started.add(pluginManager);
             var pluginDirectory = resolveConfigRelativePath(configPath, "plugins");
             var loadedPlugins = pluginManager.loadDirectory(pluginDirectory);

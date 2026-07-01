@@ -13,4 +13,5 @@ java {
 
 dependencies {
     compileOnly("dev.strataproxy:proxy-plugin-api:0.1.0-SNAPSHOT")
+    compileOnly("org.slf4j:slf4j-api:2.0.18")
 }

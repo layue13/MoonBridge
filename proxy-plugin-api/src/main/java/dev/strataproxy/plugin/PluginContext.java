@@ -5,8 +5,7 @@ import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerService;
-
-import java.util.logging.Logger;
+import org.slf4j.Logger;
 
 /**
  * Services and metadata exposed to a plugin during its lifecycle.

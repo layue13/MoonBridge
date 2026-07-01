@@ -8,7 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Simple synchronous event bus for plugin events.
@@ -21,7 +22,7 @@ public final class SimpleEventBus implements EventBus {
      * Creates an event bus with the default logger.
      */
     public SimpleEventBus() {
-        this(Logger.getLogger(SimpleEventBus.class.getName()));
+        this(LoggerFactory.getLogger(SimpleEventBus.class));
     }
 
     /**
@@ -30,7 +31,7 @@ public final class SimpleEventBus implements EventBus {
      * @param logger logger used when listeners throw
      */
     public SimpleEventBus(Logger logger) {
-        this.logger = logger == null ? Logger.getLogger(SimpleEventBus.class.getName()) : logger;
+        this.logger = logger == null ? LoggerFactory.getLogger(SimpleEventBus.class) : logger;
     }
 
     @Override
@@ -62,7 +63,7 @@ public final class SimpleEventBus implements EventBus {
             try {
                 ((EventListener) listener).handle(event);
             } catch (RuntimeException exception) {
-                logger.warning("Plugin event listener failed for " + event.getClass().getSimpleName() + ": " + exception.getMessage());
+                logger.warn("Plugin event listener failed for {}", event.getClass().getSimpleName(), exception);
             }
         }
     }

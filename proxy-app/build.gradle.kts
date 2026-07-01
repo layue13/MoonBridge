@@ -19,6 +19,7 @@ dependencies {
     implementation(project(":proxy-admin-api"))
     implementation(project(":proxy-codec-minecraft"))
     implementation(project(":proxy-native"))
+    runtimeOnly(libs.findLibrary("slf4j-simple").get())
 }
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {

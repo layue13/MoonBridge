@@ -7,8 +7,8 @@ import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerService;
-
-import java.util.logging.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class DefaultPluginContext implements PluginContext {
     private final PluginMetadata metadata;
@@ -32,7 +32,7 @@ final class DefaultPluginContext implements PluginContext {
         this.players = players;
         this.servers = servers;
         this.scheduler = scheduler;
-        this.logger = Logger.getLogger("dev.strataproxy.plugin." + metadata.id());
+        this.logger = LoggerFactory.getLogger("dev.strataproxy.plugin." + metadata.id());
     }
 
     @Override

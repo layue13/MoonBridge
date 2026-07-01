@@ -3,6 +3,10 @@ plugins {
     `maven-publish`
 }
 
+dependencies {
+    api(libs.findLibrary("slf4j-api").get())
+}
+
 java {
     withSourcesJar()
     withJavadocJar()
