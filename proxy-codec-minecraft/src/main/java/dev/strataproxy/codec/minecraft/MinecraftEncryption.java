@@ -8,7 +8,11 @@ import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 
+/**
+ * Helpers for Minecraft login encryption and session server hash calculation.
+ */
 public final class MinecraftEncryption {
+    /** Minecraft shared secrets are fixed at 16 bytes for AES/CFB8. */
     public static final int SHARED_SECRET_BYTES = 16;
     private static final String AES_CFB8 = "AES/CFB8/NoPadding";
     private static final String RSA_PKCS1 = "RSA/ECB/PKCS1Padding";
@@ -17,14 +21,33 @@ public final class MinecraftEncryption {
     private MinecraftEncryption() {
     }
 
+    /**
+     * Creates an AES/CFB8 cipher for outbound encrypted traffic.
+     *
+     * @param sharedSecret 16-byte Minecraft shared secret
+     * @return initialized encrypt cipher
+     */
     public static Cipher newEncryptCipher(byte[] sharedSecret) {
         return newCipher(Cipher.ENCRYPT_MODE, sharedSecret);
     }
 
+    /**
+     * Creates an AES/CFB8 cipher for inbound encrypted traffic.
+     *
+     * @param sharedSecret 16-byte Minecraft shared secret
+     * @return initialized decrypt cipher
+     */
     public static Cipher newDecryptCipher(byte[] sharedSecret) {
         return newCipher(Cipher.DECRYPT_MODE, sharedSecret);
     }
 
+    /**
+     * Decrypts and validates the login shared secret.
+     *
+     * @param privateKey server private key
+     * @param encryptedSharedSecret encrypted shared-secret payload from the client
+     * @return decrypted 16-byte shared secret
+     */
     public static byte[] decryptSharedSecret(PrivateKey privateKey, byte[] encryptedSharedSecret) {
         if (encryptedSharedSecret == null || encryptedSharedSecret.length == 0) {
             throw new IllegalArgumentException("encryptedSharedSecret must not be empty");
@@ -34,6 +57,13 @@ public final class MinecraftEncryption {
         return sharedSecret;
     }
 
+    /**
+     * Decrypts the login verify token.
+     *
+     * @param privateKey server private key
+     * @param encryptedVerifyToken encrypted verify-token payload from the client
+     * @return decrypted verify token
+     */
     public static byte[] decryptVerifyToken(PrivateKey privateKey, byte[] encryptedVerifyToken) {
         if (encryptedVerifyToken == null || encryptedVerifyToken.length == 0) {
             throw new IllegalArgumentException("encryptedVerifyToken must not be empty");
@@ -41,6 +71,14 @@ public final class MinecraftEncryption {
         return decryptRsa(privateKey, encryptedVerifyToken);
     }
 
+    /**
+     * Computes the signed SHA-1 server hash used by Mojang session verification.
+     *
+     * @param serverId server id string from the login flow
+     * @param sharedSecret negotiated shared secret
+     * @param publicKey server public key
+     * @return Minecraft-compatible signed hexadecimal hash
+     */
     public static String serverHash(String serverId, byte[] sharedSecret, PublicKey publicKey) {
         if (serverId == null) {
             throw new IllegalArgumentException("serverId must not be null");

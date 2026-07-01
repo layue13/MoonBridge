@@ -37,6 +37,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     private final BackendReplacementController replacementController;
     private final CommandRegistry commands;
     private final EventBus events;
+    private final int protocolVersion;
     private MinecraftCompressedCustomPayloadInspectionSampler compressedCustomPayloadInspection;
     private GameCommandFrameInterceptor commandInterceptor;
     private String playerName;
@@ -145,7 +146,8 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 compressionRewriteMaxEventLoopDelayMillis,
                 null,
                 null,
-                null);
+                null,
+                763);
     }
 
     FrontendRelayHandler(
@@ -162,7 +164,8 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             int compressionRewriteMaxEventLoopDelayMillis,
             BackendReplacementController replacementController,
             CommandRegistry commands,
-            EventBus events) {
+            EventBus events,
+            int protocolVersion) {
         this.backend = backend;
         this.metrics = metrics;
         this.serverName = serverName;
@@ -181,6 +184,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         this.replacementController = replacementController;
         this.commands = commands;
         this.events = events;
+        this.protocolVersion = protocolVersion;
         this.playerName = initialPlayerName;
         if (initialPlayerName != null && !initialPlayerName.isBlank()) {
             this.identity.playerName(initialPlayerName);
@@ -449,7 +453,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 buffer,
                 compressionAudit.negotiated(),
                 compressionAudit.threshold(),
-                new PlayerSource(playerName));
+                new PlayerSource(context.channel(), playerName, protocolVersion, compressionAudit));
     }
 
     private void observeLoginStart(ChannelHandlerContext context, ByteBuf buffer) {
@@ -533,15 +537,55 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private static final class PlayerSource implements CommandSource {
+        private final Channel frontend;
         private final String name;
+        private final int protocolVersion;
+        private final MinecraftCompressionAuditState compressionAudit;
 
-        private PlayerSource(String name) {
+        private PlayerSource(
+                Channel frontend,
+                String name,
+                int protocolVersion,
+                MinecraftCompressionAuditState compressionAudit) {
+            this.frontend = frontend;
             this.name = name == null ? "" : name;
+            this.protocolVersion = protocolVersion;
+            this.compressionAudit = compressionAudit;
         }
 
         @Override
         public String name() {
             return name;
+        }
+
+        @Override
+        public void sendMessage(String message) {
+            var write = (Runnable) () -> {
+                var frame = MinecraftPlayMessages.systemChatFrame(
+                        frontend.alloc(),
+                        protocolVersion,
+                        message,
+                        compressionAudit.negotiated(),
+                        compressionAudit.negotiated() ? compressionAudit.threshold() : 0);
+                if (frame.isEmpty()) {
+                    return;
+                }
+                var response = frame.get();
+                if (!frontend.isActive()) {
+                    response.release();
+                    return;
+                }
+                frontend.writeAndFlush(response);
+            };
+            try {
+                if (frontend.eventLoop().inEventLoop()) {
+                    write.run();
+                } else {
+                    frontend.eventLoop().execute(write);
+                }
+            } catch (RuntimeException exception) {
+                // The client is already disconnecting or the event loop is shutting down.
+            }
         }
     }
 

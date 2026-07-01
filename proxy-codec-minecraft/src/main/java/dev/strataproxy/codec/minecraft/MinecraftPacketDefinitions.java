@@ -10,10 +10,16 @@ import dev.strataproxy.protocol.ProtocolState;
 import java.util.EnumSet;
 import java.util.List;
 
+/**
+ * Built-in packet metadata definitions for modern Minecraft relay behavior.
+ */
 public final class MinecraftPacketDefinitions {
     private MinecraftPacketDefinitions() {
     }
 
+    /**
+     * @return default packet registry used by protocol-aware routing, inspection, and compression samples
+     */
     public static PacketRegistry modernDefaults() {
         return new InMemoryPacketRegistry(List.of(
                 new PacketDefinition(

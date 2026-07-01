@@ -41,9 +41,12 @@ gradle.projectsEvaluated {
     val app = project(":proxy-app")
     val admin = project(":proxy-admin-cli")
     val query = project(":proxy-query")
+    val pluginApi = project(":proxy-plugin-api")
     val appDistZip = app.layout.buildDirectory.file("distributions/strataproxy-${project.version}.zip")
     val adminDistZip = admin.layout.buildDirectory.file("distributions/strataproxy-admin-${project.version}.zip")
     val queryDistZip = query.layout.buildDirectory.file("distributions/strataproxy-query-${project.version}.zip")
+    val pluginApiJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}.jar")
+    val pluginApiSourcesJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}-sources.jar")
 
     val writeReleaseManifest = tasks.register<ReleaseManifestTask>("writeReleaseManifest") {
         group = "distribution"
@@ -51,7 +54,9 @@ gradle.projectsEvaluated {
         dependsOn(
             app.tasks.named("distZip"),
             admin.tasks.named("distZip"),
-            query.tasks.named("distZip")
+            query.tasks.named("distZip"),
+            pluginApi.tasks.named("jar"),
+            pluginApi.tasks.named("sourcesJar")
         )
         outputFile.set(layout.buildDirectory.file("release/RELEASE-MANIFEST.txt"))
         nameValue.set(releaseName)
@@ -59,6 +64,7 @@ gradle.projectsEvaluated {
         appArchive.set(appDistZip.map { it.asFile.name })
         adminArchive.set(adminDistZip.map { it.asFile.name })
         queryArchive.set(queryDistZip.map { it.asFile.name })
+        pluginApiArchive.set(pluginApiJar.map { it.asFile.name })
     }
 
     val generateReleaseSbom = tasks.register<GenerateSbomTask>("generateReleaseSbom") {
@@ -76,6 +82,8 @@ gradle.projectsEvaluated {
             app.tasks.named("distZip"),
             admin.tasks.named("distZip"),
             query.tasks.named("distZip"),
+            pluginApi.tasks.named("jar"),
+            pluginApi.tasks.named("sourcesJar"),
             generateReleaseSbom
         )
         outputFile.set(releaseMetadata)
@@ -84,7 +92,7 @@ gradle.projectsEvaluated {
         signingKey.set(providers.gradleProperty("strataproxy.releaseSigningKey")
             .orElse(providers.environmentVariable("STRATAPROXY_RELEASE_SIGNING_KEY"))
             .orElse(""))
-        artifactFiles.from(appDistZip, adminDistZip, queryDistZip, releaseSbom)
+        artifactFiles.from(appDistZip, adminDistZip, queryDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom)
     }
 
     val stageRelease = tasks.register<Sync>("stageRelease") {
@@ -94,6 +102,8 @@ gradle.projectsEvaluated {
             app.tasks.named("distZip"),
             admin.tasks.named("distZip"),
             query.tasks.named("distZip"),
+            pluginApi.tasks.named("jar"),
+            pluginApi.tasks.named("sourcesJar"),
             writeReleaseManifest,
             generateReleaseSbom,
             writeReleaseMetadata
@@ -105,6 +115,9 @@ gradle.projectsEvaluated {
         }
         from("deployment") {
             into("deployment")
+        }
+        from("examples") {
+            into("examples")
         }
         from("proxy-app/src/main/resources/config") {
             into("config")
@@ -121,6 +134,12 @@ gradle.projectsEvaluated {
         from(queryDistZip) {
             into("archives")
         }
+        from(pluginApiJar) {
+            into("plugin-api")
+        }
+        from(pluginApiSourcesJar) {
+            into("plugin-api")
+        }
     }
 
     val releaseBundle = tasks.register<Zip>("releaseBundle") {
@@ -136,7 +155,7 @@ gradle.projectsEvaluated {
         group = "distribution"
         description = "Writes SHA-256 checksums for StrataProxy release artifacts."
         dependsOn(releaseBundle)
-        inputFiles.from(releaseZip, appDistZip, adminDistZip, queryDistZip, releaseSbom, releaseMetadata)
+        inputFiles.from(releaseZip, appDistZip, adminDistZip, queryDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom, releaseMetadata)
         outputFile.set(releaseChecksum)
     }
 
@@ -207,6 +226,9 @@ abstract class ReleaseManifestTask : DefaultTask() {
     @get:Input
     abstract val queryArchive: Property<String>
 
+    @get:Input
+    abstract val pluginApiArchive: Property<String>
+
     @TaskAction
     fun writeManifest() {
         val file = outputFile.get().asFile
@@ -219,7 +241,8 @@ abstract class ReleaseManifestTask : DefaultTask() {
             appArchive=${appArchive.get()}
             adminArchive=${adminArchive.get()}
             queryArchive=${queryArchive.get()}
-            includes=docs,deployment,configs,observability,native-runtime,checksums
+            pluginApiArchive=${pluginApiArchive.get()}
+            includes=docs,deployment,configs,observability,native-runtime,plugin-api,examples,checksums
             """.trimIndent() + System.lineSeparator()
         )
     }
@@ -260,6 +283,8 @@ abstract class Sha256FilesTask : DefaultTask() {
     private fun archivePathLabel(archive: File, checksumDirectory: File): String {
         return if (archive.parentFile == checksumDirectory) {
             archive.name
+        } else if (archive.name.startsWith("proxy-plugin-api-")) {
+            "plugin-api/${archive.name}"
         } else {
             "archives/${archive.name}"
         }
@@ -403,6 +428,8 @@ abstract class ReleaseMetadataTask : DefaultTask() {
     private fun artifactPathLabel(artifact: File, metadataDirectory: File): String {
         return if (artifact.parentFile == metadataDirectory) {
             artifact.name
+        } else if (artifact.name.startsWith("proxy-plugin-api-")) {
+            "plugin-api/${artifact.name}"
         } else {
             "archives/${artifact.name}"
         }
@@ -468,7 +495,8 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "\"java\": \"25\"",
             "\"signature\":",
             "archives/strataproxy-admin-",
-            "archives/strataproxy-query-"
+            "archives/strataproxy-query-",
+            "plugin-api/proxy-plugin-api-"
         ).forEach { token ->
             require(metadata.contains(token)) { "release metadata missing $token" }
         }
@@ -500,7 +528,9 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "strataproxy-0.1.0-SNAPSHOT.sbom.cdx.json",
             "strataproxy-0.1.0-SNAPSHOT.metadata.json",
             "archives/strataproxy-admin-0.1.0-SNAPSHOT.zip",
-            "archives/strataproxy-query-0.1.0-SNAPSHOT.zip"
+            "archives/strataproxy-query-0.1.0-SNAPSHOT.zip",
+            "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT.jar",
+            "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT-sources.jar"
         ).forEach { token ->
             require(checksums.contains(token)) { "release checksums missing $token" }
         }

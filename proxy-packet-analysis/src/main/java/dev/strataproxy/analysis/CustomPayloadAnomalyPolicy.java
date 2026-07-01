@@ -9,6 +9,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Detects suspicious Minecraft custom payload traffic using size and flood thresholds.
+ */
 public final class CustomPayloadAnomalyPolicy {
     private final int largePayloadWarnBytes;
     private final int unknownChannelThrottleBytes;
@@ -16,6 +19,13 @@ public final class CustomPayloadAnomalyPolicy {
     private final int customPayloadFloodMaxCount;
     private final Duration customPayloadFloodWindow;
 
+    /**
+     * Creates a policy with default flood settings.
+     *
+     * @param largePayloadWarnBytes payload size that emits a warning
+     * @param unknownChannelThrottleBytes unknown-channel size that recommends throttling
+     * @param moddedHandshakeWarnBytes modded handshake size that emits a warning
+     */
     public CustomPayloadAnomalyPolicy(
             int largePayloadWarnBytes,
             int unknownChannelThrottleBytes,
@@ -28,6 +38,15 @@ public final class CustomPayloadAnomalyPolicy {
                 Duration.ofSeconds(10));
     }
 
+    /**
+     * Creates a policy with explicit size and flood thresholds.
+     *
+     * @param largePayloadWarnBytes payload size that emits a warning
+     * @param unknownChannelThrottleBytes unknown-channel size that recommends throttling
+     * @param moddedHandshakeWarnBytes modded handshake size that emits a warning
+     * @param customPayloadFloodMaxCount allowed custom-payload count in the flood window; zero disables flood checks
+     * @param customPayloadFloodWindow window used for flood checks
+     */
     public CustomPayloadAnomalyPolicy(
             int largePayloadWarnBytes,
             int unknownChannelThrottleBytes,
@@ -50,6 +69,9 @@ public final class CustomPayloadAnomalyPolicy {
         this.customPayloadFloodWindow = customPayloadFloodWindow == null ? Duration.ofSeconds(10) : customPayloadFloodWindow;
     }
 
+    /**
+     * @return production-oriented default policy thresholds
+     */
     public static CustomPayloadAnomalyPolicy defaults() {
         return new CustomPayloadAnomalyPolicy(1 * 1024 * 1024, 256 * 1024, 2 * 1024 * 1024, 200, Duration.ofSeconds(10));
     }
@@ -74,6 +96,13 @@ public final class CustomPayloadAnomalyPolicy {
         return customPayloadFloodWindow;
     }
 
+    /**
+     * Evaluates payload size and channel classification rules.
+     *
+     * @param packet packet that carried the custom payload
+     * @param payload parsed custom payload metadata
+     * @return anomalies found for this packet
+     */
     public List<PacketAnomaly> evaluate(PacketView packet, CustomPayloadClassification payload) {
         var anomalies = new ArrayList<PacketAnomaly>(2);
         if (payload.payloadBytes() >= largePayloadWarnBytes && largePayloadWarnBytes > 0) {
@@ -108,6 +137,15 @@ public final class CustomPayloadAnomalyPolicy {
         return List.copyOf(anomalies);
     }
 
+    /**
+     * Evaluates whether custom payload traffic exceeded the configured flood threshold.
+     *
+     * @param packet representative packet from the window
+     * @param payload parsed custom payload metadata
+     * @param observedCount observed payload count in the window
+     * @param observedWindow actual observation window
+     * @return a throttling anomaly when the threshold is exceeded
+     */
     public List<PacketAnomaly> evaluateFlood(
             PacketView packet,
             CustomPayloadClassification payload,

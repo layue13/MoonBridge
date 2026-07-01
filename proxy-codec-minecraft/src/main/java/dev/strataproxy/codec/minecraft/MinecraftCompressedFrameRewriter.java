@@ -6,17 +6,38 @@ import io.netty.buffer.ByteBufAllocator;
 import java.util.ArrayList;
 import java.util.Objects;
 
+/**
+ * Rewrites Minecraft compressed frames from one compression threshold to another.
+ *
+ * <p>Returned buffers are owned by the result objects and released when the result is closed.</p>
+ */
 public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
     private final MinecraftCompressionCodec codec;
 
+    /**
+     * Creates a rewriter with the default zlib codec.
+     */
     public MinecraftCompressedFrameRewriter() {
         this(new MinecraftCompressionCodec());
     }
 
+    /**
+     * @param codec codec used for decode and encode operations
+     */
     public MinecraftCompressedFrameRewriter(MinecraftCompressionCodec codec) {
         this.codec = Objects.requireNonNull(codec, "codec");
     }
 
+    /**
+     * Rewrites one complete compressed-frame envelope.
+     *
+     * @param allocator allocator for the rewritten buffer
+     * @param frame complete source frame
+     * @param sourceThreshold threshold used to decode the source frame
+     * @param targetThreshold threshold used to encode the rewritten frame
+     * @param maxUncompressedBytes safety limit for decoded payload size
+     * @return rewrite result owning the rewritten frame
+     */
     public RewriteResult rewrite(
             ByteBufAllocator allocator,
             ByteBuf frame,
@@ -61,6 +82,17 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
     }
 
+    /**
+     * Rewrites a buffer containing consecutive compressed-frame envelopes.
+     *
+     * @param allocator allocator for the rewritten composite buffer
+     * @param frames source buffer containing complete frames
+     * @param sourceThreshold threshold used to decode source frames
+     * @param targetThreshold threshold used to encode rewritten frames
+     * @param maxUncompressedBytes safety limit for each decoded payload
+     * @param maxFrames maximum number of frames accepted in the batch
+     * @return batch rewrite result owning the rewritten frame buffer
+     */
     public BatchRewriteResult rewriteBatch(
             ByteBufAllocator allocator,
             ByteBuf frames,
@@ -137,6 +169,9 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
     }
 
+    /**
+     * Releases the underlying codec.
+     */
     @Override
     public void close() {
         codec.close();
@@ -160,6 +195,19 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
     private record FrameStats(int frameBytes, int uncompressedBytes, int compressedPayloadBytes) {
     }
 
+    /**
+     * Result for a single rewritten frame.
+     *
+     * @param frame rewritten frame buffer owned by this result
+     * @param sourceThreshold source threshold
+     * @param targetThreshold target threshold
+     * @param originalFrameBytes original envelope size
+     * @param originalUncompressedBytes original uncompressed payload size
+     * @param originalCompressedPayloadBytes original compressed payload size, or zero when uncompressed
+     * @param rewrittenFrameBytes rewritten envelope size
+     * @param rewrittenUncompressedBytes rewritten uncompressed payload size
+     * @param rewrittenCompressedPayloadBytes rewritten compressed payload size, or zero when uncompressed
+     */
     public record RewriteResult(
             ByteBuf frame,
             int sourceThreshold,
@@ -174,14 +222,23 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
             Objects.requireNonNull(frame, "frame");
         }
 
+        /**
+         * @return {@code true} when the original frame contained compressed payload bytes
+         */
         public boolean wasCompressed() {
             return originalCompressedPayloadBytes > 0;
         }
 
+        /**
+         * @return {@code true} when the rewritten frame contains compressed payload bytes
+         */
         public boolean isCompressed() {
             return rewrittenCompressedPayloadBytes > 0;
         }
 
+        /**
+         * @return positive value when rewriting reduced envelope size
+         */
         public int savedBytes() {
             return originalFrameBytes - rewrittenFrameBytes;
         }
@@ -192,6 +249,20 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
         }
     }
 
+    /**
+     * Result for a batch of rewritten frames.
+     *
+     * @param frames rewritten frame buffer owned by this result
+     * @param sourceThreshold source threshold
+     * @param targetThreshold target threshold
+     * @param frameCount number of frames rewritten
+     * @param originalFrameBytes total original envelope size
+     * @param originalUncompressedBytes total original uncompressed payload size
+     * @param originalCompressedPayloadBytes total original compressed payload size
+     * @param rewrittenFrameBytes total rewritten envelope size
+     * @param rewrittenUncompressedBytes total rewritten uncompressed payload size
+     * @param rewrittenCompressedPayloadBytes total rewritten compressed payload size
+     */
     public record BatchRewriteResult(
             ByteBuf frames,
             int sourceThreshold,
@@ -207,14 +278,23 @@ public final class MinecraftCompressedFrameRewriter implements AutoCloseable {
             Objects.requireNonNull(frames, "frames");
         }
 
+        /**
+         * @return {@code true} when any original frame contained compressed payload bytes
+         */
         public boolean wasCompressed() {
             return originalCompressedPayloadBytes > 0;
         }
 
+        /**
+         * @return {@code true} when any rewritten frame contains compressed payload bytes
+         */
         public boolean isCompressed() {
             return rewrittenCompressedPayloadBytes > 0;
         }
 
+        /**
+         * @return positive value when rewriting reduced total envelope size
+         */
         public int savedBytes() {
             return originalFrameBytes - rewrittenFrameBytes;
         }

@@ -4,10 +4,27 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
+/**
+ * Read and control surface for online players.
+ */
 public interface PlayerService {
+    /**
+     * Requests a transfer of an online player to another registered backend.
+     *
+     * @param playerName player name
+     * @param targetServer target backend name
+     * @return asynchronous transfer result
+     */
     CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer);
 
+    /**
+     * @param playerName player name
+     * @return player view when the player is currently online
+     */
     Optional<PlayerView> find(String playerName);
 
+    /**
+     * @return snapshot of online players known to the proxy
+     */
     Collection<PlayerView> onlinePlayers();
 }

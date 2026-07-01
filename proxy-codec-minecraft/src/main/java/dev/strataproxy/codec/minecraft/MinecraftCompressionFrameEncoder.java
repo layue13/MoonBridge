@@ -6,10 +6,16 @@ import io.netty.handler.codec.MessageToMessageEncoder;
 
 import java.util.List;
 
+/**
+ * Netty encoder that wraps packet payload buffers in Minecraft compressed-frame envelopes.
+ */
 public final class MinecraftCompressionFrameEncoder extends MessageToMessageEncoder<ByteBuf> {
     private final int threshold;
     private final MinecraftCompressionCodec codec;
 
+    /**
+     * @param threshold negotiated compression threshold
+     */
     public MinecraftCompressionFrameEncoder(int threshold) {
         if (threshold < 0) {
             throw new IllegalArgumentException("threshold must be non-negative");

@@ -11,6 +11,9 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Concurrent in-memory implementation of {@link ServerRegistry}.
+ */
 public final class InMemoryServerRegistry implements ServerRegistry {
     private final ConcurrentHashMap<String, MutableRegisteredServer> servers = new ConcurrentHashMap<>();
 

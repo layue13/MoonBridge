@@ -465,7 +465,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 compressionRewriteEnabled,
                 compressionRewriteMaxEventLoopDelayMillis,
                 commands,
-                events);
+                events,
+                handshake.protocolVersion());
 
         backendConnector.connect(frontend, selected, compressionAudit, session, replacementController).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
@@ -527,7 +528,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                     compressionRewriteMaxEventLoopDelayMillis,
                     replacementController,
                     commands,
-                    events);
+                    events,
+                    handshake.protocolVersion());
             replacementController.relayAttached(frontendRelay, frontend, backend, serverName);
             if (frontendHandlerNameToReplace == null) {
                 frontend.pipeline().replace(this, "frontend-relay", frontendRelay);

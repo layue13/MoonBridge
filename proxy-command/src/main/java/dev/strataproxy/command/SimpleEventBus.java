@@ -10,14 +10,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
 
+/**
+ * Simple synchronous event bus for plugin events.
+ */
 public final class SimpleEventBus implements EventBus {
     private final Logger logger;
     private final Map<Class<?>, CopyOnWriteArrayList<EventListener<?>>> listeners = new ConcurrentHashMap<>();
 
+    /**
+     * Creates an event bus with the default logger.
+     */
     public SimpleEventBus() {
         this(Logger.getLogger(SimpleEventBus.class.getName()));
     }
 
+    /**
+     * @param logger logger used when listeners throw
+     */
     public SimpleEventBus(Logger logger) {
         this.logger = logger == null ? Logger.getLogger(SimpleEventBus.class.getName()) : logger;
     }

@@ -6,10 +6,21 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Trains zstd dictionaries from representative Minecraft packet samples.
+ */
 public final class MinecraftZstdDictionaryTrainer {
     private MinecraftZstdDictionaryTrainer() {
     }
 
+    /**
+     * Trains a zstd dictionary from sample payloads.
+     *
+     * @param samples non-empty sample payloads
+     * @param dictionaryBytes requested dictionary size
+     * @param compressionLevel zstd compression level used by the trainer
+     * @return trained dictionary bytes
+     */
     public static byte[] train(List<byte[]> samples, int dictionaryBytes, int compressionLevel) {
         Objects.requireNonNull(samples, "samples");
         if (samples.isEmpty()) {

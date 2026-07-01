@@ -18,11 +18,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * JSON-file implementation of registry persistence.
+ */
 public final class JsonRegistryStore implements RegistryStore {
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final Path path;
 
+    /**
+     * @param path JSON registry file path
+     */
     public JsonRegistryStore(Path path) {
         this.path = path;
     }
@@ -54,6 +60,9 @@ public final class JsonRegistryStore implements RegistryStore {
         }
     }
 
+    /**
+     * Jackson-bound persisted registry entry.
+     */
     public static final class RegistryEntry {
         public String name;
         public String address;

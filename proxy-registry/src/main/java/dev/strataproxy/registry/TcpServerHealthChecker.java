@@ -18,6 +18,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Periodic backend health checker using either TCP connect or Minecraft status ping probes.
+ */
 public final class TcpServerHealthChecker implements AutoCloseable {
     private final ServerRegistry registry;
     private final Duration interval;
@@ -25,10 +28,25 @@ public final class TcpServerHealthChecker implements AutoCloseable {
     private final Mode mode;
     private final ScheduledExecutorService scheduler;
 
+    /**
+     * Creates a TCP-only health checker.
+     *
+     * @param registry registry to update with health results
+     * @param interval delay between checks
+     * @param timeout probe timeout
+     */
     public TcpServerHealthChecker(ServerRegistry registry, Duration interval, Duration timeout) {
         this(registry, interval, timeout, "tcp");
     }
 
+    /**
+     * Creates a health checker.
+     *
+     * @param registry registry to update with health results
+     * @param interval delay between checks
+     * @param timeout probe timeout
+     * @param mode {@code tcp} or {@code minecraft-status}
+     */
     public TcpServerHealthChecker(ServerRegistry registry, Duration interval, Duration timeout, String mode) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.interval = interval == null ? Duration.ofSeconds(5) : interval;
@@ -41,6 +59,9 @@ public final class TcpServerHealthChecker implements AutoCloseable {
         });
     }
 
+    /**
+     * Starts background health checks immediately and then at the configured interval.
+     */
     public void start() {
         scheduler.execute(this::checkAll);
         scheduler.scheduleWithFixedDelay(this::checkAll, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);

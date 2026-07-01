@@ -7,10 +7,18 @@ import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 
+/**
+ * Detects native CPU features and preferred runtime providers from the current JVM host.
+ */
 public final class NativeCapabilityDetector {
     private NativeCapabilityDetector() {
     }
 
+    /**
+     * Runs best-effort capability detection.
+     *
+     * @return detected capabilities; unavailable data is represented as defaults rather than failure
+     */
     public static NativeCapabilities detect() {
         var os = System.getProperty("os.name", "unknown");
         var arch = System.getProperty("os.arch", "unknown");

@@ -7,13 +7,22 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import javax.crypto.Cipher;
 import java.util.List;
 
+/**
+ * Netty decoder that decrypts Minecraft AES/CFB8 traffic after login encryption is enabled.
+ */
 public final class MinecraftCipherDecoder extends ByteToMessageDecoder {
     private final Cipher cipher;
 
+    /**
+     * @param sharedSecret 16-byte Minecraft shared secret
+     */
     public MinecraftCipherDecoder(byte[] sharedSecret) {
         this(MinecraftEncryption.newDecryptCipher(sharedSecret));
     }
 
+    /**
+     * @param cipher initialized decrypt cipher
+     */
     public MinecraftCipherDecoder(Cipher cipher) {
         if (cipher == null) {
             throw new IllegalArgumentException("cipher must not be null");

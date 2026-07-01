@@ -3,9 +3,15 @@ package dev.strataproxy.protocol;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Packet registry backed by an immutable in-memory list of definitions.
+ */
 public final class InMemoryPacketRegistry implements PacketRegistry {
     private final List<PacketDefinition> definitions;
 
+    /**
+     * @param definitions packet metadata definitions to search
+     */
     public InMemoryPacketRegistry(List<PacketDefinition> definitions) {
         this.definitions = List.copyOf(definitions);
     }

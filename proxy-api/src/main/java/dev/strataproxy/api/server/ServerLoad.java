@@ -1,5 +1,16 @@
 package dev.strataproxy.api.server;
 
+/**
+ * Runtime load sample for a backend server.
+ *
+ * @param players current player count
+ * @param softCapacity capacity where routers start reducing this server's score; zero disables pressure
+ * @param hardCapacity capacity where the server is considered full; zero means unlimited
+ * @param inboundBytesPerSecond recent inbound throughput from clients to backend
+ * @param outboundBytesPerSecond recent outbound throughput from backend to clients
+ * @param packetsPerSecond recent packet rate across both directions
+ * @param eventLoopDelayMillis measured backend or relay event-loop delay in milliseconds
+ */
 public record ServerLoad(
         int players,
         int softCapacity,
@@ -17,6 +28,11 @@ public record ServerLoad(
         }
     }
 
+    /**
+     * Computes load pressure relative to soft capacity.
+     *
+     * @return ratio of players to soft capacity, capped at {@code 2.0}; zero when soft capacity is disabled
+     */
     public double capacityPressure() {
         if (softCapacity == 0) {
             return 0.0d;
@@ -24,6 +40,9 @@ public record ServerLoad(
         return Math.min(2.0d, (double) players / softCapacity);
     }
 
+    /**
+     * @return {@code true} when hard capacity is enabled and current players meet or exceed it
+     */
     public boolean isHardFull() {
         return hardCapacity > 0 && players >= hardCapacity;
     }

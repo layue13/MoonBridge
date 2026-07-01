@@ -6,13 +6,22 @@ import io.netty.handler.codec.MessageToByteEncoder;
 
 import javax.crypto.Cipher;
 
+/**
+ * Netty encoder that encrypts Minecraft AES/CFB8 traffic after login encryption is enabled.
+ */
 public final class MinecraftCipherEncoder extends MessageToByteEncoder<ByteBuf> {
     private final Cipher cipher;
 
+    /**
+     * @param sharedSecret 16-byte Minecraft shared secret
+     */
     public MinecraftCipherEncoder(byte[] sharedSecret) {
         this(MinecraftEncryption.newEncryptCipher(sharedSecret));
     }
 
+    /**
+     * @param cipher initialized encrypt cipher
+     */
     public MinecraftCipherEncoder(Cipher cipher) {
         if (cipher == null) {
             throw new IllegalArgumentException("cipher must not be null");

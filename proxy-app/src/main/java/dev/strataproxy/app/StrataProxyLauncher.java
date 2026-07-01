@@ -58,6 +58,9 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
+/**
+ * Main application entry point that wires configuration, registry, network, plugins, admin API, and shutdown.
+ */
 public final class StrataProxyLauncher {
     private static final String VERSION = "0.1.0-SNAPSHOT";
 

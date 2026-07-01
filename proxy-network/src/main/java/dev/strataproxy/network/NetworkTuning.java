@@ -1,5 +1,19 @@
 package dev.strataproxy.network;
 
+/**
+ * Network limits and timeout values consumed by Netty server components.
+ *
+ * @param maxFrameBytes maximum inbound frame size
+ * @param connectTimeoutMillis backend connect timeout
+ * @param writeBufferLowBytes low write-buffer watermark
+ * @param writeBufferHighBytes high write-buffer watermark
+ * @param maxConnections global concurrent connection limit
+ * @param maxConnectionsPerAddress concurrent connection limit per client address
+ * @param maxNewConnectionsPerSecond global connection admission rate limit; zero disables it
+ * @param maxNewConnectionsPerAddressPerSecond per-address admission rate limit; zero disables it
+ * @param initialHandshakeTimeoutMillis timeout for the initial Minecraft handshake
+ * @param proxyProtocol whether frontend connections may start with HAProxy PROXY protocol v1
+ */
 public record NetworkTuning(
         int maxFrameBytes,
         int connectTimeoutMillis,
@@ -75,6 +89,9 @@ public record NetworkTuning(
         }
     }
 
+    /**
+     * @return default production network tuning
+     */
     public static NetworkTuning defaults() {
         return new NetworkTuning(
                 8 * 1024 * 1024,

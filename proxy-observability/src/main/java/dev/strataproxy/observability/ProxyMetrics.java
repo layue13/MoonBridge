@@ -14,6 +14,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.stream.Collectors;
 
+/**
+ * Thread-safe in-process metrics accumulator used by the proxy, admin API, and diagnostics.
+ */
 public final class ProxyMetrics {
     private static final int RECENT_PACKET_ANOMALY_CAPACITY = 256;
     private static final int RECENT_CUSTOM_PAYLOAD_CAPACITY = 256;
@@ -57,10 +60,16 @@ public final class ProxyMetrics {
     private final AtomicReference<NetworkTransport> networkTransport = new AtomicReference<>(new NetworkTransport("unknown", false));
     private final AtomicReference<NativeRuntimeInfo> nativeRuntime = new AtomicReference<>(NativeRuntimeInfo.unknown());
 
+    /**
+     * Creates metrics with packet anomaly sampling enabled.
+     */
     public ProxyMetrics() {
         this(true);
     }
 
+    /**
+     * @param packetAnomalySampling whether recent anomaly samples should be retained
+     */
     public ProxyMetrics(boolean packetAnomalySampling) {
         this.packetAnomalySampling = packetAnomalySampling;
     }
@@ -650,6 +659,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Per-server byte counters split by relay direction.
+     */
     public record ServerTraffic(long frontendToBackendBytes, long backendToFrontendBytes) {
     }
 
@@ -671,9 +683,15 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Per-server routed and active connection counters.
+     */
     public record ServerConnections(long routedConnections, long activeConnections) {
     }
 
+    /**
+     * Active player session tracked by the relay.
+     */
     public record PlayerSession(String player, String server, String remoteAddress, Instant connectedAt) {
     }
 
@@ -693,6 +711,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Aggregated packet traffic counters.
+     */
     public record PacketTraffic(long packets, long rawBytes, long compressedBytes) {
     }
 
@@ -728,6 +749,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Aggregated custom payload traffic counters.
+     */
     public record CustomPayloadTraffic(
             long packets,
             long payloadBytes,
@@ -738,6 +762,9 @@ public final class ProxyMetrics {
             Instant lastSeen) {
     }
 
+    /**
+     * Recent custom payload sample retained for diagnostics.
+     */
     public record CustomPayloadSample(
             long sequence,
             String server,
@@ -769,6 +796,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Aggregated relay backpressure counters.
+     */
     public record RelayBackpressure(long events, long lastBytesBeforeWritable, long maxBytesBeforeWritable) {
     }
 
@@ -821,6 +851,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Active payload capture configuration.
+     */
     public record PayloadCapture(
             String id,
             String server,
@@ -830,12 +863,18 @@ public final class ProxyMetrics {
             Instant expiresAt) {
     }
 
+    /**
+     * Per-key payload capture request state.
+     */
     public record PayloadCaptureRequest(boolean enabled, int maxBytesPerSample) {
         private static PayloadCaptureRequest none() {
             return new PayloadCaptureRequest(false, 0);
         }
     }
 
+    /**
+     * Captured payload prefix sample.
+     */
     public record PayloadCaptureSample(
             long sequence,
             String captureId,
@@ -872,6 +911,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Compression byte and CPU accounting.
+     */
     public record CompressionAudit(
             long samples,
             long rawBytes,
@@ -883,9 +925,15 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Network transport currently selected by the server.
+     */
     public record NetworkTransport(String name, boolean nativeTransport) {
     }
 
+    /**
+     * Native runtime state reported in metrics snapshots.
+     */
     public record NativeRuntimeInfo(
             boolean enabled,
             String os,
@@ -901,6 +949,9 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Recent packet anomaly sample retained for diagnostics.
+     */
     public record PacketAnomalySample(
             long sequence,
             String rule,
@@ -915,6 +966,9 @@ public final class ProxyMetrics {
             Instant timestamp) {
     }
 
+    /**
+     * Relay direction used by compression and traffic metrics.
+     */
     public enum CompressionDirection {
         FRONTEND_TO_BACKEND("frontend_to_backend"),
         BACKEND_TO_FRONTEND("backend_to_frontend");
@@ -930,12 +984,21 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Map key for per-server compression metrics split by direction.
+     */
     public record CompressionDirectionKey(String server, CompressionDirection direction) {
     }
 
+    /**
+     * Map key for compression strategy decisions.
+     */
     public record CompressionDecisionKey(String server, CompressionDirection direction, String action, int threshold) {
     }
 
+    /**
+     * Map key for compressed-frame rewrite outcomes.
+     */
     public record CompressionRewriteKey(String server, CompressionDirection direction, String outcome) {
     }
 
@@ -953,18 +1016,33 @@ public final class ProxyMetrics {
         }
     }
 
+    /**
+     * Aggregated compressed-frame rewrite counters.
+     */
     public record CompressionRewrite(long count, long cpuNanos) {
     }
 
+    /**
+     * Map key for packet traffic metrics.
+     */
     public record PacketTrafficKey(String server, CompressionDirection direction, String protocolState, int packetId) {
     }
 
+    /**
+     * Map key for custom payload metrics.
+     */
     public record CustomPayloadKey(String server, CompressionDirection direction, String kind, String channel) {
     }
 
+    /**
+     * Map key for relay backpressure metrics.
+     */
     public record RelayBackpressureKey(String server, CompressionDirection direction) {
     }
 
+    /**
+     * Complete point-in-time metrics snapshot.
+     */
     public record Snapshot(
             long acceptedConnections,
             long activeConnections,

@@ -24,6 +24,7 @@ final class BackendReplacementController {
     private final RelaySessionRegistry sessions;
     private final CommandRegistry commands;
     private final EventBus events;
+    private final int protocolVersion;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
 
@@ -39,7 +40,8 @@ final class BackendReplacementController {
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis,
             CommandRegistry commands,
-            EventBus events) {
+            EventBus events,
+            int protocolVersion) {
         this.targetResolver = targetResolver == null ? ServerTargetResolver.unavailable() : targetResolver;
         this.backendConnector = backendConnector;
         this.metrics = metrics;
@@ -50,6 +52,7 @@ final class BackendReplacementController {
         this.sessions = sessions;
         this.commands = commands;
         this.events = events;
+        this.protocolVersion = protocolVersion;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
         this.session.replacementController(this);
@@ -222,7 +225,8 @@ final class BackendReplacementController {
                     compressionRewriteMaxEventLoopDelayMillis,
                     this,
                     commands,
-                    events);
+                    events,
+                    protocolVersion);
             var frontendPipeline = frontend.pipeline();
             var oldRelay = session.frontendRelay();
             if (oldRelay != null) {

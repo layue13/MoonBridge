@@ -9,6 +9,7 @@ User documentation:
 - [Quick start](docs/quick-start.md)
 - [Configuration guide](docs/configuration.md)
 - [Command reference](docs/commands.md)
+- [Plugin API and in-game commands](docs/plugins.md)
 - [Documentation map](docs/README.md)
 - [Zstd compression tuning](docs/compression-zstd.md)
 - [Chinese documentation](docs/zh-CN/README.md)

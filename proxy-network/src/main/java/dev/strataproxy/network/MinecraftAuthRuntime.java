@@ -6,6 +6,9 @@ import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.time.Duration;
 
+/**
+ * Runtime state for Minecraft offline-mode or online-mode login authentication.
+ */
 public final class MinecraftAuthRuntime {
     private final boolean onlineMode;
     private final KeyPair keyPair;
@@ -32,10 +35,22 @@ public final class MinecraftAuthRuntime {
         this.sessionVerifier = sessionVerifier == null ? MinecraftSessionVerifier.disabled() : sessionVerifier;
     }
 
+    /**
+     * @return runtime that accepts offline-mode logins without encryption
+     */
     public static MinecraftAuthRuntime offline() {
         return new MinecraftAuthRuntime(false, null, 4, new SecureRandom(), MinecraftSessionVerifier.disabled());
     }
 
+    /**
+     * Creates an online-mode authentication runtime.
+     *
+     * @param rsaKeyBits RSA key size used in the login encryption request
+     * @param verifyTokenBytes verify-token size
+     * @param sessionVerification whether Mojang session verification is enabled
+     * @param sessionVerificationTimeout timeout for Mojang session verification
+     * @return online-mode authentication runtime
+     */
     public static MinecraftAuthRuntime online(int rsaKeyBits, int verifyTokenBytes, boolean sessionVerification, Duration sessionVerificationTimeout) {
         if (rsaKeyBits < 1024) {
             throw new IllegalArgumentException("rsaKeyBits must be at least 1024");

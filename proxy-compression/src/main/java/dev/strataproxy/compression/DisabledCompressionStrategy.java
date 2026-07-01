@@ -1,5 +1,8 @@
 package dev.strataproxy.compression;
 
+/**
+ * Strategy that always bypasses compression.
+ */
 public final class DisabledCompressionStrategy implements CompressionStrategy {
     @Override
     public CompressionAction choose(CompressionContext context) {

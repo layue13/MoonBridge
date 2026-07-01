@@ -1,5 +1,13 @@
 package dev.strataproxy.network;
 
+/**
+ * Parsed Minecraft handshake packet.
+ *
+ * @param protocolVersion client protocol version
+ * @param requestedHost host requested by the client
+ * @param requestedPort port requested by the client
+ * @param nextState requested next protocol state id
+ */
 public record MinecraftHandshake(
         int protocolVersion,
         String requestedHost,

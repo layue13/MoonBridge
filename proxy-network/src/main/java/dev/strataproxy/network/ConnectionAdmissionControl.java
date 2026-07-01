@@ -6,6 +6,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
+/**
+ * Enforces global and per-address connection concurrency and admission-rate limits.
+ */
 public final class ConnectionAdmissionControl {
     private static final long RATE_WINDOW_NANOS = 1_000_000_000L;
     private static final int RATE_CLEANUP_INTERVAL = 1024;
@@ -21,10 +24,24 @@ public final class ConnectionAdmissionControl {
     private final ConcurrentHashMap<String, AtomicInteger> activeByAddress = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RateWindow> rateByAddress = new ConcurrentHashMap<>();
 
+    /**
+     * Creates admission control with concurrency limits only.
+     *
+     * @param maxConnections global concurrent connection limit
+     * @param maxConnectionsPerAddress concurrent connection limit per client address
+     */
     public ConnectionAdmissionControl(int maxConnections, int maxConnectionsPerAddress) {
         this(maxConnections, maxConnectionsPerAddress, 0, 0);
     }
 
+    /**
+     * Creates admission control with concurrency and rate limits.
+     *
+     * @param maxConnections global concurrent connection limit
+     * @param maxConnectionsPerAddress concurrent connection limit per client address
+     * @param maxNewConnectionsPerSecond global new-connection rate limit; zero disables it
+     * @param maxNewConnectionsPerAddressPerSecond per-address new-connection rate limit; zero disables it
+     */
     public ConnectionAdmissionControl(
             int maxConnections,
             int maxConnectionsPerAddress,
@@ -57,6 +74,12 @@ public final class ConnectionAdmissionControl {
         this.nanoTime = nanoTime;
     }
 
+    /**
+     * Attempts to reserve capacity for a new connection.
+     *
+     * @param remoteAddress client remote address
+     * @return accepted admission or rejection reason
+     */
     public Admission acquire(SocketAddress remoteAddress) {
         var now = nanoTime.getAsLong();
         var key = key(remoteAddress);
@@ -85,6 +108,11 @@ public final class ConnectionAdmissionControl {
         return Admission.accepted(key);
     }
 
+    /**
+     * Releases a previously accepted admission.
+     *
+     * @param admission admission returned by {@link #acquire(SocketAddress)}
+     */
     public void release(Admission admission) {
         if (admission == null || !admission.accepted()) {
             return;
@@ -99,10 +127,17 @@ public final class ConnectionAdmissionControl {
         }
     }
 
+    /**
+     * @return current accepted connection count
+     */
     public long activeConnections() {
         return activeConnections.get();
     }
 
+    /**
+     * @param addressKey normalized client address key
+     * @return active accepted connections for that address
+     */
     public long activeConnectionsFor(String addressKey) {
         var counter = activeByAddress.get(addressKey);
         return counter == null ? 0 : counter.get();
@@ -169,6 +204,13 @@ public final class ConnectionAdmissionControl {
         }
     }
 
+    /**
+     * Admission result for one connection attempt.
+     *
+     * @param accepted whether the connection may proceed
+     * @param addressKey normalized client address key
+     * @param rejectionReason stable reason when rejected, otherwise blank
+     */
     public record Admission(boolean accepted, String addressKey, String rejectionReason) {
         static Admission accepted(String addressKey) {
             return new Admission(true, addressKey, "");

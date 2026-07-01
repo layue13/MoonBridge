@@ -5,6 +5,23 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Immutable runtime configuration for the proxy process.
+ *
+ * @param bindAddress frontend address that accepts Minecraft client connections
+ * @param workerThreads Netty worker thread count; zero means derive from available processors
+ * @param nativeTransport whether native Netty transport should be preferred
+ * @param network low-level network limits and timeouts
+ * @param registry backend registry and health-check configuration
+ * @param compression compression negotiation and rewrite configuration
+ * @param packetAnalysis packet inspection and anomaly thresholds
+ * @param observability metrics and event sampling configuration
+ * @param admin admin HTTP API configuration
+ * @param status Minecraft status-ping response configuration
+ * @param auth online-mode authentication configuration
+ * @param forwarding backend forwarding protocol configuration
+ * @param nativeRuntime native feature preferences
+ */
 public record ProxyConfig(
         InetSocketAddress bindAddress,
         int workerThreads,
@@ -117,10 +134,16 @@ public record ProxyConfig(
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
     }
 
+    /**
+     * @return concrete worker thread count after resolving automatic mode
+     */
     public int resolvedWorkerThreads() {
         return workerThreads == 0 ? Math.max(4, Runtime.getRuntime().availableProcessors()) : workerThreads;
     }
 
+    /**
+     * @return production defaults used when no config file exists
+     */
     public static ProxyConfig defaults() {
         return new ProxyConfig(
                 new InetSocketAddress("0.0.0.0", 25577),
@@ -138,6 +161,17 @@ public record ProxyConfig(
                 NativeConfig.defaults());
     }
 
+    /**
+     * Minecraft server-list status response settings.
+     *
+     * @param enabled whether status requests should be answered locally
+     * @param motd status message of the day
+     * @param protocolName display protocol name
+     * @param protocolVersion protocol version advertised to clients; {@code -1} means runtime default
+     * @param maxPlayers advertised max player count
+     * @param favicon optional {@code data:image/png;base64,...} favicon
+     * @param samplePlayers optional sample players shown in the status response
+     */
     public record StatusConfig(
             boolean enabled,
             String motd,
@@ -162,6 +196,12 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Sample player entry shown in the Minecraft status response.
+     *
+     * @param name displayed player name
+     * @param id UUID string
+     */
     public record StatusSamplePlayer(String name, String id) {
         public StatusSamplePlayer {
             name = name == null ? "" : name;
@@ -169,6 +209,15 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Online-mode authentication settings.
+     *
+     * @param onlineMode whether Minecraft online-mode encryption/authentication is enabled
+     * @param rsaKeyBits RSA key size used during login encryption
+     * @param verifyTokenBytes verify-token size used during login encryption
+     * @param sessionVerification whether Mojang session verification is performed
+     * @param sessionVerificationTimeout timeout for session verification calls
+     */
     public record AuthConfig(
             boolean onlineMode,
             int rsaKeyBits,
@@ -184,6 +233,12 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Backend player-forwarding protocol settings.
+     *
+     * @param mode forwarding mode such as {@code none}, {@code velocity-modern}, or {@code bungee-legacy}
+     * @param secret forwarding secret when the selected mode requires one
+     */
     public record ForwardingConfig(String mode, String secret) {
         public ForwardingConfig {
             mode = mode == null || mode.isBlank() ? "none" : mode;
@@ -195,6 +250,18 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Native runtime feature preferences from configuration.
+     *
+     * @param enabled whether native optimization is enabled
+     * @param autoDetect whether detected native features are enabled automatically
+     * @param preferNativeTransport whether native transport is preferred
+     * @param requireNativeTransport whether native transport is mandatory
+     * @param preferOpenSslTls whether OpenSSL TLS should be requested
+     * @param preferNativeCompression whether native compression providers should be preferred
+     * @param disabledFeatures feature labels to remove from the detected set
+     * @param forcedFeatures feature labels to add even when not detected
+     */
     public record NativeConfig(
             boolean enabled,
             boolean autoDetect,
@@ -214,6 +281,20 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Low-level network limits and timeouts.
+     *
+     * @param maxFrameBytes maximum inbound Minecraft frame size
+     * @param connectTimeoutMillis backend connect timeout
+     * @param writeBufferLowBytes Netty low write-buffer watermark
+     * @param writeBufferHighBytes Netty high write-buffer watermark
+     * @param maxConnections global concurrent connection limit
+     * @param maxConnectionsPerAddress concurrent connection limit per client address
+     * @param maxNewConnectionsPerSecond global admission rate limit; zero disables it
+     * @param maxNewConnectionsPerAddressPerSecond per-address admission rate limit; zero disables it
+     * @param initialHandshakeTimeoutMillis timeout for receiving the initial handshake
+     * @param proxyProtocol whether HAProxy PROXY protocol v1 is accepted on frontend connections
+     */
     public record NetworkConfig(
             int maxFrameBytes,
             int connectTimeoutMillis,
@@ -283,6 +364,17 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Backend registry and health-check configuration.
+     *
+     * @param staticServers whether static server entries from config are loaded
+     * @param persistenceEnabled whether dynamic registry changes are persisted
+     * @param persistencePath path for registry persistence
+     * @param healthCheckEnabled whether background health checks are enabled
+     * @param healthCheckInterval interval between health checks
+     * @param healthCheckTimeout timeout for one health check
+     * @param healthCheckMode health-check strategy, such as {@code tcp} or {@code minecraft-status}
+     */
     public record RegistryConfig(
             boolean staticServers,
             boolean persistenceEnabled,
@@ -313,6 +405,19 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Compression negotiation and compressed-frame rewrite settings.
+     *
+     * @param mode compression strategy mode
+     * @param minThreshold minimum compression threshold
+     * @param maxThreshold maximum compression threshold for adaptive mode
+     * @param cpuGuard CPU load at which compression becomes conservative
+     * @param rewriteEnabled whether compressed frames may be rewritten between thresholds
+     * @param rewriteMaxEventLoopDelayMillis event-loop delay limit for rewrite work
+     * @param codec compression codec label, currently {@code zlib} or {@code zstd}
+     * @param zstdLevel zstd compression level
+     * @param zstdDictionaryPath optional zstd dictionary path
+     */
     public record CompressionConfig(
             String mode,
             int minThreshold,
@@ -351,6 +456,15 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Packet anomaly thresholds.
+     *
+     * @param largePayloadWarnBytes size at which custom payloads emit warnings
+     * @param unknownChannelThrottleBytes size at which unknown channels should be throttled
+     * @param moddedHandshakeWarnBytes size at which modded handshakes emit warnings
+     * @param customPayloadFloodMaxCount allowed custom-payload count in the flood window
+     * @param customPayloadFloodWindow flood detection window
+     */
     public record PacketAnalysisConfig(
             int largePayloadWarnBytes,
             int unknownChannelThrottleBytes,
@@ -366,12 +480,28 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Observability settings.
+     *
+     * @param prometheus whether Prometheus metrics are exposed
+     * @param packetTopN number of top packet rows retained for reports
+     * @param anomalySampling whether packet anomaly samples are retained
+     * @param flushInterval event flush interval
+     */
     public record ObservabilityConfig(boolean prometheus, int packetTopN, boolean anomalySampling, Duration flushInterval) {
         public static ObservabilityConfig defaults() {
             return new ObservabilityConfig(true, 50, true, Duration.ofSeconds(5));
         }
     }
 
+    /**
+     * Admin HTTP API settings.
+     *
+     * @param enabled whether the admin API server should start
+     * @param bindAddress admin API bind address
+     * @param bearerToken bearer token required for protected endpoints; blank disables token auth
+     * @param tls TLS configuration for the admin API
+     */
     public record AdminConfig(boolean enabled, InetSocketAddress bindAddress, String bearerToken, AdminTlsConfig tls) {
         public AdminConfig {
             bearerToken = bearerToken == null ? "" : bearerToken;
@@ -387,6 +517,18 @@ public record ProxyConfig(
         }
     }
 
+    /**
+     * Admin API TLS and optional client-auth settings.
+     *
+     * @param enabled whether admin API TLS is enabled
+     * @param keyStorePath server key store path
+     * @param keyStorePassword server key store password
+     * @param keyStoreType server key store type
+     * @param trustStorePath trust store path for client certificates
+     * @param trustStorePassword trust store password
+     * @param trustStoreType trust store type
+     * @param clientAuth whether client certificates are required
+     */
     public record AdminTlsConfig(
             boolean enabled,
             String keyStorePath,

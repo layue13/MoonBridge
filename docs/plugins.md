@@ -2,6 +2,27 @@
 
 StrataProxy loads proxy plugins from the `plugins/` directory next to the active config file. Plugin jars are optional; the proxy starts normally when the directory is missing.
 
+The public plugin surface is the `dev.strataproxy:proxy-plugin-api` artifact. Plugin projects should depend on that API only; `proxy-network`, `proxy-app`, and other runtime modules are internal implementation details.
+
+For local development from this repository:
+
+```powershell
+.\gradlew.bat :proxy-plugin-api:publishToMavenLocal
+```
+
+Then a plugin project can use:
+
+```kotlin
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly("dev.strataproxy:proxy-plugin-api:0.1.0-SNAPSHOT")
+}
+```
+
 ## Built-in Player Commands
 
 These commands are intercepted by the proxy and are not forwarded to the backend server:
@@ -30,3 +51,29 @@ main=com.example.ExamplePlugin
 It can also use a standard Java `ServiceLoader` provider for `dev.strataproxy.plugin.ProxyPlugin`.
 
 Plugins can register commands, subscribe to events, query players and servers, schedule async work, and request player transfers through the plugin context. Plugin code should not block Netty event-loop threads.
+
+## Minimal Plugin
+
+```java
+public final class HelloPlugin implements ProxyPlugin {
+    @Override
+    public void onLoad(PluginContext context) {
+        context.commands().register(new CommandSpec(
+                "hello",
+                List.of(),
+                "",
+                "Send a hello message.",
+                command -> CompletableFuture.completedFuture(
+                        CommandResult.ok("Hello, " + command.source().name() + "."))));
+    }
+}
+```
+
+The repository includes a standalone example under `examples/hello-plugin`. Build it after publishing the API locally:
+
+```powershell
+.\gradlew.bat :proxy-plugin-api:publishToMavenLocal
+.\gradlew.bat -p examples/hello-plugin build
+```
+
+Copy the resulting plugin jar into the `plugins/` directory next to the active StrataProxy config file, then restart the proxy.

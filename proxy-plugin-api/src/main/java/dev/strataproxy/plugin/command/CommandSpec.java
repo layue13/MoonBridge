@@ -2,6 +2,15 @@ package dev.strataproxy.plugin.command;
 
 import java.util.List;
 
+/**
+ * Definition for a command exposed through the proxy command registry.
+ *
+ * @param name primary command name, normalized to lowercase without a leading slash
+ * @param aliases alternate command names, normalized and deduplicated
+ * @param permission permission required to execute the command, or blank for public commands
+ * @param description short human-readable command description
+ * @param executor command handler
+ */
 public record CommandSpec(
         String name,
         List<String> aliases,

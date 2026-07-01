@@ -34,6 +34,9 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 
+/**
+ * Command-line client for the StrataProxy admin HTTP API.
+ */
 @Command(
         name = "strataproxy-admin",
         mixinStandardHelpOptions = true,

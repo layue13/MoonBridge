@@ -8,21 +8,41 @@ import io.netty.buffer.ByteBufAllocator;
 import java.util.Arrays;
 import java.util.Objects;
 
+/**
+ * Codec for an experimental zstd-backed Minecraft compressed-frame format.
+ *
+ * <p>Returned {@link ByteBuf} instances are newly allocated and must be released by the caller.</p>
+ */
 public final class MinecraftZstdCompressionCodec {
     private static final int DEFAULT_LEVEL = 1;
 
     private final int level;
     private final byte[] dictionary;
 
+    /**
+     * Creates a codec with the default zstd level and no dictionary.
+     */
     public MinecraftZstdCompressionCodec() {
         this(DEFAULT_LEVEL, null);
     }
 
+    /**
+     * @param level zstd compression level
+     * @param dictionary optional zstd dictionary bytes
+     */
     public MinecraftZstdCompressionCodec(int level, byte[] dictionary) {
         this.level = level;
         this.dictionary = dictionary == null || dictionary.length == 0 ? null : Arrays.copyOf(dictionary, dictionary.length);
     }
 
+    /**
+     * Encodes a packet payload into one zstd compressed-frame envelope.
+     *
+     * @param allocator allocator for the returned buffer
+     * @param packet unframed packet payload; reader index is not advanced
+     * @param threshold compression threshold in bytes
+     * @return newly allocated frame buffer owned by the caller
+     */
     public ByteBuf encodeFrame(ByteBufAllocator allocator, ByteBuf packet, int threshold) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(packet, "packet");
@@ -36,6 +56,15 @@ public final class MinecraftZstdCompressionCodec {
         return encodeCompressedFrame(allocator, packet, packetSize);
     }
 
+    /**
+     * Decodes one complete zstd compressed-frame envelope into a packet payload.
+     *
+     * @param allocator allocator for the returned buffer
+     * @param frame complete compressed-frame envelope; reader index is advanced
+     * @param threshold negotiated compression threshold
+     * @param maxUncompressedBytes safety limit for decompressed payload size
+     * @return newly allocated packet payload owned by the caller
+     */
     public ByteBuf decodeFrame(ByteBufAllocator allocator, ByteBuf frame, int threshold, int maxUncompressedBytes) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(frame, "frame");

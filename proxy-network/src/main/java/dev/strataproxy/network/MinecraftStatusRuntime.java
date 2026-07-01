@@ -4,6 +4,18 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.IntSupplier;
 
+/**
+ * Runtime settings for local Minecraft status-ping responses.
+ *
+ * @param enabled whether the proxy answers status requests locally
+ * @param motd message of the day
+ * @param protocolName displayed protocol name
+ * @param protocolVersion displayed protocol version
+ * @param maxPlayers displayed maximum player count
+ * @param favicon optional base64 favicon data URI
+ * @param samplePlayers optional player samples
+ * @param onlinePlayers supplier for current online player count
+ */
 public record MinecraftStatusRuntime(
         boolean enabled,
         String motd,
@@ -32,10 +44,19 @@ public record MinecraftStatusRuntime(
         onlinePlayers = onlinePlayers == null ? () -> 0 : onlinePlayers;
     }
 
+    /**
+     * @return disabled status runtime that reports no local status response
+     */
     public static MinecraftStatusRuntime disabled() {
         return new MinecraftStatusRuntime(false, "StrataProxy", "StrataProxy", -1, 0, "", List.of(), () -> 0);
     }
 
+    /**
+     * Player sample shown in a Minecraft status response.
+     *
+     * @param name displayed player name
+     * @param id UUID string
+     */
     public record SamplePlayer(String name, String id) {
         public SamplePlayer {
             name = name == null ? "" : name;

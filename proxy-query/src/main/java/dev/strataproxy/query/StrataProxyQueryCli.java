@@ -26,6 +26,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Command-line tool for Minecraft status and proxy load probes.
+ */
 @Command(
         name = "strataproxy-query",
         mixinStandardHelpOptions = true,

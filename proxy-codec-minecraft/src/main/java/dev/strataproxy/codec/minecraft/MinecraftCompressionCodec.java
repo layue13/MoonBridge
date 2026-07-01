@@ -8,6 +8,11 @@ import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 
+/**
+ * Codec for Minecraft's zlib-compressed packet frame format.
+ *
+ * <p>Returned {@link ByteBuf} instances are newly allocated and must be released by the caller.</p>
+ */
 public final class MinecraftCompressionCodec implements AutoCloseable {
     private static final int DEFAULT_BUFFER_SIZE = 8192;
 
@@ -15,10 +20,19 @@ public final class MinecraftCompressionCodec implements AutoCloseable {
     private final Inflater inflater;
     private final byte[] buffer;
 
+    /**
+     * Creates a codec using the JDK default compression level and scratch-buffer size.
+     */
     public MinecraftCompressionCodec() {
         this(Deflater.DEFAULT_COMPRESSION, DEFAULT_BUFFER_SIZE);
     }
 
+    /**
+     * Creates a codec with explicit compression settings.
+     *
+     * @param compressionLevel JDK {@link Deflater} compression level
+     * @param scratchBufferBytes temporary buffer size used while compressing or inflating
+     */
     public MinecraftCompressionCodec(int compressionLevel, int scratchBufferBytes) {
         if (scratchBufferBytes <= 0) {
             throw new IllegalArgumentException("scratchBufferBytes must be positive");
@@ -28,6 +42,14 @@ public final class MinecraftCompressionCodec implements AutoCloseable {
         this.buffer = new byte[scratchBufferBytes];
     }
 
+    /**
+     * Encodes a packet payload into one Minecraft compressed-frame envelope.
+     *
+     * @param allocator allocator for the returned buffer
+     * @param packet unframed packet payload; reader index is not advanced
+     * @param threshold compression threshold in bytes
+     * @return newly allocated frame buffer owned by the caller
+     */
     public ByteBuf encodeFrame(ByteBufAllocator allocator, ByteBuf packet, int threshold) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(packet, "packet");
@@ -41,6 +63,15 @@ public final class MinecraftCompressionCodec implements AutoCloseable {
         return encodeCompressedFrame(allocator, packet, packetSize);
     }
 
+    /**
+     * Decodes one complete Minecraft compressed-frame envelope into a packet payload.
+     *
+     * @param allocator allocator for the returned buffer
+     * @param frame complete compressed-frame envelope; reader index is advanced
+     * @param threshold negotiated compression threshold
+     * @param maxUncompressedBytes safety limit for decompressed payload size
+     * @return newly allocated packet payload owned by the caller
+     */
     public ByteBuf decodeFrame(ByteBufAllocator allocator, ByteBuf frame, int threshold, int maxUncompressedBytes) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(frame, "frame");
@@ -75,6 +106,9 @@ public final class MinecraftCompressionCodec implements AutoCloseable {
         }
     }
 
+    /**
+     * Releases the underlying deflater and inflater.
+     */
     @Override
     public void close() {
         deflater.end();

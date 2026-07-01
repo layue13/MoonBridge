@@ -23,6 +23,9 @@ import java.util.ServiceLoader;
 import java.util.jar.JarFile;
 import java.util.logging.Logger;
 
+/**
+ * Loads plugin jars, invokes plugin lifecycle methods, and releases plugin class loaders on shutdown.
+ */
 public final class PluginManager implements AutoCloseable {
     private static final String DESCRIPTOR = "strataproxy-plugin.properties";
 
@@ -34,6 +37,16 @@ public final class PluginManager implements AutoCloseable {
     private final Logger logger;
     private final List<LoadedPlugin> plugins = new ArrayList<>();
 
+    /**
+     * Creates a plugin manager backed by proxy services.
+     *
+     * @param commands command registry exposed to plugins
+     * @param events event bus exposed to plugins
+     * @param players player service exposed to plugins
+     * @param servers server service exposed to plugins
+     * @param scheduler scheduler exposed to plugins
+     * @param logger logger for plugin manager diagnostics
+     */
     public PluginManager(
             CommandRegistry commands,
             EventBus events,
@@ -49,6 +62,13 @@ public final class PluginManager implements AutoCloseable {
         this.logger = logger == null ? Logger.getLogger(PluginManager.class.getName()) : logger;
     }
 
+    /**
+     * Loads every plugin jar in a directory.
+     *
+     * @param directory plugin directory
+     * @return metadata for successfully loaded plugins
+     * @throws IOException when the directory cannot be listed
+     */
     public List<PluginMetadata> loadDirectory(Path directory) throws IOException {
         if (directory == null || Files.notExists(directory)) {
             return List.of();
@@ -74,6 +94,13 @@ public final class PluginManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Loads a single plugin jar.
+     *
+     * @param jarPath plugin jar path
+     * @return loaded plugin metadata
+     * @throws IOException when the jar cannot be loaded or plugin lifecycle initialization fails
+     */
     public PluginMetadata loadJar(Path jarPath) throws IOException {
         var source = jarPath.toAbsolutePath().normalize();
         var classLoader = new URLClassLoader(new URL[] { source.toUri().toURL() }, ProxyPlugin.class.getClassLoader());
@@ -105,6 +132,9 @@ public final class PluginManager implements AutoCloseable {
         }
     }
 
+    /**
+     * @return metadata for currently loaded plugins
+     */
     public List<PluginMetadata> plugins() {
         return plugins.stream().map(LoadedPlugin::metadata).toList();
     }

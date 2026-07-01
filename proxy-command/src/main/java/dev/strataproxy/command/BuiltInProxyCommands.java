@@ -11,10 +11,20 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Registers the built-in player-facing proxy commands.
+ */
 public final class BuiltInProxyCommands {
     private BuiltInProxyCommands() {
     }
 
+    /**
+     * Registers built-in commands in the supplied command registry.
+     *
+     * @param commands command registry to mutate
+     * @param players player service used by transfer commands
+     * @param servers server service used by discovery commands
+     */
     public static void register(CommandRegistry commands, PlayerService players, ServerService servers) {
         commands.register(new CommandSpec(
                 "server",

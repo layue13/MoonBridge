@@ -42,6 +42,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
 
+/**
+ * Embedded admin HTTP server for registry management, readiness checks, metrics, and diagnostics.
+ */
 public final class AdminHttpServer implements AutoCloseable {
     private static final String JSON = "application/json; charset=utf-8";
 
@@ -1262,6 +1265,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Admin response view of a registered backend server.
+     */
     public record ServerView(
             String name,
             String address,
@@ -1289,6 +1295,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Admin response view of backend health.
+     */
     public record HealthView(
             ServerHealthStatus status,
             long backendPingMillis,
@@ -1305,6 +1314,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * High-level admin overview response.
+     */
     public record OverviewView(
             String status,
             long servers,
@@ -1326,6 +1338,9 @@ public final class AdminHttpServer implements AutoCloseable {
             boolean nativeTransport) {
     }
 
+    /**
+     * Admin response view of native runtime state.
+     */
     public record NativeRuntimeView(
             boolean enabled,
             String os,
@@ -1356,9 +1371,15 @@ public final class AdminHttpServer implements AutoCloseable {
                 && !server.load().isHardFull();
     }
 
+    /**
+     * Readiness endpoint response.
+     */
     public record ReadinessView(String status, long readyServers, long registeredServers, String timestamp) {
     }
 
+    /**
+     * Route-preview endpoint response.
+     */
     public record RoutePreviewView(
             boolean selected,
             String server,
@@ -1370,6 +1391,9 @@ public final class AdminHttpServer implements AutoCloseable {
             List<RouteCandidateView> candidates) {
     }
 
+    /**
+     * Route candidate row used in route-preview responses.
+     */
     public record RouteCandidateView(
             String server,
             boolean eligible,
@@ -1378,6 +1402,9 @@ public final class AdminHttpServer implements AutoCloseable {
             double selectionKey) {
     }
 
+    /**
+     * Full diagnostic report response.
+     */
     public record DiagnosticReport(
             String generatedAt,
             OverviewView overview,
@@ -1393,6 +1420,9 @@ public final class AdminHttpServer implements AutoCloseable {
             PlayerSessionReport playerSessions) {
     }
 
+    /**
+     * Admission rejection summary.
+     */
     public record RejectionReport(long rejectedConnections, Map<String, Long> rejectedConnectionsByReason) {
     }
 
@@ -1406,9 +1436,15 @@ public final class AdminHttpServer implements AutoCloseable {
         return new PlayerSessionReport(players.size(), players);
     }
 
+    /**
+     * Active player session report.
+     */
     public record PlayerSessionReport(int active, List<PlayerSessionView> players) {
     }
 
+    /**
+     * Admin response view of one player session.
+     */
     public record PlayerSessionView(String player, String server, String remoteAddress, String connectedAt) {
         static PlayerSessionView from(ProxyMetrics.PlayerSession session) {
             return new PlayerSessionView(
@@ -1431,6 +1467,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Admin response view of a player transfer attempt.
+     */
     public record PlayerTransferView(
             boolean success,
             String outcome,
@@ -1461,12 +1500,21 @@ public final class AdminHttpServer implements AutoCloseable {
         };
     }
 
+    /**
+     * Packet anomaly report response.
+     */
     public record PacketAnomalyReport(long total, List<PacketAnomalyView> rules, List<PacketAnomalySampleView> recentSamples) {
     }
 
+    /**
+     * Packet anomaly count for one rule.
+     */
     public record PacketAnomalyView(String rule, long count) {
     }
 
+    /**
+     * Recent packet anomaly sample view.
+     */
     public record PacketAnomalySampleView(
             long sequence,
             String rule,
@@ -1495,6 +1543,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Packet traffic report response.
+     */
     public record PacketTrafficReport(
             long totalPackets,
             long totalRawBytes,
@@ -1502,6 +1553,9 @@ public final class AdminHttpServer implements AutoCloseable {
             List<PacketTrafficView> top) {
     }
 
+    /**
+     * Packet traffic row in admin reports.
+     */
     public record PacketTrafficView(
             String server,
             String direction,
@@ -1522,6 +1576,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Custom payload report response.
+     */
     public record CustomPayloadReport(
             long totalPackets,
             long totalPayloadBytes,
@@ -1530,6 +1587,9 @@ public final class AdminHttpServer implements AutoCloseable {
             List<CustomPayloadSampleView> recentSamples) {
     }
 
+    /**
+     * Custom payload aggregate row.
+     */
     public record CustomPayloadView(
             String server,
             String direction,
@@ -1558,6 +1618,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Recent custom payload sample view.
+     */
     public record CustomPayloadSampleView(
             long sequence,
             String server,
@@ -1588,9 +1651,15 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Relay backpressure report response.
+     */
     public record RelayBackpressureReport(long totalEvents, List<RelayBackpressureView> top) {
     }
 
+    /**
+     * Relay backpressure row.
+     */
     public record RelayBackpressureView(
             String server,
             String direction,
@@ -1616,9 +1685,15 @@ public final class AdminHttpServer implements AutoCloseable {
         public long durationMillis = 30_000;
     }
 
+    /**
+     * Active payload capture report.
+     */
     public record PayloadCaptureReport(List<PayloadCaptureView> captures) {
     }
 
+    /**
+     * Payload capture export response.
+     */
     public record PayloadCaptureExport(PayloadCaptureView capture, List<PayloadCaptureSampleView> samples) {
         static PayloadCaptureExport from(ProxyMetrics.PayloadCapture capture, List<ProxyMetrics.PayloadCaptureSample> samples) {
             return new PayloadCaptureExport(
@@ -1627,6 +1702,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Payload capture configuration and sample count view.
+     */
     public record PayloadCaptureView(
             String id,
             String server,
@@ -1647,6 +1725,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Payload capture sample response view.
+     */
     public record PayloadCaptureSampleView(
             long sequence,
             String captureId,
@@ -1673,12 +1754,18 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Compression report response.
+     */
     public record CompressionReport(
             List<CompressionReportRow> rows,
             List<CompressionDecisionView> decisions,
             List<CompressionRewriteView> rewrites) {
     }
 
+    /**
+     * Compression aggregate row.
+     */
     public record CompressionReportRow(
             String scope,
             String direction,
@@ -1708,6 +1795,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Compression decision aggregate row.
+     */
     public record CompressionDecisionView(
             String scope,
             String direction,
@@ -1724,6 +1814,9 @@ public final class AdminHttpServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Compression rewrite aggregate row.
+     */
     public record CompressionRewriteView(
             String scope,
             String direction,

@@ -20,6 +20,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Netty-based implementation of the Minecraft proxy frontend server.
+ */
 public final class NettyProxyNetworkServer implements ProxyNetworkServer {
     private final EventLoopGroup bossGroup;
     private final EventLoopGroup workerGroup;

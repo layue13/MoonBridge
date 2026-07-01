@@ -6,6 +6,14 @@ import dev.strataproxy.protocol.ProtocolState;
 import java.time.Instant;
 import java.util.Optional;
 
+/**
+ * Packet rule that flags packets whose raw size exceeds a state-specific limit.
+ *
+ * @param id stable rule identifier
+ * @param state protocol state to inspect
+ * @param maxBytes maximum allowed raw packet size
+ * @param action recommended action when the limit is exceeded
+ */
 public record MaxPacketSizeRule(String id, ProtocolState state, int maxBytes, AnomalyAction action) implements PacketRule {
     @Override
     public Optional<PacketAnomaly> evaluate(PacketView packet) {

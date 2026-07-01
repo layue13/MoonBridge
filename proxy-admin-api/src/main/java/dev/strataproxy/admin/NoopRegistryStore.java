@@ -7,7 +7,11 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 
+/**
+ * Registry store that deliberately performs no persistence.
+ */
 public enum NoopRegistryStore implements RegistryStore {
+    /** Singleton no-op store instance. */
     INSTANCE;
 
     @Override

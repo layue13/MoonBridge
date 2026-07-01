@@ -6,9 +6,20 @@ import dev.strataproxy.api.server.ServerRegistry;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Router that combines configured weights with health, load, latency, and event-loop pressure.
+ *
+ * <p>Eligible servers are selected with deterministic weighted sampling. The same request identity tends to make the
+ * same choice while healthier and less-loaded servers receive proportionally more traffic.</p>
+ */
 public final class WeightedHealthAwareRouter implements ServerRouter {
     private final ServerRegistry registry;
 
+    /**
+     * Creates a router backed by a live server registry.
+     *
+     * @param registry registry supplying server snapshots
+     */
     public WeightedHealthAwareRouter(ServerRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
     }
@@ -26,6 +37,12 @@ public final class WeightedHealthAwareRouter implements ServerRouter {
                 .orElseGet(() -> new RoutingDecision.Rejected("no healthy backend matched route constraints"));
     }
 
+    /**
+     * Explains how each registered server would be treated for a request.
+     *
+     * @param request route constraints
+     * @return candidates ordered with eligible servers first and best selection keys first
+     */
     public List<RouteCandidate> explain(RoutingRequest request) {
         return registry.snapshot().stream()
                 .map(server -> explain(request, server))
@@ -145,6 +162,16 @@ public final class WeightedHealthAwareRouter implements ServerRouter {
         return value == null ? "" : value;
     }
 
+    /**
+     * Diagnostic view of a server considered during routing.
+     *
+     * @param server backend server
+     * @param serverName backend name copied for stable sorting and reporting
+     * @param eligible whether the server passed all hard routing checks
+     * @param reason rejection reason, or blank when eligible
+     * @param effectiveWeight configured weight after health and load penalties
+     * @param selectionKey deterministic weighted-sampling key; lower values are preferred
+     */
     public record RouteCandidate(
             RegisteredServer server,
             String serverName,

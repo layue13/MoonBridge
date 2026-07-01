@@ -11,14 +11,24 @@ import java.net.SocketAddress;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * Resolves backend servers from Minecraft handshakes by delegating to a {@link ServerRouter}.
+ */
 public final class RoutingBackendResolver implements BackendResolver, ServerTargetResolver {
     private final ServerRouter router;
     private final ServerRegistry registry;
 
+    /**
+     * @param router router used for handshake-based backend selection
+     */
     public RoutingBackendResolver(ServerRouter router) {
         this(router, null);
     }
 
+    /**
+     * @param router router used for handshake-based backend selection
+     * @param registry optional registry used for explicit transfer targets
+     */
     public RoutingBackendResolver(ServerRouter router, ServerRegistry registry) {
         this.router = router;
         this.registry = registry;

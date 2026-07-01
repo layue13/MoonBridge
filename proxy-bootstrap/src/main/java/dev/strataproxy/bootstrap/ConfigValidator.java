@@ -11,6 +11,9 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.UUID;
 
+/**
+ * Performs semantic validation of loaded configuration before startup.
+ */
 public final class ConfigValidator {
     private static final int MIN_SAFE_MAX_FRAME_BYTES = 1_024;
     private static final java.util.Set<String> NATIVE_FEATURES = java.util.Set.of(
@@ -31,6 +34,12 @@ public final class ConfigValidator {
             "arm_aes",
             "arm_sha");
 
+    /**
+     * Validates proxy settings and static server descriptors.
+     *
+     * @param loaded loaded configuration to validate
+     * @return validation errors and warnings
+     */
     public ConfigValidationResult validate(ConfigLoader.LoadedProxyConfig loaded) {
         var errors = new ArrayList<String>();
         var warnings = new ArrayList<String>();

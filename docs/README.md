@@ -20,6 +20,7 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 | Add or remove backend servers while the proxy is running | [Command Reference: Backend Servers](commands.md#backend-servers) |
 | Understand what each config key does | [Configuration Guide](configuration.md) |
 | Use Velocity or Bungee-style IP forwarding | [Configuration Guide: Forwarding](configuration.md#forwarding) |
+| Write a proxy-side plugin or use in-game commands | [Plugins and In-Game Commands](plugins.md) |
 | Expose the Admin API safely | [Configuration Guide: Admin API](configuration.md#admin-api) |
 | Tune compression for modded traffic | [Zstd Compression Tuning](compression-zstd.md) |
 | Deploy with systemd or a container | [Deployment Notes](../deployment/README.md) |

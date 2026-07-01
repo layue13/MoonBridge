@@ -5,6 +5,23 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * Immutable configuration for a backend server.
+ *
+ * <p>Descriptors carry only static routing data. Runtime state such as health, current player count, and drain state
+ * lives on {@link RegisteredServer}.</p>
+ *
+ * @param name unique backend name used by routes, admin APIs, and diagnostics
+ * @param address socket address the proxy connects to
+ * @param tags free-form routing labels such as region, mode, or shard
+ * @param capabilities feature flags that clients or routes may require
+ * @param protocolRange supported Minecraft protocol versions
+ * @param weight relative routing weight before health and load penalties are applied
+ * @param softCapacity player count at which routing starts reducing preference
+ * @param hardCapacity player count at which new routing is rejected; zero means unlimited
+ * @param drainMode initial drain flag for this server
+ * @param metadata extra routing and operational metadata, including optional {@code host} or {@code route} aliases
+ */
 public record ServerDescriptor(
         String name,
         InetSocketAddress address,
@@ -39,6 +56,12 @@ public record ServerDescriptor(
         return value;
     }
 
+    /**
+     * Tests whether this descriptor declares a backend capability.
+     *
+     * @param capability feature to check
+     * @return {@code true} when the capability is present
+     */
     public boolean supports(ServerCapability capability) {
         return capabilities.contains(capability);
     }

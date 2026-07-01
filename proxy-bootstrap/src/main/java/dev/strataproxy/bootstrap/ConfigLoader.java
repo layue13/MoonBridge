@@ -19,14 +19,32 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * Loads YAML configuration into validated runtime configuration records.
+ */
 public final class ConfigLoader {
     private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory())
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /**
+     * Loads configuration from a path and expands variables from the process environment.
+     *
+     * @param path YAML config path
+     * @return loaded proxy and static server configuration, or defaults when the file does not exist
+     * @throws IOException when the file cannot be read or parsed
+     */
     public LoadedProxyConfig load(Path path) throws IOException {
         return load(path, System.getenv());
     }
 
+    /**
+     * Loads configuration from a path using an explicit environment map for variable expansion.
+     *
+     * @param path YAML config path
+     * @param environment environment variables used for {@code ${NAME:default}} expansion
+     * @return loaded proxy and static server configuration, or defaults when the file does not exist
+     * @throws IOException when the file cannot be read or parsed
+     */
     public LoadedProxyConfig load(Path path, Map<String, String> environment) throws IOException {
         if (Files.notExists(path)) {
             return LoadedProxyConfig.defaults();
@@ -36,7 +54,16 @@ public final class ConfigLoader {
         return file.toLoadedConfig(path.toAbsolutePath().getParent());
     }
 
+    /**
+     * Fully materialized configuration loaded from disk.
+     *
+     * @param proxy proxy runtime configuration
+     * @param servers static backend descriptors loaded from the file
+     */
     public record LoadedProxyConfig(ProxyConfig proxy, List<ServerDescriptor> servers) {
+        /**
+         * @return default proxy configuration with one local lobby backend
+         */
         public static LoadedProxyConfig defaults() {
             return new LoadedProxyConfig(ProxyConfig.defaults(), List.of(defaultServer()));
         }
@@ -56,6 +83,9 @@ public final class ConfigLoader {
         }
     }
 
+    /**
+     * Jackson-bound representation of the top-level YAML file.
+     */
     public static final class ConfigFile {
         public NetworkFile network = new NetworkFile();
         public RegistryFile registry = new RegistryFile();
@@ -184,6 +214,9 @@ public final class ConfigLoader {
         }
     }
 
+    /**
+     * YAML network section.
+     */
     public static final class NetworkFile {
         public String bind = "0.0.0.0:25577";
         public int workerThreads = 0;
@@ -200,6 +233,9 @@ public final class ConfigLoader {
         public boolean proxyProtocol = false;
     }
 
+    /**
+     * YAML registry section.
+     */
     public static final class RegistryFile {
         public boolean staticServers = true;
         public boolean persistenceEnabled = true;
@@ -210,6 +246,9 @@ public final class ConfigLoader {
         public String healthCheckMode = "tcp";
     }
 
+    /**
+     * YAML compression section.
+     */
     public static final class CompressionFile {
         public String mode = "adaptive";
         public int minThreshold = 256;
@@ -222,6 +261,9 @@ public final class ConfigLoader {
         public String zstdDictionaryPath = "";
     }
 
+    /**
+     * YAML packet-analysis section.
+     */
     public static final class PacketAnalysisFile {
         public String largePayloadWarnBytes = "1mb";
         public String unknownChannelThrottleBytes = "256kb";
@@ -230,6 +272,9 @@ public final class ConfigLoader {
         public String customPayloadFloodWindow = "10s";
     }
 
+    /**
+     * YAML observability section.
+     */
     public static final class ObservabilityFile {
         public boolean prometheus = true;
         public int packetTopN = 50;
@@ -237,6 +282,9 @@ public final class ConfigLoader {
         public long flushIntervalSeconds = 5;
     }
 
+    /**
+     * YAML native-runtime section.
+     */
     public static final class NativeFile {
         public boolean enabled = true;
         public boolean autoDetect = true;
@@ -248,6 +296,9 @@ public final class ConfigLoader {
         public Set<String> forcedFeatures = Set.of();
     }
 
+    /**
+     * YAML authentication section.
+     */
     public static final class AuthFile {
         public boolean onlineMode = false;
         public int rsaKeyBits = 1024;
@@ -256,6 +307,9 @@ public final class ConfigLoader {
         public String sessionVerificationTimeout = "5s";
     }
 
+    /**
+     * YAML status-ping section.
+     */
     public static final class StatusFile {
         public boolean enabled = true;
         public String motd = "StrataProxy";
@@ -267,16 +321,25 @@ public final class ConfigLoader {
         public List<StatusSamplePlayerFile> samplePlayers = List.of();
     }
 
+    /**
+     * YAML sample player entry for status responses.
+     */
     public static final class StatusSamplePlayerFile {
         public String name = "";
         public String id = "00000000-0000-0000-0000-000000000000";
     }
 
+    /**
+     * YAML player-forwarding section.
+     */
     public static final class ForwardingFile {
         public String mode = "none";
         public String secret = "";
     }
 
+    /**
+     * YAML admin API section.
+     */
     public static final class AdminFile {
         public boolean enabled = true;
         public String bind = "127.0.0.1:8080";
@@ -284,6 +347,9 @@ public final class ConfigLoader {
         public AdminTlsFile tls = new AdminTlsFile();
     }
 
+    /**
+     * YAML admin TLS section.
+     */
     public static final class AdminTlsFile {
         public boolean enabled = false;
         public String keyStorePath = "";
@@ -295,6 +361,9 @@ public final class ConfigLoader {
         public boolean clientAuth = false;
     }
 
+    /**
+     * YAML backend server entry.
+     */
     public static final class ServerFile {
         public String name;
         public String address;

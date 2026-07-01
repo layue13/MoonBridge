@@ -6,12 +6,20 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 
 import java.util.List;
 
+/**
+ * Netty decoder that converts Minecraft compressed frames into uncompressed packet payload buffers.
+ */
 public final class MinecraftCompressionFrameDecoder extends ByteToMessageDecoder {
     private final int threshold;
     private final int maxFrameBytes;
     private final int maxUncompressedBytes;
     private final MinecraftCompressionCodec codec;
 
+    /**
+     * @param threshold negotiated compression threshold
+     * @param maxFrameBytes maximum compressed frame envelope size
+     * @param maxUncompressedBytes maximum decoded packet payload size
+     */
     public MinecraftCompressionFrameDecoder(int threshold, int maxFrameBytes, int maxUncompressedBytes) {
         if (threshold < 0) {
             throw new IllegalArgumentException("threshold must be non-negative");

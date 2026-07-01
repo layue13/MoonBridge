@@ -11,15 +11,29 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Optional;
 
+/**
+ * Admin mutation facade for the backend registry with persistence rollback on save failure.
+ */
 public final class AdminRegistryService {
     private final ServerRegistry registry;
     private final RegistryStore store;
 
+    /**
+     * @param registry registry to mutate
+     * @param store persistence store; no-op persistence is used when {@code null}
+     */
     public AdminRegistryService(ServerRegistry registry, RegistryStore store) {
         this.registry = registry;
         this.store = store == null ? NoopRegistryStore.INSTANCE : store;
     }
 
+    /**
+     * Registers or replaces a backend and persists the new registry snapshot.
+     *
+     * @param descriptor backend descriptor
+     * @return registered server view
+     * @throws IOException when persistence fails
+     */
     public RegisteredServer register(ServerDescriptor descriptor) throws IOException {
         var previous = registry.get(descriptor.name()).map(RegisteredServer::descriptor);
         var server = registry.registerOrReplace(descriptor);
@@ -36,6 +50,14 @@ public final class AdminRegistryService {
         return server;
     }
 
+    /**
+     * Unregisters a backend and persists the registry when changed.
+     *
+     * @param name backend name
+     * @param policy drain policy
+     * @return {@code true} when a server was changed
+     * @throws IOException when persistence fails
+     */
     public boolean unregister(String name, DrainPolicy policy) throws IOException {
         var changed = registry.unregister(name, policy);
         if (changed) {

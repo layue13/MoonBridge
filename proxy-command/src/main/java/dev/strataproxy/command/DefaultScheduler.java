@@ -8,6 +8,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Scheduled executor-backed plugin scheduler.
+ */
 public final class DefaultScheduler implements Scheduler, AutoCloseable {
     private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),

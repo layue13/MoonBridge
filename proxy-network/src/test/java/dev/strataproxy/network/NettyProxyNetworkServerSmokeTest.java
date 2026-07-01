@@ -496,6 +496,67 @@ final class NettyProxyNetworkServerSmokeTest {
     }
 
     @Test
+    void gameCommandResultMessageIsSentToClientAndNotForwarded() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var commandFrame = playCommandFrame(0x04, "servers");
+        var backendExecutor = Executors.newSingleThreadExecutor();
+
+        try (var backendSocket = new ServerSocket(0)) {
+            backendSocket.setSoTimeout(5_000);
+            var backendPort = backendSocket.getLocalPort();
+            var noCommandForwarded = backendExecutor.submit(() -> {
+                try (var accepted = backendSocket.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    readMinecraftFrame(accepted.getInputStream());
+                    readMinecraftFrame(accepted.getInputStream());
+                    accepted.setSoTimeout(300);
+                    try {
+                        return accepted.getInputStream().read() < 0;
+                    } catch (SocketTimeoutException exception) {
+                        return true;
+                    }
+                }
+            });
+
+            var selected = server("survival-1", backendPort);
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+            var commands = new DefaultCommandRegistry();
+            commands.register(new CommandSpec("servers", List.of(), "", "", context ->
+                    java.util.concurrent.CompletableFuture.completedFuture(CommandResult.ok("Servers: survival-1"))));
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    (request, remoteAddress) -> java.util.Optional.of(selected),
+                    metrics,
+                    tuning,
+                    commands,
+                    new SimpleEventBus())) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+                    awaitPlayerSession(metrics, "Steve", "survival-1");
+
+                    client.getOutputStream().write(commandFrame);
+                    client.getOutputStream().flush();
+
+                    assertEquals("Servers: survival-1", systemChatMessage(readMinecraftFrame(client.getInputStream())));
+                    assertTrue(noCommandForwarded.get(5, TimeUnit.SECONDS));
+                }
+            }
+        } finally {
+            backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
     void externalPlayerTransferReportsMissingPlayer() throws Exception {
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
@@ -938,6 +999,23 @@ final class NettyProxyNetworkServerSmokeTest {
             var length = MinecraftVarInts.read(frame);
             var body = frame.readSlice(length);
             assertEquals(0, MinecraftVarInts.read(body));
+            var json = readString(body);
+            var prefix = "{\"text\":\"";
+            var suffix = "\"}";
+            return json.startsWith(prefix) && json.endsWith(suffix)
+                    ? json.substring(prefix.length(), json.length() - suffix.length())
+                    : json;
+        } finally {
+            frame.release();
+        }
+    }
+
+    private static String systemChatMessage(byte[] frameBytes) {
+        var frame = Unpooled.wrappedBuffer(frameBytes);
+        try {
+            var length = MinecraftVarInts.read(frame);
+            var body = frame.readSlice(length);
+            assertEquals(0x64, MinecraftVarInts.read(body));
             var json = readString(body);
             var prefix = "{\"text\":\"";
             var suffix = "\"}";

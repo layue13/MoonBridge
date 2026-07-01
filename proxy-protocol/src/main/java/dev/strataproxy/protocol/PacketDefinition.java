@@ -3,6 +3,17 @@ package dev.strataproxy.protocol;
 import java.util.EnumSet;
 import java.util.Objects;
 
+/**
+ * Static metadata for a Minecraft packet id in a protocol state and direction.
+ *
+ * @param id packet id in the selected protocol version
+ * @param state protocol state where the packet appears
+ * @param direction packet direction
+ * @param minProtocol first Minecraft protocol version covered by this definition
+ * @param maxProtocol last Minecraft protocol version covered by this definition
+ * @param flags handling hints for relay, compression, and inspection
+ * @param name human-readable packet name
+ */
 public record PacketDefinition(
         int id,
         ProtocolState state,
@@ -21,10 +32,18 @@ public record PacketDefinition(
         }
     }
 
+    /**
+     * @param protocolVersion Minecraft protocol version
+     * @return {@code true} when this definition covers the version
+     */
     public boolean appliesTo(int protocolVersion) {
         return protocolVersion >= minProtocol && protocolVersion <= maxProtocol;
     }
 
+    /**
+     * @param flag handling flag
+     * @return {@code true} when the flag is set
+     */
     public boolean has(PacketFlag flag) {
         return flags.contains(flag);
     }

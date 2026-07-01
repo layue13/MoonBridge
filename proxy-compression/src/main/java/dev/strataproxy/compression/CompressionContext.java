@@ -2,6 +2,18 @@ package dev.strataproxy.compression;
 
 import dev.strataproxy.protocol.PacketView;
 
+/**
+ * Runtime inputs used to choose compression behavior.
+ *
+ * @param packet packet being considered
+ * @param playerRttMillis estimated client round-trip time
+ * @param backendRttMillis estimated backend round-trip time
+ * @param cpuLoad proxy CPU load in the range {@code 0.0..1.0}
+ * @param cpuGuard CPU threshold at which compression should become conservative
+ * @param historicalCompressionRatio compressed/raw ratio observed for similar traffic
+ * @param minThreshold minimum allowed compression threshold
+ * @param maxThreshold maximum allowed compression threshold
+ */
 public record CompressionContext(
         PacketView packet,
         long playerRttMillis,

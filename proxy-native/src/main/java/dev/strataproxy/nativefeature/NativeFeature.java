@@ -2,6 +2,9 @@ package dev.strataproxy.nativefeature;
 
 import java.util.Locale;
 
+/**
+ * CPU or platform feature that can influence native transport, TLS, or compression choices.
+ */
 public enum NativeFeature {
     AES("aes"),
     VAES("vaes"),
@@ -26,10 +29,20 @@ public enum NativeFeature {
         this.label = label;
     }
 
+    /**
+     * @return stable lowercase label used in configuration and diagnostics
+     */
     public String label() {
         return label;
     }
 
+    /**
+     * Resolves a feature from a label or enum name.
+     *
+     * @param value label such as {@code avx2} or {@code arm-aes}
+     * @return matching native feature
+     * @throws IllegalArgumentException when the value is blank or unknown
+     */
     public static NativeFeature fromLabel(String value) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("native feature must not be blank");

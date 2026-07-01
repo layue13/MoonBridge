@@ -15,6 +15,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Thread-safe in-memory command registry and dispatcher.
+ */
 public final class DefaultCommandRegistry implements CommandRegistry {
     private final Map<String, CommandSpec> commands = new ConcurrentHashMap<>();
 
@@ -63,6 +66,12 @@ public final class DefaultCommandRegistry implements CommandRegistry {
         }
     }
 
+    /**
+     * Tests whether input resolves to a registered command without executing it.
+     *
+     * @param input raw command input
+     * @return {@code true} when a command name or alias matches
+     */
     public boolean canHandle(String input) {
         var parsed = ParsedCommand.parse(input);
         return parsed != null && commands.containsKey(parsed.label());

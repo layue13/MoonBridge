@@ -1,5 +1,11 @@
 package dev.strataproxy.network;
 
+/**
+ * Effective backend forwarding mode and secret used by Minecraft relay handlers.
+ *
+ * @param mode forwarding mode, such as {@code none}, {@code velocity-modern}, {@code bungee-legacy}, or {@code bungee-guard}
+ * @param secret forwarding secret for modes that require one
+ */
 public record MinecraftForwardingRuntime(String mode, String secret) {
     public MinecraftForwardingRuntime {
         mode = mode == null || mode.isBlank() ? "none" : mode.trim();
