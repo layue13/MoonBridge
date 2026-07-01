@@ -4,6 +4,7 @@ import dev.strataproxy.admin.AdminHttpServer;
 import dev.strataproxy.admin.AdminRegistryService;
 import dev.strataproxy.admin.JsonRegistryStore;
 import dev.strataproxy.admin.NoopRegistryStore;
+import dev.strataproxy.admin.PlayerTransferService;
 import dev.strataproxy.admin.RegistryStore;
 import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
 import dev.strataproxy.bootstrap.ConfigLoader;
@@ -145,7 +146,7 @@ public final class StrataProxyLauncher {
             adminRegistry.persist();
 
             var router = new WeightedHealthAwareRouter(registry);
-            var resolver = new RoutingBackendResolver(router);
+            var resolver = new RoutingBackendResolver(router, registry);
             var metrics = new ProxyMetrics(config.observability().anomalySampling());
             var nativeDecision = NativeRuntimeDecision.resolve(nativeOptions(config.nativeRuntime()), NativeCapabilityDetector.detect());
             metrics.nativeRuntime(
@@ -208,25 +209,6 @@ public final class StrataProxyLauncher {
                         + " using " + config.registry().healthCheckMode());
             }
 
-            if (config.admin().enabled()) {
-                var adminSslContext = adminSslContext(config.admin().tls());
-                var admin = new AdminHttpServer(
-                        config.admin().bindAddress(),
-                        adminRegistry,
-                        metrics,
-                        config.admin().bearerToken(),
-                        config.observability().packetTopN(),
-                        config.observability().prometheus(),
-                        adminSslContext,
-                        config.admin().tls().clientAuth());
-                admin.start();
-                started.add(admin);
-                out.println("StrataProxy admin listening on "
-                        + (adminSslContext == null ? "http://" : "https://")
-                        + config.admin().bindAddress()
-                        + (config.admin().tls().clientAuth() ? " with client certificate authentication" : ""));
-            }
-
             var loadReporter = new ProxyObservedLoadReporter(registry, metrics, config.observability().flushInterval());
             loadReporter.start();
             started.add(loadReporter);
@@ -264,6 +246,26 @@ public final class StrataProxyLauncher {
             }
             server.bind(config.bindAddress()).toCompletableFuture().join();
             out.println("StrataProxy bound on " + server.bindAddress() + " using " + server.transportName() + " transport");
+
+            if (config.admin().enabled()) {
+                var adminSslContext = adminSslContext(config.admin().tls());
+                var admin = new AdminHttpServer(
+                        config.admin().bindAddress(),
+                        adminRegistry,
+                        metrics,
+                        config.admin().bearerToken(),
+                        config.observability().packetTopN(),
+                        config.observability().prometheus(),
+                        adminSslContext,
+                        config.admin().tls().clientAuth(),
+                        playerTransferService(server));
+                admin.start();
+                started.add(admin);
+                out.println("StrataProxy admin listening on "
+                        + (adminSslContext == null ? "http://" : "https://")
+                        + config.admin().bindAddress()
+                        + (config.admin().tls().clientAuth() ? " with client certificate authentication" : ""));
+            }
             var running = new RunningProxy(server, List.copyOf(started), metrics);
             if (registerShutdownHooks) {
                 Runtime.getRuntime().addShutdownHook(new Thread(running::close, "strataproxy-shutdown"));
@@ -461,6 +463,16 @@ public final class StrataProxyLauncher {
                         .map(player -> new MinecraftStatusRuntime.SamplePlayer(player.name(), player.id()))
                         .toList(),
                 () -> metrics.snapshot().playerSessions().size());
+    }
+
+    private static PlayerTransferService playerTransferService(NettyProxyNetworkServer server) {
+        return (playerName, targetServer) -> server.transferPlayer(playerName, targetServer)
+                .thenApply(result -> new PlayerTransferService.TransferResult(
+                        result.success(),
+                        result.outcome(),
+                        result.player(),
+                        result.sourceServer(),
+                        result.targetServer()));
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

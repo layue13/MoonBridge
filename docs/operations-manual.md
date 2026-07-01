@@ -166,6 +166,14 @@ $admin='.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.
 & $admin --base-url http://127.0.0.1:8080 diagnostics
 ```
 
+Transfer an active player to another backend:
+
+```powershell
+& $admin --base-url http://127.0.0.1:8080 players transfer Steve survival-2
+```
+
+This is a Bungee-like backend re-login transfer. StrataProxy connects the target backend first, replays the player's backend login frames, consumes the target backend's login success, swaps the player's relay, and then closes the old backend connection. The same replacement path is used for supported BungeeCord `Connect` plugin messages from a backend.
+
 With bearer token:
 
 ```powershell
@@ -235,7 +243,7 @@ forwarding:
   secret: "${STRATAPROXY_FORWARDING_SECRET}"
 ```
 
-Use `velocity-modern` for Paper-compatible backends configured with Velocity forwarding. Use `bungee-legacy` or `bungee-guard` only for backends expecting BungeeCord-style IP forwarding.
+Use `velocity-modern` for Paper-compatible backends configured with Velocity forwarding. Use `bungee-legacy` or `bungee-guard` only for backends expecting BungeeCord-style IP forwarding. StrataProxy also recognizes BungeeCord `Connect` plugin messages on `BungeeCord` and `bungeecord:main` channels and maps them to the same backend replacement flow used by `players transfer`.
 
 ## 9. Online Mode And Authentication
 

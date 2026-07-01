@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,6 +53,7 @@ public final class AdminHttpServer implements AutoCloseable {
     private final String bearerToken;
     private final int packetTopN;
     private final boolean prometheusEnabled;
+    private final PlayerTransferService playerTransfers;
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -114,11 +116,34 @@ public final class AdminHttpServer implements AutoCloseable {
             boolean prometheusEnabled,
             SSLContext sslContext,
             boolean requireClientAuth) throws IOException {
+        this(
+                bindAddress,
+                registry,
+                metrics,
+                bearerToken,
+                packetTopN,
+                prometheusEnabled,
+                sslContext,
+                requireClientAuth,
+                PlayerTransferService.unavailable());
+    }
+
+    public AdminHttpServer(
+            InetSocketAddress bindAddress,
+            AdminRegistryService registry,
+            ProxyMetrics metrics,
+            String bearerToken,
+            int packetTopN,
+            boolean prometheusEnabled,
+            SSLContext sslContext,
+            boolean requireClientAuth,
+            PlayerTransferService playerTransfers) throws IOException {
         this.registry = registry;
         this.metrics = metrics;
         this.bearerToken = bearerToken == null ? "" : bearerToken;
         this.packetTopN = Math.max(0, packetTopN);
         this.prometheusEnabled = prometheusEnabled;
+        this.playerTransfers = playerTransfers == null ? PlayerTransferService.unavailable() : playerTransfers;
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.server = createServer(bindAddress, sslContext, requireClientAuth);
         this.server.createContext("/healthz", this::health);
@@ -233,6 +258,9 @@ public final class AdminHttpServer implements AutoCloseable {
         appendMetric(body, "counter", "strataproxy_connections_routed_total", snapshot.routedConnections());
         appendMetric(body, "counter", "strataproxy_routes_failed_total", snapshot.failedRoutes());
         appendMetric(body, "counter", "strataproxy_backend_connect_failures_total", snapshot.backendConnectFailures());
+        for (var entry : snapshot.backendReplacements().entrySet()) {
+            appendMetric(body, "counter", "strataproxy_backend_replacements_total", "outcome=\"" + label(entry.getKey()) + "\"", entry.getValue());
+        }
         appendMetric(body, "counter", "strataproxy_frontend_to_backend_bytes_total", snapshot.frontendToBackendBytes());
         appendMetric(body, "counter", "strataproxy_backend_to_frontend_bytes_total", snapshot.backendToFrontendBytes());
         appendMetric(body, "counter", "strataproxy_compression_negotiations_total", snapshot.compressionNegotiations());
@@ -299,11 +327,37 @@ public final class AdminHttpServer implements AutoCloseable {
         if (!authorized(exchange)) {
             return;
         }
-        if (!exchange.getRequestMethod().equals("GET")) {
+        var segments = pathSegments(exchange);
+        if (segments.size() == 1 && exchange.getRequestMethod().equals("GET")) {
+            respondJson(exchange, 200, playerSessionReport(metrics.snapshot()));
+            return;
+        }
+        if (segments.size() == 3 && segments.get(2).equals("transfer") && exchange.getRequestMethod().equals("POST")) {
+            transferPlayer(exchange, decode(segments.get(1)));
+            return;
+        }
+        if (segments.size() == 1) {
             respondError(exchange, 405, "method not allowed");
             return;
         }
-        respondJson(exchange, 200, playerSessionReport(metrics.snapshot()));
+        respondError(exchange, 404, "unsupported player session route");
+    }
+
+    private void transferPlayer(HttpExchange exchange, String playerName) throws IOException {
+        var request = readRequest(exchange, PlayerTransferRequest.class);
+        var targetServer = request.targetServer();
+        if (targetServer.isBlank()) {
+            respondError(exchange, 400, "target server is required");
+            return;
+        }
+        try {
+            var result = playerTransfers.transferPlayer(playerName, targetServer).toCompletableFuture().join();
+            respondJson(exchange, transferStatus(result), PlayerTransferView.from(result));
+        } catch (CompletionException exception) {
+            respondError(exchange, 500, rootMessage(exception));
+        } catch (RuntimeException exception) {
+            respondError(exchange, 500, exception.getMessage());
+        }
     }
 
     private void compressionReport(HttpExchange exchange) throws IOException {
@@ -1041,6 +1095,14 @@ public final class AdminHttpServer implements AutoCloseable {
         return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
+    private static String rootMessage(Throwable throwable) {
+        var current = throwable;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
+    }
+
     private static String first(Map<String, List<String>> query, String name) {
         var values = query.get(name);
         return values == null || values.isEmpty() ? null : values.getFirst();
@@ -1355,6 +1417,48 @@ public final class AdminHttpServer implements AutoCloseable {
                     session.remoteAddress(),
                     session.connectedAt().toString());
         }
+    }
+
+    public static final class PlayerTransferRequest {
+        public String server = "";
+        public String targetServer = "";
+
+        String targetServer() {
+            if (targetServer != null && !targetServer.isBlank()) {
+                return targetServer.trim();
+            }
+            return server == null ? "" : server.trim();
+        }
+    }
+
+    public record PlayerTransferView(
+            boolean success,
+            String outcome,
+            String player,
+            String sourceServer,
+            String targetServer) {
+        static PlayerTransferView from(PlayerTransferService.TransferResult result) {
+            return new PlayerTransferView(
+                    result.success(),
+                    result.outcome(),
+                    result.player(),
+                    result.sourceServer(),
+                    result.targetServer());
+        }
+    }
+
+    private static int transferStatus(PlayerTransferService.TransferResult result) {
+        if (result.success()) {
+            return 200;
+        }
+        return switch (result.outcome()) {
+            case "invalid_player", "invalid_target" -> 400;
+            case "player_not_found", "target_unavailable" -> 404;
+            case "busy", "same_server", "inactive_session" -> 409;
+            case "transfer_unavailable" -> 503;
+            case "connect_failure", "pipeline_failure" -> 502;
+            default -> 500;
+        };
     }
 
     public record PacketAnomalyReport(long total, List<PacketAnomalyView> rules, List<PacketAnomalySampleView> recentSamples) {

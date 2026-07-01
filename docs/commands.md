@@ -112,6 +112,14 @@ Use this when a player would be rejected or sent to an unexpected backend.
 & $admin --base-url http://127.0.0.1:8080 backpressure
 ```
 
+Transfer an active player to another registered backend:
+
+```powershell
+& $admin --base-url http://127.0.0.1:8080 players transfer Steve survival-2
+```
+
+The transfer connects the target backend first, replays the player's backend login frames, consumes the target backend's login success, swaps the relay, and then closes the old backend connection.
+
 ## Payload Captures
 
 Captures are opt-in, bounded, and expire automatically.

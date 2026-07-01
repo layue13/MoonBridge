@@ -26,6 +26,7 @@ public final class ProxyMetrics {
     private final LongAdder routedConnections = new LongAdder();
     private final LongAdder failedRoutes = new LongAdder();
     private final LongAdder backendConnectFailures = new LongAdder();
+    private final ConcurrentHashMap<String, LongAdder> backendReplacements = new ConcurrentHashMap<>();
     private final LongAdder frontendToBackendBytes = new LongAdder();
     private final LongAdder backendToFrontendBytes = new LongAdder();
     private final LongAdder compressionNegotiations = new LongAdder();
@@ -125,6 +126,11 @@ public final class ProxyMetrics {
 
     public void backendConnectFailure() {
         backendConnectFailures.increment();
+    }
+
+    public void backendReplacement(String outcome) {
+        var normalized = outcome == null || outcome.isBlank() ? "unspecified" : sanitize(outcome.trim());
+        backendReplacements.computeIfAbsent(normalized, ignored -> new LongAdder()).increment();
     }
 
     public void frontendToBackendBytes(long bytes) {
@@ -485,6 +491,8 @@ public final class ProxyMetrics {
                 routedConnections.sum(),
                 failedRoutes.sum(),
                 backendConnectFailures.sum(),
+                backendReplacements.entrySet().stream()
+                        .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().sum())),
                 frontendToBackendBytes.sum(),
                 backendToFrontendBytes.sum(),
                 compressionNegotiations.sum(),
@@ -966,6 +974,7 @@ public final class ProxyMetrics {
             long routedConnections,
             long failedRoutes,
             long backendConnectFailures,
+            Map<String, Long> backendReplacements,
             long frontendToBackendBytes,
             long backendToFrontendBytes,
             long compressionNegotiations,

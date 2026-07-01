@@ -1,6 +1,7 @@
 package dev.strataproxy.network;
 
 import dev.strataproxy.api.server.RegisteredServer;
+import dev.strataproxy.api.server.ServerRegistry;
 import dev.strataproxy.routing.RoutingDecision;
 import dev.strataproxy.routing.RoutingRequest;
 import dev.strataproxy.routing.ServerRouter;
@@ -10,11 +11,17 @@ import java.net.SocketAddress;
 import java.util.Optional;
 import java.util.Set;
 
-public final class RoutingBackendResolver implements BackendResolver {
+public final class RoutingBackendResolver implements BackendResolver, ServerTargetResolver {
     private final ServerRouter router;
+    private final ServerRegistry registry;
 
     public RoutingBackendResolver(ServerRouter router) {
+        this(router, null);
+    }
+
+    public RoutingBackendResolver(ServerRouter router, ServerRegistry registry) {
         this.router = router;
+        this.registry = registry;
     }
 
     @Override
@@ -37,6 +44,17 @@ public final class RoutingBackendResolver implements BackendResolver {
                 Set.of(),
                 handshake.protocolVersion(),
                 inetRemote));
+    }
+
+    @Override
+    public Optional<RegisteredServer> resolveTarget(String serverName) {
+        if (registry == null || serverName == null || serverName.isBlank()) {
+            return Optional.empty();
+        }
+        return registry.get(serverName.trim())
+                .filter(server -> !server.draining())
+                .filter(server -> server.health().canReceiveNewConnections())
+                .filter(server -> !server.load().isHardFull());
     }
 
     private Optional<RegisteredServer> select(RoutingRequest request) {

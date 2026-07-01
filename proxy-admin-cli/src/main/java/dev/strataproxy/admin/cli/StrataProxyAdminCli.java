@@ -429,7 +429,9 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
         }
     }
 
-    @Command(name = "players", description = "Show active player sessions.")
+    @Command(name = "players", mixinStandardHelpOptions = true, description = "Show or manage active player sessions.", subcommands = {
+            PlayersCommand.TransferCommand.class
+    })
     static final class PlayersCommand implements Callable<Integer> {
         @ParentCommand
         private StrataProxyAdminCli root;
@@ -442,6 +444,32 @@ public final class StrataProxyAdminCli implements Callable<Integer> {
             }
             System.out.print(PlayerSessionMetricsView.parseJson(response.body()).render());
             return 0;
+        }
+
+        @Command(name = "transfer", description = "Move an active player session to another backend server.")
+        static final class TransferCommand implements Callable<Integer> {
+            @ParentCommand
+            private PlayersCommand players;
+
+            @CommandLine.Parameters(index = "0", description = "Player name.")
+            private String player;
+
+            @CommandLine.Parameters(index = "1", description = "Target server name.")
+            private String server;
+
+            @Override
+            public Integer call() {
+                var json = MAPPER.createObjectNode();
+                json.put("server", server);
+                return players.root.print(players.root.request(
+                        "POST",
+                        "/player-sessions/" + encode(player) + "/transfer",
+                        json.toString()));
+            }
+
+            private static String encode(String value) {
+                return URLEncoder.encode(value, StandardCharsets.UTF_8);
+            }
         }
     }
 

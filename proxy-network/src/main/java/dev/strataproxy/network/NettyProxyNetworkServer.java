@@ -30,6 +30,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
     private final MinecraftAuthRuntime authRuntime;
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final MinecraftStatusRuntime statusRuntime;
+    private final RelaySessionRegistry relaySessions;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private final NetworkRuntimeMonitor runtimeMonitor;
@@ -321,6 +322,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.statusRuntime = statusRuntime == null ? MinecraftStatusRuntime.disabled() : statusRuntime;
+        this.relaySessions = new RelaySessionRegistry();
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
         this.runtimeMonitor = new NetworkRuntimeMonitor(workerGroup, metrics, Duration.ofSeconds(1));
@@ -371,7 +373,8 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                                 forwardingRuntime,
                                 statusRuntime,
                                 compressionRewriteEnabled,
-                                compressionRewriteMaxEventLoopDelayMillis));
+                                compressionRewriteMaxEventLoopDelayMillis,
+                                relaySessions));
                     }
                 });
 
@@ -402,6 +405,17 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
 
     public boolean nativeTransport() {
         return transport.nativeTransport();
+    }
+
+    public CompletionStage<PlayerTransferResult> transferPlayer(String playerName, String targetServerName) {
+        if (closed.get()) {
+            return CompletableFuture.completedFuture(PlayerTransferResult.failure(
+                    "server_closed",
+                    playerName,
+                    "",
+                    targetServerName));
+        }
+        return relaySessions.transferPlayer(playerName, targetServerName);
     }
 
     @Override

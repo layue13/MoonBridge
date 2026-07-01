@@ -25,9 +25,11 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     private final CompressionRuntime compressionRuntime;
     private final MinecraftPacketTrafficSampler packetTrafficSampler;
     private final MinecraftLoginPluginRequestInspectionSampler loginPluginRequestInspection;
+    private final BungeeConnectRequestSampler bungeeConnectSampler;
     private final RelaySessionIdentity identity;
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final CompressionRewriteRuntime compressionRewriteRuntime;
+    private final BackendReplacementController replacementController;
     private final int maxFrameBytes;
     private boolean closed;
 
@@ -105,6 +107,32 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             MinecraftForwardingRuntime forwardingRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
+        this(
+                frontend,
+                metrics,
+                serverName,
+                maxFrameBytes,
+                compressionAudit,
+                compressionRuntime,
+                identity,
+                forwardingRuntime,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis,
+                null);
+    }
+
+    BackendRelayHandler(
+            Channel frontend,
+            ProxyMetrics metrics,
+            String serverName,
+            int maxFrameBytes,
+            MinecraftCompressionAuditState compressionAudit,
+            CompressionRuntime compressionRuntime,
+            RelaySessionIdentity identity,
+            MinecraftForwardingRuntime forwardingRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis,
+            BackendReplacementController replacementController) {
         this.frontend = frontend;
         this.metrics = metrics;
         this.serverName = serverName;
@@ -113,9 +141,11 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         this.compressionRuntime = compressionRuntime;
         this.packetTrafficSampler = new MinecraftPacketTrafficSampler(maxFrameBytes);
         this.loginPluginRequestInspection = new MinecraftLoginPluginRequestInspectionSampler(maxFrameBytes, maxFrameBytes);
+        this.bungeeConnectSampler = new BungeeConnectRequestSampler(maxFrameBytes);
         this.identity = identity;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteRuntime = new CompressionRewriteRuntime(compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
+        this.replacementController = replacementController;
         this.maxFrameBytes = maxFrameBytes;
     }
 
@@ -149,6 +179,10 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
                         }
                     }
                 });
+                return;
+            }
+            if (observeBungeeConnectRequest(context, buffer)) {
+                ReferenceCountUtil.release(message);
                 return;
             }
             metrics.backendToFrontendBytes(serverName, buffer.readableBytes());
@@ -208,7 +242,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext context) {
         closeBackendSide();
-        if (frontend.isOpen()) {
+        if (!Boolean.TRUE.equals(context.channel().attr(BackendReplacementController.MIGRATING_BACKEND).get()) && frontend.isOpen()) {
             frontend.close();
         }
     }
@@ -231,7 +265,26 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         compressionAudit.closeBackendSampler();
         packetTrafficSampler.close();
         loginPluginRequestInspection.close();
+        bungeeConnectSampler.close();
         compressionRewriteRuntime.close();
+    }
+
+    private boolean observeBungeeConnectRequest(ChannelHandlerContext context, ByteBuf buffer) {
+        if (replacementController == null) {
+            return false;
+        }
+        try {
+            var requests = compressionAudit.negotiated()
+                    ? bungeeConnectSampler.observeCompressed(context.alloc(), buffer, compressionAudit.threshold())
+                    : bungeeConnectSampler.observeUncompressed(buffer);
+            for (var request : requests) {
+                replacementController.replaceBackend(request.targetServer());
+                return true;
+            }
+        } catch (RuntimeException ignored) {
+            bungeeConnectSampler.close();
+        }
+        return false;
     }
 
     private void observeLoginPluginRequests(ByteBuf buffer) {

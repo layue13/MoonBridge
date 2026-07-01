@@ -18,6 +18,7 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -172,6 +173,262 @@ final class NettyProxyNetworkServerSmokeTest {
             }
         } finally {
             backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    void bungeeConnectPluginMessageReplacesBackendAfterNewConnectionIsReady() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var afterReplacementBytes = packetFrame(0x02, 99);
+        var staleOldBackendFrame = packetFrame(0x03, 123);
+        var executor = Executors.newFixedThreadPool(2);
+
+        try (var firstBackend = new ServerSocket(0);
+             var secondBackend = new ServerSocket(0)) {
+            firstBackend.setSoTimeout(5_000);
+            secondBackend.setSoTimeout(5_000);
+            var firstBackendInitialBytes = new java.util.concurrent.atomic.AtomicReference<byte[]>();
+            var firstBackendClosed = executor.submit(() -> {
+                try (var accepted = firstBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var first = readMinecraftFrame(accepted.getInputStream());
+                    var second = readMinecraftFrame(accepted.getInputStream());
+                    firstBackendInitialBytes.set(concat(first, second));
+                    accepted.getOutputStream().write(bungeeConnectFrame("survival-2"));
+                    accepted.getOutputStream().write(staleOldBackendFrame);
+                    accepted.getOutputStream().flush();
+                    try {
+                        while (accepted.getInputStream().read() >= 0) {
+                            // The old backend should receive EOF after the replacement backend is connected.
+                        }
+                        return true;
+                    } catch (SocketTimeoutException exception) {
+                        return false;
+                    }
+                }
+            });
+            var secondBackendRead = executor.submit(() -> {
+                try (var accepted = secondBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var first = readMinecraftFrame(accepted.getInputStream());
+                    var second = readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(loginSuccessFrame());
+                    accepted.getOutputStream().flush();
+                    return new SwitchBackendRead(concat(first, second), accepted.getInputStream().readNBytes(afterReplacementBytes.length));
+                }
+            });
+
+            var first = server("survival-1", firstBackend.getLocalPort());
+            var second = server("survival-2", secondBackend.getLocalPort());
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+            var resolver = new ReplacementBackendResolver(first, second);
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    resolver,
+                    metrics,
+                    tuning)) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+
+                    awaitServerActiveConnections(metrics, "survival-2", 1);
+                    client.setSoTimeout(250);
+                    assertThrows(SocketTimeoutException.class, () -> readMinecraftFrame(client.getInputStream()));
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(afterReplacementBytes);
+                    client.getOutputStream().flush();
+
+                    var secondRead = secondBackendRead.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(clientBytes, secondRead.loginBytes());
+                    assertArrayEquals(afterReplacementBytes, secondRead.playBytes());
+                    assertTrue(firstBackendClosed.get(5, TimeUnit.SECONDS));
+                }
+            }
+
+            assertArrayEquals(clientBytes, firstBackendInitialBytes.get());
+            var firstConnections = metrics.snapshot().serverConnections().get("survival-1");
+            var secondConnections = metrics.snapshot().serverConnections().get("survival-2");
+            assertEquals(0, firstConnections.activeConnections());
+            assertEquals(1, secondConnections.routedConnections());
+            assertEquals(1, metrics.snapshot().backendReplacements().get("attempted"));
+            assertEquals(1, metrics.snapshot().backendReplacements().get("success"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void bungeeConnectBackendReplacementFailureResumesOldBackendRelay() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var afterFailureBytes = packetFrame(0x02, 101);
+        var backendExecutor = Executors.newSingleThreadExecutor();
+
+        try (var firstBackend = new ServerSocket(0)) {
+            firstBackend.setSoTimeout(5_000);
+            var first = server("survival-1", firstBackend.getLocalPort());
+            var unavailableReplacement = server("survival-2", freePort());
+            var firstBackendReadAfterFailure = backendExecutor.submit(() -> {
+                try (var accepted = firstBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    readMinecraftFrame(accepted.getInputStream());
+                    readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(bungeeConnectFrame("survival-2"));
+                    accepted.getOutputStream().flush();
+                    return accepted.getInputStream().readNBytes(afterFailureBytes.length);
+                }
+            });
+
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 250, 128, 1024, 100, 100, 5_000);
+            var resolver = new ReplacementBackendResolver(first, unavailableReplacement);
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    resolver,
+                    metrics,
+                    tuning)) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+
+                    awaitBackendConnectFailure(metrics);
+                    client.setSoTimeout(250);
+                    assertThrows(SocketTimeoutException.class, () -> readMinecraftFrame(client.getInputStream()));
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(afterFailureBytes);
+                    client.getOutputStream().flush();
+
+                    assertArrayEquals(afterFailureBytes, firstBackendReadAfterFailure.get(5, TimeUnit.SECONDS));
+                }
+            }
+            assertEquals(1, metrics.snapshot().backendReplacements().get("attempted"));
+            assertEquals(1, metrics.snapshot().backendReplacements().get("connect_failure"));
+        } finally {
+            backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    void externalPlayerTransferReplacesBackendAfterNewConnectionIsReady() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var afterReplacementBytes = packetFrame(0x02, 111);
+        var executor = Executors.newFixedThreadPool(2);
+
+        try (var firstBackend = new ServerSocket(0);
+             var secondBackend = new ServerSocket(0)) {
+            firstBackend.setSoTimeout(5_000);
+            secondBackend.setSoTimeout(5_000);
+            var firstBackendClosed = executor.submit(() -> {
+                try (var accepted = firstBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    readMinecraftFrame(accepted.getInputStream());
+                    readMinecraftFrame(accepted.getInputStream());
+                    try {
+                        while (accepted.getInputStream().read() >= 0) {
+                            // The old backend should receive EOF after the transfer backend is connected.
+                        }
+                        return true;
+                    } catch (SocketTimeoutException exception) {
+                        return false;
+                    }
+                }
+            });
+            var secondBackendRead = executor.submit(() -> {
+                try (var accepted = secondBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var first = readMinecraftFrame(accepted.getInputStream());
+                    var second = readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(loginSuccessFrame());
+                    accepted.getOutputStream().flush();
+                    return new SwitchBackendRead(concat(first, second), accepted.getInputStream().readNBytes(afterReplacementBytes.length));
+                }
+            });
+
+            var first = server("survival-1", firstBackend.getLocalPort());
+            var second = server("survival-2", secondBackend.getLocalPort());
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+            var resolver = new ReplacementBackendResolver(first, second);
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    resolver,
+                    metrics,
+                    tuning)) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+
+                    awaitPlayerSession(metrics, "Steve", "survival-1");
+                    var transfer = proxy.transferPlayer("Steve", "survival-2")
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertTrue(transfer.success(), "transfer outcome was " + transfer.outcome());
+                    assertEquals("survival-1", transfer.sourceServer());
+                    assertEquals("survival-2", transfer.targetServer());
+
+                    client.getOutputStream().write(afterReplacementBytes);
+                    client.getOutputStream().flush();
+
+                    var secondRead = secondBackendRead.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(clientBytes, secondRead.loginBytes());
+                    assertArrayEquals(afterReplacementBytes, secondRead.playBytes());
+                    assertTrue(firstBackendClosed.get(5, TimeUnit.SECONDS));
+                    assertEquals("survival-2", metrics.snapshot().playerSessions().get("Steve").server());
+                }
+            }
+
+            var snapshot = metrics.snapshot();
+            assertEquals(1, snapshot.backendReplacements().get("attempted"));
+            assertEquals(1, snapshot.backendReplacements().get("success"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void externalPlayerTransferReportsMissingPlayer() throws Exception {
+        var metrics = new ProxyMetrics();
+        var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+        try (var proxy = new NettyProxyNetworkServer(
+                1,
+                (request, remoteAddress) -> java.util.Optional.empty(),
+                metrics,
+                tuning)) {
+            proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            var transfer = proxy.transferPlayer("MissingPlayer", "survival-2")
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            assertEquals("player_not_found", transfer.outcome());
+            assertEquals("MissingPlayer", transfer.player());
+            assertEquals("survival-2", transfer.targetServer());
         }
     }
 
@@ -402,16 +659,33 @@ final class NettyProxyNetworkServerSmokeTest {
     }
 
     private static void awaitServerActiveConnections(ProxyMetrics metrics, long activeConnections) throws InterruptedException {
+        awaitServerActiveConnections(metrics, "survival-1", activeConnections);
+    }
+
+    private static void awaitServerActiveConnections(ProxyMetrics metrics, String serverName, long activeConnections) throws InterruptedException {
         var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (System.nanoTime() < deadline) {
-            var connections = metrics.snapshot().serverConnections().get("survival-1");
+            var connections = metrics.snapshot().serverConnections().get(serverName);
             if (connections != null && connections.activeConnections() == activeConnections) {
                 return;
             }
             Thread.sleep(10);
         }
-        var connections = metrics.snapshot().serverConnections().get("survival-1");
+        var connections = metrics.snapshot().serverConnections().get(serverName);
         assertEquals(activeConnections, connections == null ? 0 : connections.activeConnections());
+    }
+
+    private static void awaitPlayerSession(ProxyMetrics metrics, String playerName, String serverName) throws InterruptedException {
+        var deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            var session = metrics.snapshot().playerSessions().get(playerName);
+            if (session != null && session.server().equals(serverName)) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        var session = metrics.snapshot().playerSessions().get(playerName);
+        assertEquals(serverName, session == null ? "" : session.server());
     }
 
     private static void awaitConnectionStormMetrics(
@@ -514,6 +788,24 @@ final class NettyProxyNetworkServerSmokeTest {
         return frame.toByteArray();
     }
 
+    private static byte[] bungeeConnectFrame(String targetServer) {
+        var payload = new ByteArrayOutputStream();
+        writeVarInt(payload, 0x18);
+        writeString(payload, "BungeeCord");
+        writeBungeeUtf(payload, "Connect");
+        writeBungeeUtf(payload, targetServer);
+
+        var payloadBytes = payload.toByteArray();
+        var frame = new ByteArrayOutputStream();
+        writeVarInt(frame, payloadBytes.length);
+        frame.writeBytes(payloadBytes);
+        return frame.toByteArray();
+    }
+
+    private static byte[] loginSuccessFrame() {
+        return packetFrame(0x02, 0);
+    }
+
     private static byte[] readMinecraftFrame(InputStream input) throws java.io.IOException {
         var lengthBytes = new ByteArrayOutputStream();
         var value = 0;
@@ -602,6 +894,13 @@ final class NettyProxyNetworkServerSmokeTest {
         output.writeBytes(bytes);
     }
 
+    private static void writeBungeeUtf(ByteArrayOutputStream output, String value) {
+        var bytes = value.getBytes(StandardCharsets.UTF_8);
+        output.write((bytes.length >>> 8) & 0xFF);
+        output.write(bytes.length & 0xFF);
+        output.writeBytes(bytes);
+    }
+
     private static void writeVarInt(ByteArrayOutputStream output, int value) {
         var current = value;
         do {
@@ -619,5 +918,24 @@ final class NettyProxyNetworkServerSmokeTest {
             ServerHealth health,
             ServerLoad load,
             boolean draining) implements RegisteredServer {
+    }
+
+    private record SwitchBackendRead(byte[] loginBytes, byte[] playBytes) {
+    }
+
+    private record ReplacementBackendResolver(
+            RegisteredServer initial,
+            RegisteredServer replacement) implements BackendResolver, ServerTargetResolver {
+        @Override
+        public java.util.Optional<RegisteredServer> resolve(MinecraftHandshake request, java.net.SocketAddress remoteAddress) {
+            return java.util.Optional.of(initial);
+        }
+
+        @Override
+        public java.util.Optional<RegisteredServer> resolveTarget(String serverName) {
+            return replacement.descriptor().name().equals(serverName)
+                    ? java.util.Optional.of(replacement)
+                    : java.util.Optional.empty();
+        }
     }
 }

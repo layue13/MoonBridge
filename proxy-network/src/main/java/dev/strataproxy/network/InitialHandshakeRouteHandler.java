@@ -4,14 +4,9 @@ import dev.strataproxy.api.server.RegisteredServer;
 import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
 import dev.strataproxy.observability.ProxyMetrics;
 import dev.strataproxy.observability.ProxyMetrics.CompressionDirection;
-import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.WriteBufferWaterMark;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.util.ReferenceCountUtil;
 
@@ -37,6 +32,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private final MinecraftAuthRuntime authRuntime;
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final MinecraftStatusRuntime statusRuntime;
+    private final RelaySessionRegistry relaySessions;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private boolean terminal;
@@ -78,6 +74,34 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             MinecraftStatusRuntime statusRuntime,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
+        this(
+                backendResolver,
+                metrics,
+                tuning,
+                backendChannel,
+                compressionRuntime,
+                customPayloadPolicy,
+                authRuntime,
+                forwardingRuntime,
+                statusRuntime,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis,
+                new RelaySessionRegistry());
+    }
+
+    InitialHandshakeRouteHandler(
+            BackendResolver backendResolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            Class<? extends io.netty.channel.Channel> backendChannel,
+            CompressionRuntime compressionRuntime,
+            CustomPayloadAnomalyPolicy customPayloadPolicy,
+            MinecraftAuthRuntime authRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
+            MinecraftStatusRuntime statusRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis,
+            RelaySessionRegistry relaySessions) {
         this.backendResolver = backendResolver;
         this.metrics = metrics;
         this.tuning = tuning;
@@ -87,6 +111,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.statusRuntime = statusRuntime == null ? MinecraftStatusRuntime.disabled() : statusRuntime;
+        this.relaySessions = relaySessions;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
     }
@@ -380,36 +405,29 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         var frontend = frontendContext.channel();
         var serverName = selected.descriptor().name();
         var compressionAudit = new MinecraftCompressionAuditState(tuning.maxFrameBytes());
-        var identity = existingIdentity == null ? new RelaySessionIdentity(ClientAddress.text(frontend)) : existingIdentity;
-        var bootstrap = new Bootstrap()
-                .group(frontend.eventLoop())
-                .channel(backendChannel)
-                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, tuning.connectTimeoutMillis())
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.AUTO_READ, false)
-                .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(
-                        tuning.writeBufferLowBytes(),
-                        tuning.writeBufferHighBytes()))
-                .handler(new ChannelInitializer<io.netty.channel.Channel>() {
-                    @Override
-                    protected void initChannel(io.netty.channel.Channel backend) {
-                        backend.pipeline().addLast("backend-relay", new BackendRelayHandler(
-                                frontend,
-                                metrics,
-                                serverName,
-                                tuning.maxFrameBytes(),
-                                 compressionAudit,
-                                 compressionRuntime,
-                                 identity,
-                                 forwardingRuntime,
-                                 compressionRewriteEnabled,
-                                 compressionRewriteMaxEventLoopDelayMillis));
-                    }
-                });
+        var session = new RelaySession(existingIdentity == null ? new RelaySessionIdentity(ClientAddress.text(frontend)) : existingIdentity);
+        var identity = session.identity();
+        var backendConnector = new BackendConnector(
+                metrics,
+                tuning,
+                backendChannel,
+                compressionRuntime,
+                forwardingRuntime,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis);
+        var replacementController = new BackendReplacementController(
+                ServerTargetResolver.from(backendResolver),
+                backendConnector,
+                metrics,
+                tuning,
+                compressionRuntime,
+                customPayloadPolicy,
+                session,
+                relaySessions,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis);
 
-        bootstrap.connect(selected.descriptor().address()).addListener((ChannelFutureListener) future -> {
+        backendConnector.connect(frontend, selected, compressionAudit, session, replacementController).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 metrics.backendConnectFailure();
                 release(firstFrame);
@@ -451,6 +469,9 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 metrics.frontendToBackendBytes(serverName, pendingBytes.readableBytes());
             }
             recordInitialPacketTraffic(serverName, outboundFirstFrame, pendingBytes);
+            if (handshake.nextState() == 2) {
+                session.loginSession(new RelayLoginSession(outboundFirstFrame, pendingBytes));
+            }
             frontend.pipeline().remove("initial-handshake-timeout");
             var frontendRelay = new FrontendRelayHandler(
                     backend,
@@ -463,7 +484,9 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                     initialLoginStart == null ? null : initialLoginStart.username(),
                     identity,
                     compressionRewriteEnabled,
-                    compressionRewriteMaxEventLoopDelayMillis);
+                    compressionRewriteMaxEventLoopDelayMillis,
+                    replacementController);
+            replacementController.relayAttached(frontendRelay, frontend, backend, serverName);
             if (frontendHandlerNameToReplace == null) {
                 frontend.pipeline().replace(this, "frontend-relay", frontendRelay);
             } else {
@@ -476,6 +499,9 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             backend.flush();
             frontend.config().setAutoRead(false);
             backend.config().setAutoRead(false);
+            if (initialLoginStart != null) {
+                metrics.playerSessionStarted(initialLoginStart.username(), serverName, ClientAddress.text(frontend));
+            }
             frontend.read();
             backend.read();
         });
@@ -512,9 +538,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
 
     private MinecraftLoginStart observeInitialLoginStart(io.netty.channel.Channel frontend, String serverName, ByteBuf pendingBytes) {
         try {
-            var loginStart = MinecraftLoginStart.read(pendingBytes, tuning.maxFrameBytes());
-            metrics.playerSessionStarted(loginStart.username(), serverName, ClientAddress.text(frontend));
-            return loginStart;
+            return MinecraftLoginStart.read(pendingBytes, tuning.maxFrameBytes());
         } catch (RuntimeException ignored) {
             // Player attribution must never block the initial fast-forward path.
         }

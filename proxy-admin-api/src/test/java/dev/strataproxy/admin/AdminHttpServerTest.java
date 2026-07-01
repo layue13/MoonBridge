@@ -12,6 +12,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import javax.net.ssl.SSLContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -351,6 +352,68 @@ final class AdminHttpServerTest {
     }
 
     @Test
+    void transfersPlayerSessionThroughAdminEndpoint() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        PlayerTransferService transfers = (playerName, targetServer) -> CompletableFuture.completedFuture(
+                PlayerTransferService.TransferResult.success(playerName, "survival-1", targetServer));
+        try (var admin = new AdminHttpServer(
+                new InetSocketAddress("127.0.0.1", 0),
+                new AdminRegistryService(registry, NoopRegistryStore.INSTANCE),
+                metrics,
+                "",
+                50,
+                true,
+                null,
+                false,
+                transfers)) {
+            admin.start();
+            var base = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+            var client = HttpClient.newHttpClient();
+
+            var response = post(client, base + "/player-sessions/Steve/transfer", """
+                    {"server":"survival-2"}
+                    """);
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"success\":true"));
+            assertTrue(response.body().contains("\"player\":\"Steve\""));
+            assertTrue(response.body().contains("\"sourceServer\":\"survival-1\""));
+            assertTrue(response.body().contains("\"targetServer\":\"survival-2\""));
+        }
+    }
+
+    @Test
+    void reportsMissingPlayerTransferThroughAdminEndpoint() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        PlayerTransferService transfers = (playerName, targetServer) -> CompletableFuture.completedFuture(
+                PlayerTransferService.TransferResult.failure("player_not_found", playerName, "", targetServer));
+        try (var admin = new AdminHttpServer(
+                new InetSocketAddress("127.0.0.1", 0),
+                new AdminRegistryService(registry, NoopRegistryStore.INSTANCE),
+                metrics,
+                "",
+                50,
+                true,
+                null,
+                false,
+                transfers)) {
+            admin.start();
+            var base = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+            var client = HttpClient.newHttpClient();
+
+            var response = post(client, base + "/player-sessions/Missing/transfer", """
+                    {"targetServer":"survival-2"}
+                    """);
+
+            assertEquals(404, response.statusCode());
+            assertTrue(response.body().contains("\"success\":false"));
+            assertTrue(response.body().contains("\"outcome\":\"player_not_found\""));
+        }
+    }
+
+    @Test
     void rollsBackRegisterWhenRegistryPersistenceFails() throws Exception {
         var registry = new InMemoryServerRegistry();
         try (var admin = new AdminHttpServer(
@@ -625,6 +688,8 @@ final class AdminHttpServerTest {
         metrics.compressionNegotiated("metrics-1", 256);
         metrics.compressionDecision("metrics-1", ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND, "threshold", 1024);
         metrics.compressionRewrite("metrics-1", ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND, "rewritten", 2_000_000);
+        metrics.backendReplacement("attempted");
+        metrics.backendReplacement("success");
         try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
             admin.start();
             var base = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
@@ -642,6 +707,8 @@ final class AdminHttpServerTest {
             assertTrue(response.body().contains("strataproxy_connections_rejected_total 2"));
             assertTrue(response.body().contains("strataproxy_connections_rejected_total{reason=\"global_limit\"} 1"));
             assertTrue(response.body().contains("strataproxy_connections_rejected_total{reason=\"per_address_limit\"} 1"));
+            assertTrue(response.body().contains("strataproxy_backend_replacements_total{outcome=\"attempted\"} 1"));
+            assertTrue(response.body().contains("strataproxy_backend_replacements_total{outcome=\"success\"} 1"));
             assertTrue(response.body().contains("strataproxy_jvm_heap_used_bytes"));
             assertTrue(response.body().contains("strataproxy_jvm_threads_live"));
             assertTrue(response.body().contains("strataproxy_jvm_gc_collections_total"));

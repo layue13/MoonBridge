@@ -166,6 +166,14 @@ $admin='.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.
 & $admin --base-url http://127.0.0.1:8080 diagnostics
 ```
 
+把在线玩家转到另一个后端：
+
+```powershell
+& $admin --base-url http://127.0.0.1:8080 players transfer Steve survival-2
+```
+
+这是类似 BungeeCord 的后端重登录转服。StrataProxy 会先连接目标后端，重放玩家的后端登录帧，吞掉目标后端的 Login Success，然后替换玩家 relay 并关闭旧后端连接。后端发出的受支持 BungeeCord `Connect` plugin message 也走同一套替换流程。
+
 带 bearer token：
 
 ```powershell
@@ -235,7 +243,7 @@ forwarding:
   secret: "${STRATAPROXY_FORWARDING_SECRET}"
 ```
 
-Paper 兼容后端并启用 Velocity forwarding 时使用 `velocity-modern`。只有后端需要 BungeeCord 风格 IP forwarding 时才使用 `bungee-legacy` 或 `bungee-guard`。
+Paper 兼容后端并启用 Velocity forwarding 时使用 `velocity-modern`。只有后端需要 BungeeCord 风格 IP forwarding 时才使用 `bungee-legacy` 或 `bungee-guard`。StrataProxy 也会识别 `BungeeCord` 和 `bungeecord:main` channel 上的 BungeeCord `Connect` plugin message，并把它映射到 `players transfer` 使用的同一套后端替换流程。
 
 ## 9. Online Mode 与认证
 

@@ -31,6 +31,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     private final CustomPayloadAnomalyPolicy customPayloadPolicy;
     private final RelaySessionIdentity identity;
     private final CompressionRewriteRuntime compressionRewriteRuntime;
+    private final BackendReplacementController replacementController;
     private MinecraftCompressedCustomPayloadInspectionSampler compressedCustomPayloadInspection;
     private String playerName;
     private boolean closed;
@@ -124,6 +125,34 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             RelaySessionIdentity identity,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis) {
+        this(
+                backend,
+                metrics,
+                serverName,
+                compressionAudit,
+                compressionRuntime,
+                maxFrameBytes,
+                customPayloadPolicy,
+                initialPlayerName,
+                identity,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis,
+                null);
+    }
+
+    FrontendRelayHandler(
+            Channel backend,
+            ProxyMetrics metrics,
+            String serverName,
+            MinecraftCompressionAuditState compressionAudit,
+            CompressionRuntime compressionRuntime,
+            int maxFrameBytes,
+            CustomPayloadAnomalyPolicy customPayloadPolicy,
+            String initialPlayerName,
+            RelaySessionIdentity identity,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis,
+            BackendReplacementController replacementController) {
         this.backend = backend;
         this.metrics = metrics;
         this.serverName = serverName;
@@ -139,6 +168,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         this.loginStartSampler = new MinecraftLoginStartSampler(maxFrameBytes);
         this.identity = identity;
         this.compressionRewriteRuntime = new CompressionRewriteRuntime(compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
+        this.replacementController = replacementController;
         this.playerName = initialPlayerName;
         if (initialPlayerName != null && !initialPlayerName.isBlank()) {
             this.identity.playerName(initialPlayerName);
@@ -203,18 +233,22 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelInactive(ChannelHandlerContext context) {
-        closeFrontendSide();
+        closeFrontendSide(true);
         closeBackend();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
         context.close();
-        closeFrontendSide();
+        closeFrontendSide(true);
         closeBackend();
     }
 
-    private void closeFrontendSide() {
+    void detachForBackendReplacement() {
+        closeFrontendSide(false);
+    }
+
+    private void closeFrontendSide(boolean closePlayerSession) {
         if (closed) {
             return;
         }
@@ -227,8 +261,18 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
         packetTrafficSampler.close();
         compressionRewriteRuntime.close();
-        metrics.playerSessionClosed(playerName);
-        metrics.serverConnectionClosed(serverName);
+        if (closePlayerSession) {
+            if (replacementController == null) {
+                metrics.playerSessionClosed(playerName);
+            } else {
+                replacementController.closePlayerSession(playerName);
+            }
+        }
+        if (replacementController == null) {
+            metrics.serverConnectionClosed(serverName);
+        } else {
+            replacementController.closeServerConnection(serverName);
+        }
     }
 
     private void closeBackend() {
@@ -375,6 +419,9 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 playerName = username.get();
                 identity.playerName(playerName);
                 metrics.playerSessionStarted(playerName, serverName, remoteAddress(context));
+                if (replacementController != null) {
+                    replacementController.playerNameDiscovered(playerName);
+                }
             }
         } catch (RuntimeException exception) {
             loginStartSampler.close();

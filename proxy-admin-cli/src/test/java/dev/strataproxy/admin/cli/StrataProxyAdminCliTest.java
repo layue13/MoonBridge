@@ -3,6 +3,7 @@ package dev.strataproxy.admin.cli;
 import dev.strataproxy.admin.AdminHttpServer;
 import dev.strataproxy.admin.AdminRegistryService;
 import dev.strataproxy.admin.NoopRegistryStore;
+import dev.strataproxy.admin.PlayerTransferService;
 import dev.strataproxy.api.server.ProtocolRange;
 import dev.strataproxy.api.server.ServerDescriptor;
 import dev.strataproxy.observability.ProxyMetrics;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -368,6 +370,60 @@ final class StrataProxyAdminCliTest {
             assertEquals(0, players.exitCode());
             assertTrue(players.output().contains("player server remote_address connected_at\n"));
             assertTrue(players.output().contains("Steve survival-1 127.0.0.1:50000 "));
+        }
+    }
+
+    @Test
+    void transfersPlayerSession() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        PlayerTransferService transfers = (playerName, targetServer) -> CompletableFuture.completedFuture(
+                PlayerTransferService.TransferResult.success(playerName, "survival-1", targetServer));
+        try (var admin = new AdminHttpServer(
+                new InetSocketAddress("127.0.0.1", 0),
+                new AdminRegistryService(registry, NoopRegistryStore.INSTANCE),
+                new ProxyMetrics(),
+                "",
+                50,
+                true,
+                null,
+                false,
+                transfers)) {
+            admin.start();
+            var baseUrl = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+
+            var transfer = execute("--base-url", baseUrl, "players", "transfer", "Steve", "survival-2");
+
+            assertEquals(0, transfer.exitCode());
+            assertTrue(transfer.output().contains("\"success\":true"));
+            assertTrue(transfer.output().contains("\"player\":\"Steve\""));
+            assertTrue(transfer.output().contains("\"sourceServer\":\"survival-1\""));
+            assertTrue(transfer.output().contains("\"targetServer\":\"survival-2\""));
+        }
+    }
+
+    @Test
+    void transferMissingPlayerReturnsFailure() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        PlayerTransferService transfers = (playerName, targetServer) -> CompletableFuture.completedFuture(
+                PlayerTransferService.TransferResult.failure("player_not_found", playerName, "", targetServer));
+        try (var admin = new AdminHttpServer(
+                new InetSocketAddress("127.0.0.1", 0),
+                new AdminRegistryService(registry, NoopRegistryStore.INSTANCE),
+                new ProxyMetrics(),
+                "",
+                50,
+                true,
+                null,
+                false,
+                transfers)) {
+            admin.start();
+            var baseUrl = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+
+            var transfer = execute("--base-url", baseUrl, "players", "transfer", "Missing", "survival-2");
+
+            assertEquals(1, transfer.exitCode());
+            assertTrue(transfer.output().contains("\"success\":false"));
+            assertTrue(transfer.output().contains("\"outcome\":\"player_not_found\""));
         }
     }
 

@@ -39,6 +39,9 @@ final class ProxyMetricsTest {
         metrics.compressionDecision("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "threshold", 1024);
         metrics.relayBackpressure("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, 128);
         metrics.relayBackpressure("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, 256);
+        metrics.backendReplacement("attempted");
+        metrics.backendReplacement("success");
+        metrics.backendReplacement("success");
         metrics.serverConnectionOpened("survival-1");
         metrics.serverConnectionOpened("survival-1");
         metrics.serverConnectionClosed("survival-1");
@@ -120,6 +123,8 @@ final class ProxyMetricsTest {
         assertEquals(new ProxyMetrics.RelayBackpressure(2, 256, 256), snapshot.relayBackpressure().get(new ProxyMetrics.RelayBackpressureKey(
                 "survival-1",
                 ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND)));
+        assertEquals(1, snapshot.backendReplacements().get("attempted"));
+        assertEquals(2, snapshot.backendReplacements().get("success"));
         assertEquals(2, snapshot.serverConnections().get("survival-1").routedConnections());
         assertEquals(1, snapshot.serverConnections().get("survival-1").activeConnections());
     }
