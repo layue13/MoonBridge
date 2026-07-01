@@ -2,6 +2,8 @@ package dev.strataproxy.network;
 
 import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
 import dev.strataproxy.observability.ProxyMetrics;
+import dev.strataproxy.plugin.command.CommandRegistry;
+import dev.strataproxy.plugin.event.EventBus;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.util.AttributeKey;
@@ -20,6 +22,8 @@ final class BackendReplacementController {
     private final CustomPayloadAnomalyPolicy customPayloadPolicy;
     private final RelaySession session;
     private final RelaySessionRegistry sessions;
+    private final CommandRegistry commands;
+    private final EventBus events;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
 
@@ -33,7 +37,9 @@ final class BackendReplacementController {
             RelaySession session,
             RelaySessionRegistry sessions,
             boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
+            int compressionRewriteMaxEventLoopDelayMillis,
+            CommandRegistry commands,
+            EventBus events) {
         this.targetResolver = targetResolver == null ? ServerTargetResolver.unavailable() : targetResolver;
         this.backendConnector = backendConnector;
         this.metrics = metrics;
@@ -42,6 +48,8 @@ final class BackendReplacementController {
         this.customPayloadPolicy = customPayloadPolicy;
         this.session = session;
         this.sessions = sessions;
+        this.commands = commands;
+        this.events = events;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
         this.session.replacementController(this);
@@ -212,7 +220,9 @@ final class BackendReplacementController {
                     identity,
                     compressionRewriteEnabled,
                     compressionRewriteMaxEventLoopDelayMillis,
-                    this);
+                    this,
+                    commands,
+                    events);
             var frontendPipeline = frontend.pipeline();
             var oldRelay = session.frontendRelay();
             if (oldRelay != null) {

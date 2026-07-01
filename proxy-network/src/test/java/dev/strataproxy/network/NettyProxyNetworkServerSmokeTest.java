@@ -9,7 +9,11 @@ import dev.strataproxy.api.server.ServerLoad;
 import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
 import dev.strataproxy.compression.CompressionStrategies;
 import dev.strataproxy.codec.minecraft.MinecraftVarInts;
+import dev.strataproxy.command.DefaultCommandRegistry;
+import dev.strataproxy.command.SimpleEventBus;
 import dev.strataproxy.observability.ProxyMetrics;
+import dev.strataproxy.plugin.command.CommandResult;
+import dev.strataproxy.plugin.command.CommandSpec;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -404,6 +409,87 @@ final class NettyProxyNetworkServerSmokeTest {
             var snapshot = metrics.snapshot();
             assertEquals(1, snapshot.backendReplacements().get("attempted"));
             assertEquals(1, snapshot.backendReplacements().get("success"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void gameCommandTransfersPlayerWithoutForwardingCommandToOldBackend() throws Exception {
+        var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var commandFrame = playCommandFrame(0x04, "server survival-2");
+        var afterReplacementBytes = packetFrame(0x02, 117);
+        var executor = Executors.newFixedThreadPool(2);
+
+        try (var firstBackend = new ServerSocket(0);
+             var secondBackend = new ServerSocket(0)) {
+            firstBackend.setSoTimeout(5_000);
+            secondBackend.setSoTimeout(5_000);
+            var firstBackendClosedWithoutCommand = executor.submit(() -> {
+                try (var accepted = firstBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    readMinecraftFrame(accepted.getInputStream());
+                    readMinecraftFrame(accepted.getInputStream());
+                    return accepted.getInputStream().read() < 0;
+                }
+            });
+            var secondBackendRead = executor.submit(() -> {
+                try (var accepted = secondBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var first = readMinecraftFrame(accepted.getInputStream());
+                    var second = readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(loginSuccessFrame());
+                    accepted.getOutputStream().flush();
+                    return new SwitchBackendRead(concat(first, second), accepted.getInputStream().readNBytes(afterReplacementBytes.length));
+                }
+            });
+
+            var first = server("survival-1", firstBackend.getLocalPort());
+            var second = server("survival-2", secondBackend.getLocalPort());
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+            var resolver = new ReplacementBackendResolver(first, second);
+            var proxyReference = new AtomicReference<NettyProxyNetworkServer>();
+            var commands = new DefaultCommandRegistry();
+            commands.register(new CommandSpec("server", List.of(), "", "", context ->
+                    proxyReference.get().transferPlayer(context.source().name(), context.arguments().get(0))
+                            .thenApply(result -> result.success()
+                                    ? CommandResult.ok()
+                                    : CommandResult.failure(result.outcome()))));
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    resolver,
+                    metrics,
+                    tuning,
+                    commands,
+                    new SimpleEventBus())) {
+                proxyReference.set(proxy);
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+                    awaitPlayerSession(metrics, "Steve", "survival-1");
+
+                    client.getOutputStream().write(commandFrame);
+                    client.getOutputStream().flush();
+                    awaitServerActiveConnections(metrics, "survival-2", 1);
+
+                    client.getOutputStream().write(afterReplacementBytes);
+                    client.getOutputStream().flush();
+
+                    var secondRead = secondBackendRead.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(clientBytes, secondRead.loginBytes());
+                    assertArrayEquals(afterReplacementBytes, secondRead.playBytes());
+                    assertTrue(firstBackendClosedWithoutCommand.get(5, TimeUnit.SECONDS));
+                }
+            }
         } finally {
             executor.shutdownNow();
         }
@@ -788,6 +874,20 @@ final class NettyProxyNetworkServerSmokeTest {
         return frame.toByteArray();
     }
 
+    private static byte[] playCommandFrame(int packetId, String command) {
+        var payload = new ByteArrayOutputStream();
+        writeVarInt(payload, packetId);
+        writeString(payload, command);
+        writeLong(payload, 0);
+        writeLong(payload, 0);
+
+        var payloadBytes = payload.toByteArray();
+        var frame = new ByteArrayOutputStream();
+        writeVarInt(frame, payloadBytes.length);
+        frame.writeBytes(payloadBytes);
+        return frame.toByteArray();
+    }
+
     private static byte[] bungeeConnectFrame(String targetServer) {
         var payload = new ByteArrayOutputStream();
         writeVarInt(payload, 0x18);
@@ -899,6 +999,12 @@ final class NettyProxyNetworkServerSmokeTest {
         output.write((bytes.length >>> 8) & 0xFF);
         output.write(bytes.length & 0xFF);
         output.writeBytes(bytes);
+    }
+
+    private static void writeLong(ByteArrayOutputStream output, long value) {
+        for (var shift = 56; shift >= 0; shift -= 8) {
+            output.write((int) ((value >>> shift) & 0xFF));
+        }
     }
 
     private static void writeVarInt(ByteArrayOutputStream output, int value) {

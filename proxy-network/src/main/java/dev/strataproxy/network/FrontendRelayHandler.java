@@ -6,6 +6,9 @@ import dev.strataproxy.compression.CompressionAction;
 import dev.strataproxy.observability.ProxyMetrics;
 import dev.strataproxy.observability.ProxyMetrics.CompressionDirection;
 import dev.strataproxy.analysis.PacketAnomaly;
+import dev.strataproxy.plugin.command.CommandRegistry;
+import dev.strataproxy.plugin.command.CommandSource;
+import dev.strataproxy.plugin.event.EventBus;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -32,7 +35,10 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     private final RelaySessionIdentity identity;
     private final CompressionRewriteRuntime compressionRewriteRuntime;
     private final BackendReplacementController replacementController;
+    private final CommandRegistry commands;
+    private final EventBus events;
     private MinecraftCompressedCustomPayloadInspectionSampler compressedCustomPayloadInspection;
+    private GameCommandFrameInterceptor commandInterceptor;
     private String playerName;
     private boolean closed;
 
@@ -137,6 +143,8 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 identity,
                 compressionRewriteEnabled,
                 compressionRewriteMaxEventLoopDelayMillis,
+                null,
+                null,
                 null);
     }
 
@@ -152,7 +160,9 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             RelaySessionIdentity identity,
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis,
-            BackendReplacementController replacementController) {
+            BackendReplacementController replacementController,
+            CommandRegistry commands,
+            EventBus events) {
         this.backend = backend;
         this.metrics = metrics;
         this.serverName = serverName;
@@ -169,6 +179,8 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         this.identity = identity;
         this.compressionRewriteRuntime = new CompressionRewriteRuntime(compressionRewriteEnabled, compressionRewriteMaxEventLoopDelayMillis);
         this.replacementController = replacementController;
+        this.commands = commands;
+        this.events = events;
         this.playerName = initialPlayerName;
         if (initialPlayerName != null && !initialPlayerName.isBlank()) {
             this.identity.playerName(initialPlayerName);
@@ -193,23 +205,36 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             var compression = observeCompressionFrames(buffer);
             forward = observeCustomPayload(context, buffer) && compression.shouldForward();
             compressionActions = compression.actions();
+            if (forward) {
+                var command = observeCommand(context, buffer);
+                if (!command.forward()) {
+                    ReferenceCountUtil.release(message);
+                    context.channel().read();
+                    return;
+                }
+                if (command.message() != buffer) {
+                    outbound = command.message();
+                    ReferenceCountUtil.release(message);
+                }
+            }
             if (forward && compression.rewriteEligible()) {
+                var rewriteInput = outbound instanceof ByteBuf byteBuf ? byteBuf : buffer;
                 var rewrite = compressionRewriteRuntime.rewrite(
                         context.alloc(),
                         metrics,
                         serverName,
                         CompressionDirection.FRONTEND_TO_BACKEND,
-                        buffer,
+                        rewriteInput,
                         compressionAudit.threshold(),
                         compressionActions,
                         maxFrameBytes);
                 if (rewrite.suppressed()) {
-                    ReferenceCountUtil.release(message);
+                    ReferenceCountUtil.release(outbound);
                     context.channel().read();
                     return;
                 }
                 if (rewrite.replaced()) {
-                    ReferenceCountUtil.release(message);
+                    ReferenceCountUtil.release(outbound);
                     outbound = rewrite.frame();
                 }
             }
@@ -261,6 +286,10 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
         packetTrafficSampler.close();
         compressionRewriteRuntime.close();
+        if (commandInterceptor != null) {
+            commandInterceptor.close();
+            commandInterceptor = null;
+        }
         if (closePlayerSession) {
             if (replacementController == null) {
                 metrics.playerSessionClosed(playerName);
@@ -408,6 +437,21 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    private GameCommandFrameInterceptor.Interception observeCommand(ChannelHandlerContext context, ByteBuf buffer) {
+        if (commands == null || playerName == null || playerName.isBlank()) {
+            return GameCommandFrameInterceptor.Interception.forward(buffer);
+        }
+        if (commandInterceptor == null) {
+            commandInterceptor = new GameCommandFrameInterceptor(commands, events, maxFrameBytes);
+        }
+        return commandInterceptor.intercept(
+                context.alloc(),
+                buffer,
+                compressionAudit.negotiated(),
+                compressionAudit.threshold(),
+                new PlayerSource(playerName));
+    }
+
     private void observeLoginStart(ChannelHandlerContext context, ByteBuf buffer) {
         if (playerName != null || compressionAudit.negotiated()) {
             loginStartSampler.close();
@@ -486,6 +530,19 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
 
     private static String remoteAddress(ChannelHandlerContext context) {
         return ClientAddress.text(context.channel());
+    }
+
+    private static final class PlayerSource implements CommandSource {
+        private final String name;
+
+        private PlayerSource(String name) {
+            this.name = name == null ? "" : name;
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
     }
 
     private static double ratio(MinecraftCompressedFrameAuditSampler.CompressionFrameSample sample) {

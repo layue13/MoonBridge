@@ -4,7 +4,7 @@ This manual is the operator guide for installing, configuring, running, observin
 
 If this is your first deployment, start with [Quick Start](quick-start.md), then use [Configuration Guide](configuration.md) and [Command Reference](commands.md). This manual is the full production runbook.
 
-StrataProxy is a Java 25 Minecraft proxy for large modded networks. It routes by server capability, tag, protocol range, health, load, drain state, and metadata. It is not a BungeeCord or HexaCord compatibility rewrite, although it supports selected backend forwarding modes.
+StrataProxy is a Java 25 Minecraft proxy for large modded networks. It routes by server capability, tag, protocol range, health, load, drain state, and metadata. It is not a BungeeCord or HexaCord compatibility rewrite, although it supports selected backend forwarding modes. Plugin jars are loaded from the `plugins/` directory next to the active config file before the listener is bound; see [Plugins and In-Game Commands](plugins.md).
 
 ## 1. Prerequisites
 

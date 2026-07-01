@@ -1,0 +1,72 @@
+package dev.strataproxy.plugin.loader;
+
+import dev.strataproxy.plugin.PluginContext;
+import dev.strataproxy.plugin.PluginMetadata;
+import dev.strataproxy.plugin.command.CommandRegistry;
+import dev.strataproxy.plugin.event.EventBus;
+import dev.strataproxy.plugin.service.PlayerService;
+import dev.strataproxy.plugin.service.Scheduler;
+import dev.strataproxy.plugin.service.ServerService;
+
+import java.util.logging.Logger;
+
+final class DefaultPluginContext implements PluginContext {
+    private final PluginMetadata metadata;
+    private final CommandRegistry commands;
+    private final EventBus events;
+    private final PlayerService players;
+    private final ServerService servers;
+    private final Scheduler scheduler;
+    private final Logger logger;
+
+    DefaultPluginContext(
+            PluginMetadata metadata,
+            CommandRegistry commands,
+            EventBus events,
+            PlayerService players,
+            ServerService servers,
+            Scheduler scheduler) {
+        this.metadata = metadata;
+        this.commands = commands;
+        this.events = events;
+        this.players = players;
+        this.servers = servers;
+        this.scheduler = scheduler;
+        this.logger = Logger.getLogger("dev.strataproxy.plugin." + metadata.id());
+    }
+
+    @Override
+    public PluginMetadata metadata() {
+        return metadata;
+    }
+
+    @Override
+    public CommandRegistry commands() {
+        return commands;
+    }
+
+    @Override
+    public EventBus events() {
+        return events;
+    }
+
+    @Override
+    public PlayerService players() {
+        return players;
+    }
+
+    @Override
+    public ServerService servers() {
+        return servers;
+    }
+
+    @Override
+    public Scheduler scheduler() {
+        return scheduler;
+    }
+
+    @Override
+    public Logger logger() {
+        return logger;
+    }
+}

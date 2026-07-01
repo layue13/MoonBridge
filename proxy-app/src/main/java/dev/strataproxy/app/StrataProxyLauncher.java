@@ -11,6 +11,10 @@ import dev.strataproxy.bootstrap.ConfigLoader;
 import dev.strataproxy.bootstrap.ConfigValidationResult;
 import dev.strataproxy.bootstrap.ConfigValidator;
 import dev.strataproxy.bootstrap.ProxyConfig;
+import dev.strataproxy.command.BuiltInProxyCommands;
+import dev.strataproxy.command.DefaultCommandRegistry;
+import dev.strataproxy.command.DefaultScheduler;
+import dev.strataproxy.command.SimpleEventBus;
 import dev.strataproxy.compression.CompressionStrategies;
 import dev.strataproxy.network.MinecraftForwardingRuntime;
 import dev.strataproxy.network.MinecraftAuthRuntime;
@@ -23,6 +27,12 @@ import dev.strataproxy.nativefeature.NativeFeature;
 import dev.strataproxy.nativefeature.NativeRuntimeDecision;
 import dev.strataproxy.nativefeature.NativeRuntimeOptions;
 import dev.strataproxy.observability.ProxyMetrics;
+import dev.strataproxy.plugin.event.ProxyStartedEvent;
+import dev.strataproxy.plugin.event.ProxyStoppingEvent;
+import dev.strataproxy.plugin.loader.PluginManager;
+import dev.strataproxy.plugin.service.PlayerTransfer;
+import dev.strataproxy.plugin.service.PlayerView;
+import dev.strataproxy.plugin.service.ServerView;
 import dev.strataproxy.registry.InMemoryServerRegistry;
 import dev.strataproxy.registry.TcpServerHealthChecker;
 import dev.strataproxy.routing.WeightedHealthAwareRouter;
@@ -30,16 +40,20 @@ import dev.strataproxy.routing.WeightedHealthAwareRouter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -148,6 +162,26 @@ public final class StrataProxyLauncher {
             var router = new WeightedHealthAwareRouter(registry);
             var resolver = new RoutingBackendResolver(router, registry);
             var metrics = new ProxyMetrics(config.observability().anomalySampling());
+            var commandRegistry = new DefaultCommandRegistry();
+            var eventBus = new SimpleEventBus();
+            var scheduler = new DefaultScheduler();
+            started.add(scheduler);
+            var serverReference = new AtomicReference<NettyProxyNetworkServer>();
+            var pluginPlayers = new PluginPlayerService(serverReference, metrics);
+            var pluginServers = new PluginServerService(registry);
+            BuiltInProxyCommands.register(commandRegistry, pluginPlayers, pluginServers);
+            var pluginManager = new PluginManager(
+                    commandRegistry,
+                    eventBus,
+                    pluginPlayers,
+                    pluginServers,
+                    scheduler,
+                    java.util.logging.Logger.getLogger("dev.strataproxy.plugin"));
+            started.add(pluginManager);
+            var pluginDirectory = resolveConfigRelativePath(configPath, "plugins");
+            var loadedPlugins = pluginManager.loadDirectory(pluginDirectory);
+            out.println("StrataProxy plugins: directory=" + pluginDirectory + " loaded=" + loadedPlugins.size());
+            started.add(() -> eventBus.publish(new ProxyStoppingEvent()));
             var nativeDecision = NativeRuntimeDecision.resolve(nativeOptions(config.nativeRuntime()), NativeCapabilityDetector.detect());
             metrics.nativeRuntime(
                     nativeDecision.enabled(),
@@ -239,7 +273,10 @@ public final class StrataProxyLauncher {
                     forwardingRuntime(config.forwarding()),
                     statusRuntime(config.status(), metrics),
                     config.compression().rewriteEnabled(),
-                    config.compression().rewriteMaxEventLoopDelayMillis());
+                    config.compression().rewriteMaxEventLoopDelayMillis(),
+                    commandRegistry,
+                    eventBus);
+            serverReference.set(server);
             started.add(server);
             if (nativeDecision.requireNativeTransport() && !server.nativeTransport()) {
                 throw new IllegalStateException("native transport is required but unavailable; selected transport=" + server.transportName());
@@ -266,6 +303,7 @@ public final class StrataProxyLauncher {
                         + config.admin().bindAddress()
                         + (config.admin().tls().clientAuth() ? " with client certificate authentication" : ""));
             }
+            eventBus.publish(new ProxyStartedEvent());
             var running = new RunningProxy(server, List.copyOf(started), metrics);
             if (registerShutdownHooks) {
                 Runtime.getRuntime().addShutdownHook(new Thread(running::close, "strataproxy-shutdown"));
@@ -473,6 +511,92 @@ public final class StrataProxyLauncher {
                         result.player(),
                         result.sourceServer(),
                         result.targetServer()));
+    }
+
+    private static final class PluginPlayerService implements dev.strataproxy.plugin.service.PlayerService {
+        private final AtomicReference<NettyProxyNetworkServer> server;
+        private final ProxyMetrics metrics;
+
+        private PluginPlayerService(AtomicReference<NettyProxyNetworkServer> server, ProxyMetrics metrics) {
+            this.server = server;
+            this.metrics = metrics;
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer) {
+            var current = server.get();
+            if (current == null) {
+                return CompletableFuture.completedFuture(new PlayerTransfer(false, "server_not_started", playerName, "", targetServer));
+            }
+            return current.transferPlayer(playerName, targetServer)
+                    .thenApply(result -> new PlayerTransfer(
+                            result.success(),
+                            result.outcome(),
+                            result.player(),
+                            result.sourceServer(),
+                            result.targetServer()));
+        }
+
+        @Override
+        public Optional<PlayerView> find(String playerName) {
+            if (playerName == null || playerName.isBlank()) {
+                return Optional.empty();
+            }
+            var session = metrics.snapshot().playerSessions().get(playerName.trim());
+            return session == null
+                    ? Optional.empty()
+                    : Optional.of(new PlayerView(session.player(), session.server(), session.remoteAddress()));
+        }
+
+        @Override
+        public Collection<PlayerView> onlinePlayers() {
+            return metrics.snapshot().playerSessions().values().stream()
+                    .map(session -> new PlayerView(session.player(), session.server(), session.remoteAddress()))
+                    .toList();
+        }
+    }
+
+    private static final class PluginServerService implements dev.strataproxy.plugin.service.ServerService {
+        private final dev.strataproxy.api.server.ServerRegistry registry;
+
+        private PluginServerService(dev.strataproxy.api.server.ServerRegistry registry) {
+            this.registry = registry;
+        }
+
+        @Override
+        public Optional<ServerView> find(String serverName) {
+            if (serverName == null || serverName.isBlank()) {
+                return Optional.empty();
+            }
+            return registry.get(serverName.trim()).map(PluginServerService::view);
+        }
+
+        @Override
+        public Optional<ServerView> firstWithTag(String tag) {
+            if (tag == null || tag.isBlank()) {
+                return Optional.empty();
+            }
+            return registry.snapshot().stream()
+                    .map(PluginServerService::view)
+                    .filter(server -> server.tags().stream().anyMatch(value -> value.equalsIgnoreCase(tag)))
+                    .findFirst();
+        }
+
+        @Override
+        public Collection<ServerView> servers() {
+            return registry.snapshot().stream().map(PluginServerService::view).toList();
+        }
+
+        private static ServerView view(dev.strataproxy.api.server.RegisteredServer server) {
+            var descriptor = server.descriptor();
+            return new ServerView(
+                    descriptor.name(),
+                    descriptor.address(),
+                    descriptor.tags(),
+                    descriptor.drainMode(),
+                    descriptor.softCapacity(),
+                    descriptor.hardCapacity());
+        }
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

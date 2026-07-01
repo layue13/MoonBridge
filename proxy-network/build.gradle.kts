@@ -7,6 +7,8 @@ val nettyVersion = libs.findVersion("netty").get().requiredVersion
 dependencies {
     api(project(":proxy-api"))
     api(project(":proxy-observability"))
+    api(project(":proxy-plugin-api"))
+    implementation(project(":proxy-command"))
     implementation(project(":proxy-codec-minecraft"))
     implementation(project(":proxy-compression"))
     implementation(project(":proxy-packet-analysis"))

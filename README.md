@@ -29,6 +29,9 @@ The local machine currently has JDK 25 installed at `C:\Program Files\Zulu\zulu-
 ## Modules
 
 - `proxy-api`: stable public model and contracts
+- `proxy-plugin-api`: stable plugin, command, event, player, and server service contracts
+- `proxy-command`: proxy-side command registry and built-in player commands
+- `proxy-plugin`: plugin jar loader and lifecycle management
 - `proxy-network`: Netty acceptor, lifecycle, pipeline, backpressure boundary
 - `proxy-protocol`: protocol state, packet metadata, classifier
 - `proxy-codec-minecraft`: Minecraft packet definitions and codec entry points

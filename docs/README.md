@@ -33,6 +33,7 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 | [Quick Start](quick-start.md) | First successful local or staging run |
 | [Configuration Guide](configuration.md) | Practical YAML configuration reference |
 | [Command Reference](commands.md) | Operator command cookbook |
+| [Plugins and In-Game Commands](plugins.md) | Player commands and plugin jar entry points |
 | [Operations Manual](operations-manual.md) | Complete production runbook |
 | [Zstd Compression Tuning](compression-zstd.md) | Minecraft-specific Zstd and dictionary workflow |
 | [Deployment Notes](../deployment/README.md) | Linux service, container, JVM, and release bundle notes |

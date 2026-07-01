@@ -9,6 +9,7 @@ StrataProxy 是面向大型 Minecraft 模组服网络的新代理项目，不以
 - [快速开始](quick-start.md)：构建、改配置、启动、检查，一次跑通。
 - [配置说明](configuration.md)：解释 YAML 里每个重要部分怎么填。
 - [命令速查](commands.md)：按任务整理 Admin CLI 和 query/load-test 命令。
+- [插件和游戏内命令](plugins.md)：玩家命令、插件 jar 入口和扩展点。
 - [Zstd 压缩调参指南](compression-zstd.md)：样本采集、dictionary 训练和上线建议。
 - [运维说明书](operations-manual.md)：完整生产运维、观测、排障和验收。
 - [英文文档目录](../README.md)
@@ -109,6 +110,9 @@ registry:
 ## 模块说明
 
 - `proxy-api`：服务器、健康、负载、drain、能力和协议范围模型
+- `proxy-plugin-api`：插件、命令、事件、玩家和服务器服务接口
+- `proxy-command`：代理侧命令注册和内置玩家命令
+- `proxy-plugin`：插件 jar 加载和生命周期管理
 - `proxy-network`：Netty acceptor、连接生命周期、relay、backpressure
 - `proxy-protocol`：协议状态、packet metadata、packet classifier
 - `proxy-codec-minecraft`：Minecraft VarInt、压缩帧、custom payload 分类、AES/CFB8 加密 codec

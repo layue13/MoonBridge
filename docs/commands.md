@@ -120,6 +120,16 @@ Transfer an active player to another registered backend:
 
 The transfer connects the target backend first, replays the player's backend login frames, consumes the target backend's login success, swaps the relay, and then closes the old backend connection.
 
+Players can also use proxy-side commands in game:
+
+```text
+/server survival-2
+/hub
+/servers
+```
+
+These commands are intercepted by StrataProxy and are not forwarded to the current backend.
+
 ## Payload Captures
 
 Captures are opt-in, bounded, and expire automatically.

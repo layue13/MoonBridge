@@ -4,6 +4,8 @@ import dev.strataproxy.api.server.RegisteredServer;
 import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
 import dev.strataproxy.observability.ProxyMetrics;
 import dev.strataproxy.observability.ProxyMetrics.CompressionDirection;
+import dev.strataproxy.plugin.command.CommandRegistry;
+import dev.strataproxy.plugin.event.EventBus;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -33,6 +35,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final MinecraftStatusRuntime statusRuntime;
     private final RelaySessionRegistry relaySessions;
+    private final CommandRegistry commands;
+    private final EventBus events;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
     private boolean terminal;
@@ -102,6 +106,38 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
             boolean compressionRewriteEnabled,
             int compressionRewriteMaxEventLoopDelayMillis,
             RelaySessionRegistry relaySessions) {
+        this(
+                backendResolver,
+                metrics,
+                tuning,
+                backendChannel,
+                compressionRuntime,
+                customPayloadPolicy,
+                authRuntime,
+                forwardingRuntime,
+                statusRuntime,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis,
+                relaySessions,
+                null,
+                null);
+    }
+
+    InitialHandshakeRouteHandler(
+            BackendResolver backendResolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            Class<? extends io.netty.channel.Channel> backendChannel,
+            CompressionRuntime compressionRuntime,
+            CustomPayloadAnomalyPolicy customPayloadPolicy,
+            MinecraftAuthRuntime authRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
+            MinecraftStatusRuntime statusRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis,
+            RelaySessionRegistry relaySessions,
+            CommandRegistry commands,
+            EventBus events) {
         this.backendResolver = backendResolver;
         this.metrics = metrics;
         this.tuning = tuning;
@@ -112,6 +148,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.statusRuntime = statusRuntime == null ? MinecraftStatusRuntime.disabled() : statusRuntime;
         this.relaySessions = relaySessions;
+        this.commands = commands;
+        this.events = events;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
     }
@@ -425,7 +463,9 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 session,
                 relaySessions,
                 compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis);
+                compressionRewriteMaxEventLoopDelayMillis,
+                commands,
+                events);
 
         backendConnector.connect(frontend, selected, compressionAudit, session, replacementController).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
@@ -485,7 +525,9 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                     identity,
                     compressionRewriteEnabled,
                     compressionRewriteMaxEventLoopDelayMillis,
-                    replacementController);
+                    replacementController,
+                    commands,
+                    events);
             replacementController.relayAttached(frontendRelay, frontend, backend, serverName);
             if (frontendHandlerNameToReplace == null) {
                 frontend.pipeline().replace(this, "frontend-relay", frontendRelay);

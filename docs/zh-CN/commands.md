@@ -120,6 +120,16 @@ $query='.\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat'
 
 转服会先连接目标后端，重放玩家的后端登录帧，吞掉目标后端的 Login Success，然后替换 relay 并关闭旧后端连接。
 
+玩家也可以在游戏内输入代理侧命令：
+
+```text
+/server survival-2
+/hub
+/servers
+```
+
+这些命令由 StrataProxy 拦截，不会转发给当前后端。
+
 ## Payload Capture
 
 Capture 是显式开启、有数量和字节上限、会自动过期的诊断功能。
