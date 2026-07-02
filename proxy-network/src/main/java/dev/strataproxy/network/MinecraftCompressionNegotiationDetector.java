@@ -8,17 +8,32 @@ import io.netty.buffer.Unpooled;
 import java.util.OptionalInt;
 
 final class MinecraftCompressionNegotiationDetector {
-    static final int CLIENTBOUND_LOGIN_SET_COMPRESSION_PACKET_ID = 0x03;
-
     private final int maxFrameBytes;
+    private final MinecraftProtocolProfile profile;
     private ByteBuf pending = Unpooled.buffer();
     private boolean complete;
 
     MinecraftCompressionNegotiationDetector(int maxFrameBytes) {
+        this(maxFrameBytes, MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1));
+    }
+
+    MinecraftCompressionNegotiationDetector(int maxFrameBytes, int protocolVersion) {
+        this(maxFrameBytes, MinecraftProtocolProfile.forVersion(protocolVersion));
+    }
+
+    MinecraftCompressionNegotiationDetector(int maxFrameBytes, MinecraftProtocolProfile profile) {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
         }
         this.maxFrameBytes = maxFrameBytes;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
+        if (!this.profile.compressionNegotiationSupported()) {
+            pending.release();
+            complete = true;
+            pending = Unpooled.EMPTY_BUFFER;
+        }
     }
 
     OptionalInt observe(ByteBuf input) {
@@ -49,7 +64,13 @@ final class MinecraftCompressionNegotiationDetector {
             try {
                 var payload = frame.slice(frameLength.bytes(), frameLength.value());
                 var packetId = MinecraftVarInts.read(payload);
-                if (packetId == CLIENTBOUND_LOGIN_SET_COMPRESSION_PACKET_ID) {
+                if (packetId == profile.clientboundLoginSuccessPacketId()) {
+                    complete = true;
+                    discardPending();
+                    return OptionalInt.empty();
+                }
+                if (profile.clientboundLoginSetCompressionPacketId().isPresent()
+                        && packetId == profile.clientboundLoginSetCompressionPacketId().getAsInt()) {
                     var threshold = MinecraftVarInts.read(payload);
                     complete = true;
                     discardPending();

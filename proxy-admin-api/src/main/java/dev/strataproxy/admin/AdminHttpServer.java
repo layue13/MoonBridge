@@ -245,6 +245,7 @@ public final class AdminHttpServer implements AutoCloseable {
         this.server.createContext("/packet-anomalies", this::packetAnomalies);
         this.server.createContext("/packet-traffic", this::packetTraffic);
         this.server.createContext("/custom-payloads", this::customPayloads);
+        this.server.createContext("/forge-handshakes", this::forgeHandshakes);
         this.server.createContext("/player-sessions", this::playerSessions);
         this.server.createContext("/payload-captures", this::payloadCaptures);
         this.server.createContext("/routes", this::routes);
@@ -382,6 +383,7 @@ public final class AdminHttpServer implements AutoCloseable {
         appendCompressionRewriteMetrics(body, snapshot.compressionRewrites());
         appendPacketTrafficMetrics(body, snapshot.packetTraffic());
         appendCustomPayloadMetrics(body, snapshot.customPayloads());
+        appendForgeHandshakeMetrics(body, snapshot.forgeHandshakes());
         appendRelayBackpressureMetrics(body, snapshot.relayBackpressure());
         respond(exchange, 200, "text/plain; version=0.0.4; charset=utf-8", body.toString());
     }
@@ -417,6 +419,17 @@ public final class AdminHttpServer implements AutoCloseable {
             return;
         }
         respondJson(exchange, 200, customPayloadReport(metrics.snapshot()));
+    }
+
+    private void forgeHandshakes(HttpExchange exchange) throws IOException {
+        if (!authorized(exchange)) {
+            return;
+        }
+        if (!exchange.getRequestMethod().equals("GET")) {
+            respondError(exchange, 405, "method not allowed");
+            return;
+        }
+        respondJson(exchange, 200, forgeHandshakeReport(metrics.snapshot()));
     }
 
     private void playerSessions(HttpExchange exchange) throws IOException {
@@ -585,6 +598,24 @@ public final class AdminHttpServer implements AutoCloseable {
         return new CustomPayloadReport(totalPackets, totalPayloadBytes, totalCompressedBytes, rows, samples);
     }
 
+    private ForgeHandshakeReport forgeHandshakeReport(ProxyMetrics.Snapshot snapshot) {
+        var rows = snapshot.forgeHandshakes().entrySet().stream()
+                .map(entry -> ForgeHandshakeView.from(entry.getKey(), entry.getValue()))
+                .sorted(java.util.Comparator
+                        .comparing(ForgeHandshakeView::server)
+                        .thenComparing(ForgeHandshakeView::player)
+                        .thenComparing(ForgeHandshakeView::remoteAddress))
+                .limit(packetTopN)
+                .toList();
+        var blocked = snapshot.forgeHandshakes().values().stream()
+                .filter(ProxyMetrics.ForgeHandshake::backendSwitchBlocked)
+                .count();
+        var incomplete = snapshot.forgeHandshakes().values().stream()
+                .filter(handshake -> !handshake.complete())
+                .count();
+        return new ForgeHandshakeReport(snapshot.forgeHandshakes().size(), blocked, incomplete, rows);
+    }
+
     private CompressionReport compressionReport(ProxyMetrics.Snapshot snapshot) {
         var rows = new java.util.ArrayList<CompressionReportRow>();
         rows.add(CompressionReportRow.from("global", "all", snapshot.compression(), -1, snapshot.compressionNegotiations()));
@@ -677,8 +708,10 @@ public final class AdminHttpServer implements AutoCloseable {
                 packetTrafficReport(snapshot),
                 customPayloadReport(snapshot),
                 packetAnomalyReport(snapshot),
+                forgeHandshakeReport(snapshot),
                 relayBackpressureReport(snapshot),
                 payloadCaptureReport(snapshot),
+                playerTransferReport(snapshot),
                 playerSessionReport(snapshot)));
     }
 
@@ -815,6 +848,27 @@ public final class AdminHttpServer implements AutoCloseable {
             appendMetric(body, "counter", "strataproxy_custom_payload_compressed_bytes_total", labels, value.compressedBytes());
             appendMetric(body, "gauge", "strataproxy_custom_payload_max_bytes", labels, value.maxPayloadBytes());
             appendMetric(body, "gauge", "strataproxy_custom_payload_max_compressed_bytes", labels, value.maxCompressedBytes());
+        }
+    }
+
+    private static void appendForgeHandshakeMetrics(
+            StringBuilder body,
+            Map<ProxyMetrics.ForgeHandshakeKey, ProxyMetrics.ForgeHandshake> handshakes) {
+        for (var entry : handshakes.entrySet()) {
+            var key = entry.getKey();
+            var value = entry.getValue();
+            var labels = "server=\"" + label(key.server())
+                    + "\",player=\"" + label(key.player())
+                    + "\",remote=\"" + label(key.remoteAddress())
+                    + "\",stage=\"" + label(value.stage())
+                    + "\",client_phase=\"" + label(value.clientPhase())
+                    + "\",backend_phase=\"" + label(value.backendPhase()) + "\"";
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_complete", labels, value.complete() ? 1 : 0);
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_backend_switch_blocked", labels, value.backendSwitchBlocked() ? 1 : 0);
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_client_mods", labels, value.clientMods());
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_server_mods", labels, value.serverMods());
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_registry_packets", labels, value.registryPackets());
+            appendMetric(body, "gauge", "strataproxy_forge_handshake_registry_bytes", labels, value.registryBytes());
         }
     }
 
@@ -1631,8 +1685,10 @@ public final class AdminHttpServer implements AutoCloseable {
  * @param packetTraffic packet traffic
  * @param customPayloads custom payloads
  * @param packetAnomalies packet anomalies
+ * @param forgeHandshakes forge handshakes
  * @param relayBackpressure relay backpressure
  * @param payloadCaptures payload captures
+ * @param playerTransfers player transfers
  * @param playerSessions player sessions
  */
     public record DiagnosticReport(
@@ -1645,8 +1701,10 @@ public final class AdminHttpServer implements AutoCloseable {
             PacketTrafficReport packetTraffic,
             CustomPayloadReport customPayloads,
             PacketAnomalyReport packetAnomalies,
+            ForgeHandshakeReport forgeHandshakes,
             RelayBackpressureReport relayBackpressure,
             PayloadCaptureReport payloadCaptures,
+            PlayerTransferReport playerTransfers,
             PlayerSessionReport playerSessions) {
     }
 
@@ -1656,6 +1714,54 @@ public final class AdminHttpServer implements AutoCloseable {
  * @param rejectedConnectionsByReason rejected connections by reason
  */
     public record RejectionReport(long rejectedConnections, Map<String, Long> rejectedConnectionsByReason) {
+    }
+
+    private PlayerTransferReport playerTransferReport(ProxyMetrics.Snapshot snapshot) {
+        var transfers = snapshot.recentPlayerTransfers().stream()
+                .map(PlayerTransferSampleView::from)
+                .toList();
+        return new PlayerTransferReport(transfers.size(), transfers);
+    }
+
+    /**
+     * Recent player transfer report.
+ * @param recent recent count
+ * @param transfers transfers
+ */
+    public record PlayerTransferReport(int recent, List<PlayerTransferSampleView> transfers) {
+    }
+
+    /**
+     * Admin response view of one recent player transfer.
+ * @param sequence sequence
+ * @param success success
+ * @param outcome outcome
+ * @param player player
+ * @param sourceServer source server
+ * @param targetServer target server
+ * @param remoteAddress remote address
+ * @param timestamp timestamp
+ */
+    public record PlayerTransferSampleView(
+            long sequence,
+            boolean success,
+            String outcome,
+            String player,
+            String sourceServer,
+            String targetServer,
+            String remoteAddress,
+            String timestamp) {
+        static PlayerTransferSampleView from(ProxyMetrics.PlayerTransferSample sample) {
+            return new PlayerTransferSampleView(
+                    sample.sequence(),
+                    sample.success(),
+                    sample.outcome(),
+                    sample.player(),
+                    sample.sourceServer(),
+                    sample.targetServer(),
+                    sample.remoteAddress(),
+                    sample.timestamp().toString());
+        }
     }
 
     private PlayerSessionReport playerSessionReport(ProxyMetrics.Snapshot snapshot) {
@@ -1987,6 +2093,68 @@ public final class AdminHttpServer implements AutoCloseable {
                     value.events(),
                     value.lastBytesBeforeWritable(),
                     value.maxBytesBeforeWritable());
+        }
+    }
+
+    /**
+     * Current legacy Forge handshake report response.
+ * @param active active
+ * @param backendSwitchBlocked backend switch blocked
+ * @param incomplete incomplete
+ * @param handshakes handshakes
+ */
+    public record ForgeHandshakeReport(
+            int active,
+            long backendSwitchBlocked,
+            long incomplete,
+            List<ForgeHandshakeView> handshakes) {
+    }
+
+    /**
+     * Current legacy Forge handshake row.
+ * @param server server
+ * @param player player
+ * @param remoteAddress remote address
+ * @param stage stage
+ * @param clientPhase client phase
+ * @param backendPhase backend phase
+ * @param complete complete
+ * @param backendSwitchBlocked backend switch blocked
+ * @param clientMods client mods
+ * @param serverMods server mods
+ * @param registryPackets registry packets
+ * @param registryBytes registry bytes
+ * @param updatedAt updated at
+ */
+    public record ForgeHandshakeView(
+            String server,
+            String player,
+            String remoteAddress,
+            String stage,
+            String clientPhase,
+            String backendPhase,
+            boolean complete,
+            boolean backendSwitchBlocked,
+            int clientMods,
+            int serverMods,
+            int registryPackets,
+            long registryBytes,
+            String updatedAt) {
+        static ForgeHandshakeView from(ProxyMetrics.ForgeHandshakeKey key, ProxyMetrics.ForgeHandshake value) {
+            return new ForgeHandshakeView(
+                    key.server(),
+                    key.player(),
+                    key.remoteAddress(),
+                    value.stage(),
+                    value.clientPhase(),
+                    value.backendPhase(),
+                    value.complete(),
+                    value.backendSwitchBlocked(),
+                    value.clientMods(),
+                    value.serverMods(),
+                    value.registryPackets(),
+                    value.registryBytes(),
+                    value.updatedAt().toString());
         }
     }
 

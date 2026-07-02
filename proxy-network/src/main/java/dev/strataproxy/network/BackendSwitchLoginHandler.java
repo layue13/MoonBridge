@@ -9,17 +9,13 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import java.util.List;
 
 final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
-    private static final int CLIENTBOUND_LOGIN_DISCONNECT_PACKET_ID = 0x00;
-    private static final int CLIENTBOUND_LOGIN_ENCRYPTION_REQUEST_PACKET_ID = 0x01;
-    private static final int CLIENTBOUND_LOGIN_SUCCESS_PACKET_ID = 0x02;
-    private static final int CLIENTBOUND_LOGIN_SET_COMPRESSION_PACKET_ID = 0x03;
-
     private final dev.strataproxy.observability.ProxyMetrics metrics;
     private final String serverName;
     private final int maxFrameBytes;
     private final MinecraftCompressionAuditState compressionAudit;
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final RelaySessionIdentity identity;
+    private final MinecraftProtocolProfile profile;
     private final Listener listener;
     private final MinecraftCompressionCodec compressionCodec = new MinecraftCompressionCodec();
     private boolean terminal;
@@ -32,6 +28,50 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
             MinecraftCompressionAuditState compressionAudit,
             MinecraftForwardingRuntime forwardingRuntime,
             RelaySessionIdentity identity,
+            int protocolVersion,
+            Listener listener) {
+        this(
+                metrics,
+                serverName,
+                maxFrameBytes,
+                compressionAudit,
+                forwardingRuntime,
+                identity,
+                MinecraftProtocolProfile.forVersion(protocolVersion),
+                null,
+                listener);
+    }
+
+    BackendSwitchLoginHandler(
+            dev.strataproxy.observability.ProxyMetrics metrics,
+            String serverName,
+            int maxFrameBytes,
+            MinecraftCompressionAuditState compressionAudit,
+            MinecraftForwardingRuntime forwardingRuntime,
+            RelaySessionIdentity identity,
+            MinecraftProtocolProfile profile,
+            Listener listener) {
+        this(
+                metrics,
+                serverName,
+                maxFrameBytes,
+                compressionAudit,
+                forwardingRuntime,
+                identity,
+                profile,
+                null,
+                listener);
+    }
+
+    BackendSwitchLoginHandler(
+            dev.strataproxy.observability.ProxyMetrics metrics,
+            String serverName,
+            int maxFrameBytes,
+            MinecraftCompressionAuditState compressionAudit,
+            MinecraftForwardingRuntime forwardingRuntime,
+            RelaySessionIdentity identity,
+            MinecraftProtocolProfile profile,
+            MinecraftForgeHandshakeTracker forgeHandshakeTracker,
             Listener listener) {
         this.metrics = metrics;
         this.serverName = serverName;
@@ -39,6 +79,9 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
         this.compressionAudit = compressionAudit;
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.identity = identity;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
         this.listener = listener;
     }
 
@@ -54,12 +97,10 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
             }
             var frame = input.readRetainedSlice(probe.totalBytes());
             try {
-                if (handleFrame(context, frame)) {
+                var action = handleLoginFrame(context, frame);
+                if (action == FrameAction.LOGIN_SUCCEEDED) {
                     terminal = true;
-                    listener.backendLoginReady(context.channel());
-                    if (input.isReadable()) {
-                        context.fireChannelRead(input.readRetainedSlice(input.readableBytes()));
-                    }
+                    listener.backendLoginReady(context.channel(), null, remaining(input));
                     return;
                 }
             } catch (RuntimeException exception) {
@@ -92,31 +133,35 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
         closeCodec();
     }
 
-    private boolean handleFrame(ChannelHandlerContext context, ByteBuf frame) {
+    private FrameAction handleLoginFrame(ChannelHandlerContext context, ByteBuf frame) {
         var packet = decodePacket(context, frame);
         try {
             var packetId = MinecraftProtocolCodec.readVarInt(packet);
-            if (packetId == CLIENTBOUND_LOGIN_SET_COMPRESSION_PACKET_ID && !compressionAudit.negotiated()) {
-                var threshold = MinecraftProtocolCodec.readVarInt(packet);
-                compressionAudit.negotiate(threshold);
-                metrics.compressionNegotiated(serverName, threshold);
-                return false;
+            if (profile.clientboundLoginSetCompressionPacketId().isPresent()
+                    && packetId == profile.clientboundLoginSetCompressionPacketId().getAsInt()
+                    && !compressionAudit.negotiated()) {
+                if (profile.compressionNegotiationSupported()) {
+                    var threshold = MinecraftProtocolCodec.readVarInt(packet);
+                    compressionAudit.negotiate(threshold);
+                    metrics.compressionNegotiated(serverName, threshold);
+                    return FrameAction.WAIT;
+                }
             }
-            if (packetId == CLIENTBOUND_LOGIN_SUCCESS_PACKET_ID) {
-                return true;
+            if (packetId == profile.clientboundLoginSuccessPacketId()) {
+                return FrameAction.LOGIN_SUCCEEDED;
             }
-            if (packetId == CLIENTBOUND_LOGIN_DISCONNECT_PACKET_ID) {
+            if (packetId == profile.clientboundLoginDisconnectPacketId()) {
                 fail(context, "backend_login_disconnect");
-                return false;
+                return FrameAction.WAIT;
             }
-            if (packetId == CLIENTBOUND_LOGIN_ENCRYPTION_REQUEST_PACKET_ID) {
+            if (packetId == profile.clientboundLoginEncryptionRequestPacketId()) {
                 fail(context, "backend_login_encryption_request");
-                return false;
+                return FrameAction.WAIT;
             }
             if (handleVelocityForwarding(context, frame)) {
-                return false;
+                return FrameAction.WAIT;
             }
-            return false;
+            return FrameAction.WAIT;
         } finally {
             packet.release();
         }
@@ -180,9 +225,18 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
         }
     }
 
+    private ByteBuf remaining(ByteBuf input) {
+        return input.isReadable() ? input.readRetainedSlice(input.readableBytes()) : null;
+    }
+
     interface Listener {
-        void backendLoginReady(io.netty.channel.Channel backend);
+        void backendLoginReady(io.netty.channel.Channel backend, ByteBuf clientboundFrames, ByteBuf remainingBackendFrames);
 
         void backendLoginFailed(io.netty.channel.Channel backend, String outcome);
+    }
+
+    private enum FrameAction {
+        WAIT,
+        LOGIN_SUCCEEDED
     }
 }

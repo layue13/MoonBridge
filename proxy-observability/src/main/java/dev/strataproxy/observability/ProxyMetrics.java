@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 public final class ProxyMetrics {
     private static final int RECENT_PACKET_ANOMALY_CAPACITY = 256;
     private static final int RECENT_CUSTOM_PAYLOAD_CAPACITY = 256;
+    private static final int RECENT_PLAYER_TRANSFER_CAPACITY = 256;
 
     private final LongAdder acceptedConnections = new LongAdder();
     private final AtomicLong activeConnections = new AtomicLong();
@@ -39,6 +40,9 @@ public final class ProxyMetrics {
     private final AtomicLong customPayloadSequence = new AtomicLong();
     private final AtomicReferenceArray<CustomPayloadSample> recentCustomPayloads =
             new AtomicReferenceArray<>(RECENT_CUSTOM_PAYLOAD_CAPACITY);
+    private final AtomicLong playerTransferSequence = new AtomicLong();
+    private final AtomicReferenceArray<PlayerTransferSample> recentPlayerTransfers =
+            new AtomicReferenceArray<>(RECENT_PLAYER_TRANSFER_CAPACITY);
     private final boolean packetAnomalySampling;
     private final ConcurrentHashMap<String, LongAdder> packetAnomalies = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ServerTrafficCounters> serverTraffic = new ConcurrentHashMap<>();
@@ -46,6 +50,7 @@ public final class ProxyMetrics {
     private final ConcurrentHashMap<String, PlayerSession> playerSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PacketTrafficKey, PacketTrafficCounters> packetTraffic = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<CustomPayloadKey, CustomPayloadCounters> customPayloads = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ForgeHandshakeKey, ForgeHandshake> forgeHandshakes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<RelayBackpressureKey, RelayBackpressureCounters> relayBackpressure = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PayloadCaptureBuffer> payloadCaptures = new ConcurrentHashMap<>();
     private final CompressionCounters compression = new CompressionCounters();
@@ -179,6 +184,35 @@ public final class ProxyMetrics {
     public void backendReplacement(String outcome) {
         var normalized = outcome == null || outcome.isBlank() ? "unspecified" : sanitize(outcome.trim());
         backendReplacements.computeIfAbsent(normalized, ignored -> new LongAdder()).increment();
+    }
+
+    /**
+     * Provides player transfer result.
+      * @param success success value
+      * @param outcome outcome value
+      * @param player player value
+      * @param sourceServer source server value
+      * @param targetServer target server value
+      * @param remoteAddress remote address value
+     */
+    public void playerTransfer(
+            boolean success,
+            String outcome,
+            String player,
+            String sourceServer,
+            String targetServer,
+            String remoteAddress) {
+        var sequence = playerTransferSequence.incrementAndGet();
+        var index = (int) ((sequence - 1) % RECENT_PLAYER_TRANSFER_CAPACITY);
+        recentPlayerTransfers.set(index, new PlayerTransferSample(
+                sequence,
+                success,
+                sanitize(outcome),
+                sanitize(player),
+                sanitize(sourceServer),
+                sanitize(targetServer),
+                sanitize(remoteAddress),
+                Instant.now()));
     }
 
     /**
@@ -651,6 +685,64 @@ public final class ProxyMetrics {
     }
 
     /**
+     * Provides current legacy Forge handshake state.
+      * @param server server value
+      * @param player player value
+      * @param remoteAddress remote address value
+      * @param stage stage value
+      * @param clientPhase client phase value
+      * @param backendPhase backend phase value
+      * @param complete complete value
+      * @param backendSwitchBlocked backend switch blocked value
+      * @param clientMods client mods value
+      * @param serverMods server mods value
+      * @param registryPackets registry packets value
+      * @param registryBytes registry bytes value
+     */
+    public void forgeHandshake(
+            String server,
+            String player,
+            String remoteAddress,
+            String stage,
+            String clientPhase,
+            String backendPhase,
+            boolean complete,
+            boolean backendSwitchBlocked,
+            int clientMods,
+            int serverMods,
+            int registryPackets,
+            long registryBytes) {
+        if (server == null || server.isBlank()) {
+            return;
+        }
+        var key = new ForgeHandshakeKey(sanitize(server), sanitize(player), sanitize(remoteAddress));
+        forgeHandshakes.put(key, new ForgeHandshake(
+                sanitize(stage),
+                sanitize(clientPhase),
+                sanitize(backendPhase),
+                complete,
+                backendSwitchBlocked,
+                Math.max(0, clientMods),
+                Math.max(0, serverMods),
+                Math.max(0, registryPackets),
+                Math.max(0, registryBytes),
+                Instant.now()));
+    }
+
+    /**
+     * Removes current legacy Forge handshake state for a connection.
+      * @param server server value
+      * @param player player value
+      * @param remoteAddress remote address value
+     */
+    public void forgeHandshakeClosed(String server, String player, String remoteAddress) {
+        if (server == null || server.isBlank()) {
+            return;
+        }
+        forgeHandshakes.remove(new ForgeHandshakeKey(sanitize(server), sanitize(player), sanitize(remoteAddress)));
+    }
+
+    /**
      * Provides current event loop delay nanos.
       * @return result of the operation
      */
@@ -739,6 +831,7 @@ public final class ProxyMetrics {
                 backendConnectFailures.sum(),
                 backendReplacements.entrySet().stream()
                         .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().sum())),
+                recentPlayerTransferSamples(),
                 frontendToBackendBytes.sum(),
                 backendToFrontendBytes.sum(),
                 compressionNegotiations.sum(),
@@ -768,6 +861,7 @@ public final class ProxyMetrics {
                                 Map.Entry::getKey,
                                 entry -> entry.getValue().snapshot())),
                 recentCustomPayloadSamples(),
+                Map.copyOf(forgeHandshakes),
                 relayBackpressure.entrySet().stream()
                         .collect(Collectors.toUnmodifiableMap(
                                 Map.Entry::getKey,
@@ -938,6 +1032,28 @@ public final class ProxyMetrics {
  * @param connectedAt connected at
  */
     public record PlayerSession(String player, String server, String remoteAddress, Instant connectedAt) {
+    }
+
+    /**
+     * Recent player transfer result retained for diagnostics.
+ * @param sequence sequence
+ * @param success success
+ * @param outcome outcome
+ * @param player player
+ * @param sourceServer source server
+ * @param targetServer target server
+ * @param remoteAddress remote address
+ * @param timestamp timestamp
+ */
+    public record PlayerTransferSample(
+            long sequence,
+            boolean success,
+            String outcome,
+            String player,
+            String sourceServer,
+            String targetServer,
+            String remoteAddress,
+            Instant timestamp) {
     }
 
     private static final class PacketTrafficCounters {
@@ -1391,6 +1507,41 @@ public final class ProxyMetrics {
     }
 
     /**
+     * Map key for current legacy Forge handshake state.
+ * @param server server
+ * @param player player
+ * @param remoteAddress remote address
+ */
+    public record ForgeHandshakeKey(String server, String player, String remoteAddress) {
+    }
+
+    /**
+     * Current legacy Forge handshake state.
+ * @param stage stage
+ * @param clientPhase client phase
+ * @param backendPhase backend phase
+ * @param complete complete
+ * @param backendSwitchBlocked backend switch blocked
+ * @param clientMods client mods
+ * @param serverMods server mods
+ * @param registryPackets registry packets
+ * @param registryBytes registry bytes
+ * @param updatedAt updated at
+ */
+    public record ForgeHandshake(
+            String stage,
+            String clientPhase,
+            String backendPhase,
+            boolean complete,
+            boolean backendSwitchBlocked,
+            int clientMods,
+            int serverMods,
+            int registryPackets,
+            long registryBytes,
+            Instant updatedAt) {
+    }
+
+    /**
      * Complete point-in-time metrics snapshot.
  * @param acceptedConnections accepted connections
  * @param activeConnections active connections
@@ -1401,6 +1552,7 @@ public final class ProxyMetrics {
  * @param failedRoutes failed routes
  * @param backendConnectFailures backend connect failures
  * @param backendReplacements backend replacements
+ * @param recentPlayerTransfers recent player transfers
  * @param frontendToBackendBytes frontend to backend bytes
  * @param backendToFrontendBytes backend to frontend bytes
  * @param compressionNegotiations compression negotiations
@@ -1417,6 +1569,7 @@ public final class ProxyMetrics {
  * @param packetTraffic packet traffic
  * @param customPayloads custom payloads
  * @param recentCustomPayloads recent custom payloads
+ * @param forgeHandshakes forge handshakes
  * @param relayBackpressure relay backpressure
  * @param compression compression
  * @param serverCompression server compression
@@ -1437,6 +1590,7 @@ public final class ProxyMetrics {
             long failedRoutes,
             long backendConnectFailures,
             Map<String, Long> backendReplacements,
+            List<PlayerTransferSample> recentPlayerTransfers,
             long frontendToBackendBytes,
             long backendToFrontendBytes,
             long compressionNegotiations,
@@ -1453,6 +1607,7 @@ public final class ProxyMetrics {
             Map<PacketTrafficKey, PacketTraffic> packetTraffic,
             Map<CustomPayloadKey, CustomPayloadTraffic> customPayloads,
             List<CustomPayloadSample> recentCustomPayloads,
+            Map<ForgeHandshakeKey, ForgeHandshake> forgeHandshakes,
             Map<RelayBackpressureKey, RelayBackpressure> relayBackpressure,
             CompressionAudit compression,
             Map<String, CompressionAudit> serverCompression,
@@ -1462,5 +1617,17 @@ public final class ProxyMetrics {
             Map<CompressionRewriteKey, CompressionRewrite> compressionRewrites,
             List<PayloadCapture> payloadCaptures,
             Map<String, List<PayloadCaptureSample>> payloadCaptureSamples) {
+    }
+
+    private List<PlayerTransferSample> recentPlayerTransferSamples() {
+        var samples = new ArrayList<PlayerTransferSample>(RECENT_PLAYER_TRANSFER_CAPACITY);
+        for (var i = 0; i < RECENT_PLAYER_TRANSFER_CAPACITY; i++) {
+            var sample = recentPlayerTransfers.get(i);
+            if (sample != null) {
+                samples.add(sample);
+            }
+        }
+        samples.sort(Comparator.comparingLong(PlayerTransferSample::sequence).reversed());
+        return List.copyOf(samples);
     }
 }

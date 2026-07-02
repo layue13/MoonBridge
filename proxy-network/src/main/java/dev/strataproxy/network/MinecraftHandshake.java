@@ -24,4 +24,8 @@ public record MinecraftHandshake(
             throw new IllegalArgumentException("requestedPort must fit unsigned short");
         }
     }
+
+    boolean legacyForgeClientMarker() {
+        return requestedHost.contains("\0FML\0");
+    }
 }

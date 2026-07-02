@@ -11,21 +11,30 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 
 import java.util.HashSet;
-import java.util.Set;
 
 final class GameCommandFrameInterceptor implements AutoCloseable {
-    private static final Set<Integer> COMMAND_PACKET_CANDIDATES = Set.of(0x03, 0x04, 0x05);
-
     private final CommandRegistry commands;
     private final EventBus events;
     private final int maxFrameBytes;
+    private final MinecraftProtocolProfile profile;
     private final MinecraftCompressionCodec compressionCodec = new MinecraftCompressionCodec();
     private ByteBuf pending = Unpooled.buffer();
 
     GameCommandFrameInterceptor(CommandRegistry commands, EventBus events, int maxFrameBytes) {
+        this(commands, events, maxFrameBytes, MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1));
+    }
+
+    GameCommandFrameInterceptor(
+            CommandRegistry commands,
+            EventBus events,
+            int maxFrameBytes,
+            MinecraftProtocolProfile profile) {
         this.commands = commands;
         this.events = events;
         this.maxFrameBytes = maxFrameBytes;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
     }
 
     Interception intercept(
@@ -122,7 +131,7 @@ final class GameCommandFrameInterceptor implements AutoCloseable {
         var view = packet.retainedDuplicate();
         try {
             var packetId = MinecraftProtocolCodec.readVarInt(view);
-            if (!COMMAND_PACKET_CANDIDATES.contains(packetId)) {
+            if (!profile.serverboundCommandPacketIds().contains(packetId)) {
                 return null;
             }
             var text = MinecraftProtocolCodec.readString(view, 256);

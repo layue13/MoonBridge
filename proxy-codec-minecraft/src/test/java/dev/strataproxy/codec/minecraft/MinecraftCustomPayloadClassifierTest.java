@@ -45,6 +45,38 @@ final class MinecraftCustomPayloadClassifierTest {
     }
 
     @Test
+    void classifiesLegacyForgeChannelsWithShortPayloadLength() {
+        var fmlHandshake = legacyCustomPayload(0x17, "FML|HS", 64);
+        var fmlMultipart = legacyCustomPayload(0x17, "FML|MP", 32);
+        var register = legacyCustomPayload(0x17, "REGISTER", 16);
+        try {
+            var handshake = MinecraftCustomPayloadClassifier.classify(
+                    fmlHandshake,
+                    1024,
+                    MinecraftCustomPayloadClassifier.PayloadLengthFormat.UNSIGNED_SHORT);
+            var multipart = MinecraftCustomPayloadClassifier.classify(
+                    fmlMultipart,
+                    1024,
+                    MinecraftCustomPayloadClassifier.PayloadLengthFormat.UNSIGNED_SHORT);
+            var registration = MinecraftCustomPayloadClassifier.classify(
+                    register,
+                    1024,
+                    MinecraftCustomPayloadClassifier.PayloadLengthFormat.UNSIGNED_SHORT);
+
+            assertEquals(0x17, handshake.packetId());
+            assertEquals("FML|HS", handshake.channel());
+            assertEquals(64, handshake.payloadBytes());
+            assertEquals(MinecraftCustomPayloadClassifier.CustomPayloadKind.FORGE_HANDSHAKE, handshake.kind());
+            assertEquals(MinecraftCustomPayloadClassifier.CustomPayloadKind.FORGE_HANDSHAKE, multipart.kind());
+            assertEquals(MinecraftCustomPayloadClassifier.CustomPayloadKind.FORGE_HANDSHAKE, registration.kind());
+        } finally {
+            fmlHandshake.release();
+            fmlMultipart.release();
+            register.release();
+        }
+    }
+
+    @Test
     void classifiesLoginPluginRequestWithoutConsumingInput() {
         var frame = loginPluginRequest(0x04, 7, "fml:handshake", 128);
         var readerIndex = frame.readerIndex();
@@ -103,6 +135,17 @@ final class MinecraftCustomPayloadClassifierTest {
         var channelBytes = channel.getBytes(StandardCharsets.UTF_8);
         MinecraftVarInts.write(frame, channelBytes.length);
         frame.writeBytes(channelBytes);
+        frame.writeZero(payloadBytes);
+        return frame;
+    }
+
+    private static io.netty.buffer.ByteBuf legacyCustomPayload(int packetId, String channel, int payloadBytes) {
+        var frame = Unpooled.buffer();
+        MinecraftVarInts.write(frame, packetId);
+        var channelBytes = channel.getBytes(StandardCharsets.UTF_8);
+        MinecraftVarInts.write(frame, channelBytes.length);
+        frame.writeBytes(channelBytes);
+        frame.writeShort(payloadBytes);
         frame.writeZero(payloadBytes);
         return frame;
     }

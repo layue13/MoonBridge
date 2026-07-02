@@ -36,10 +36,63 @@ final class GameCommandFrameInterceptorTest {
     }
 
     @Test
+    void suppressesLegacyUncompressedCommand() {
+        var executions = new AtomicInteger();
+        var registry = registry(executions);
+        try (var interceptor = new GameCommandFrameInterceptor(
+                registry,
+                null,
+                1024,
+                MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_7_10))) {
+            var frame = commandFrame(0x01, "server survival-2");
+
+            var result = interceptor.intercept(UnpooledByteBufAllocator.DEFAULT, frame, false, -1, source());
+
+            assertFalse(result.forward());
+            assertEquals(1, executions.get());
+            frame.release();
+        }
+    }
+
+    @Test
+    void forwardsLegacyPacketIdOnModernProfile() {
+        var executions = new AtomicInteger();
+        var registry = registry(executions);
+        try (var interceptor = new GameCommandFrameInterceptor(registry, null, 1024)) {
+            var frame = commandFrame(0x01, "server survival-2");
+
+            var result = interceptor.intercept(UnpooledByteBufAllocator.DEFAULT, frame, false, -1, source());
+
+            assertTrue(result.forward());
+            assertEquals(0, executions.get());
+            assertEquals(frame.readableBytes(), result.message().readableBytes());
+            result.message().release();
+        }
+    }
+
+    @Test
     void forwardsUnknownUncompressedCommand() {
         var registry = registry(new AtomicInteger());
         try (var interceptor = new GameCommandFrameInterceptor(registry, null, 1024)) {
             var frame = commandFrame(0x04, "spawn");
+
+            var result = interceptor.intercept(UnpooledByteBufAllocator.DEFAULT, frame, false, -1, source());
+
+            assertTrue(result.forward());
+            assertEquals(frame.readableBytes(), result.message().readableBytes());
+            result.message().release();
+        }
+    }
+
+    @Test
+    void forwardsUnknownLegacyUncompressedCommand() {
+        var registry = registry(new AtomicInteger());
+        try (var interceptor = new GameCommandFrameInterceptor(
+                registry,
+                null,
+                1024,
+                MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_7_10))) {
+            var frame = commandFrame(0x01, "spawn");
 
             var result = interceptor.intercept(UnpooledByteBufAllocator.DEFAULT, frame, false, -1, source());
 

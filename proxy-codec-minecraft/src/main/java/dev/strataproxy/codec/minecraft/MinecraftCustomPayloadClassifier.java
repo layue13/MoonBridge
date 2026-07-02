@@ -22,6 +22,21 @@ public final class MinecraftCustomPayloadClassifier {
      * @return custom payload classification
      */
     public static CustomPayloadClassification classify(ByteBuf packetFrame, int largePayloadBytes) {
+        return classify(packetFrame, largePayloadBytes, PayloadLengthFormat.REMAINING_BYTES);
+    }
+
+    /**
+     * Classifies a play-state custom payload frame.
+     *
+     * @param packetFrame packet payload containing packet id, channel, and custom payload bytes
+     * @param largePayloadBytes threshold used to mark a payload as large; zero disables the flag
+     * @param payloadLengthFormat custom payload body length encoding used by the protocol
+     * @return custom payload classification
+     */
+    public static CustomPayloadClassification classify(
+            ByteBuf packetFrame,
+            int largePayloadBytes,
+            PayloadLengthFormat payloadLengthFormat) {
         if (packetFrame == null) {
             throw new IllegalArgumentException("packetFrame must not be null");
         }
@@ -32,7 +47,7 @@ public final class MinecraftCustomPayloadClassifier {
         try {
             var packetId = MinecraftVarInts.read(view);
             var channel = readString(view, MAX_CHANNEL_BYTES);
-            var payloadBytes = view.readableBytes();
+            var payloadBytes = payloadLength(payloadLengthFormat, view);
             return new CustomPayloadClassification(
                     packetId,
                     channel,
@@ -42,6 +57,44 @@ public final class MinecraftCustomPayloadClassifier {
         } finally {
             view.release();
         }
+    }
+
+    private static int payloadLength(PayloadLengthFormat format, ByteBuf input) {
+        var resolved = format == null ? PayloadLengthFormat.REMAINING_BYTES : format;
+        return switch (resolved) {
+            case REMAINING_BYTES -> input.readableBytes();
+            case UNSIGNED_SHORT -> unsignedShortPayloadLength(input);
+            case VARSHORT -> varShortPayloadLength(input);
+        };
+    }
+
+    private static int unsignedShortPayloadLength(ByteBuf input) {
+        if (input.readableBytes() < Short.BYTES) {
+            throw new MinecraftCodecException("truncated custom payload length");
+        }
+        var length = input.readUnsignedShort();
+        if (input.readableBytes() < length) {
+            throw new MinecraftCodecException("truncated custom payload body");
+        }
+        return length;
+    }
+
+    private static int varShortPayloadLength(ByteBuf input) {
+        if (input.readableBytes() < Short.BYTES) {
+            throw new MinecraftCodecException("truncated custom payload length");
+        }
+        var low = input.readUnsignedShort();
+        var length = low & 0x7FFF;
+        if ((low & 0x8000) != 0) {
+            if (!input.isReadable()) {
+                throw new MinecraftCodecException("truncated custom payload varshort extension");
+            }
+            length |= input.readUnsignedByte() << 15;
+        }
+        if (input.readableBytes() < length) {
+            throw new MinecraftCodecException("truncated custom payload body");
+        }
+        return length;
     }
 
     /**
@@ -95,7 +148,10 @@ public final class MinecraftCustomPayloadClassifier {
         }
         if (normalized.startsWith("fml:")
                 || normalized.startsWith("forge:")
+                || normalized.equals("fml")
                 || normalized.equals("fml|hs")
+                || normalized.equals("fml|mp")
+                || normalized.equals("register")
                 || normalized.equals("forge")) {
             return CustomPayloadKind.FORGE_HANDSHAKE;
         }
@@ -124,6 +180,18 @@ public final class MinecraftCustomPayloadClassifier {
         REGISTRY_OR_CONFIG_SYNC,
         /** Channel did not match a known category. */
         UNKNOWN
+    }
+
+    /**
+     * Custom payload body length encoding.
+     */
+    public enum PayloadLengthFormat {
+        /** Payload consumes the rest of the packet after the channel field. */
+        REMAINING_BYTES,
+        /** Payload is prefixed by a two-byte unsigned length. */
+        UNSIGNED_SHORT,
+        /** Forge-compatible 1.7 clientbound extension over the two-byte length. */
+        VARSHORT
     }
 
     /**

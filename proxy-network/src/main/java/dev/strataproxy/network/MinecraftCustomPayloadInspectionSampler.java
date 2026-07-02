@@ -20,12 +20,25 @@ final class MinecraftCustomPayloadInspectionSampler {
     private final int maxFrameBytes;
     private final int largePayloadBytes;
     private final CustomPayloadAnomalyPolicy policy;
+    private final MinecraftProtocolProfile profile;
     private ByteBuf pending = Unpooled.buffer();
     private long floodWindowStartedNanos;
     private int floodWindowCount;
     private boolean closed;
 
     MinecraftCustomPayloadInspectionSampler(int maxFrameBytes, int largePayloadBytes, CustomPayloadAnomalyPolicy policy) {
+        this(
+                maxFrameBytes,
+                largePayloadBytes,
+                policy,
+                MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1));
+    }
+
+    MinecraftCustomPayloadInspectionSampler(
+            int maxFrameBytes,
+            int largePayloadBytes,
+            CustomPayloadAnomalyPolicy policy,
+            MinecraftProtocolProfile profile) {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
         }
@@ -38,6 +51,9 @@ final class MinecraftCustomPayloadInspectionSampler {
         this.maxFrameBytes = maxFrameBytes;
         this.largePayloadBytes = largePayloadBytes;
         this.policy = policy;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
     }
 
     static MinecraftCustomPayloadInspectionSampler defaults(int maxFrameBytes) {
@@ -80,11 +96,15 @@ final class MinecraftCustomPayloadInspectionSampler {
                 } finally {
                     bodyProbe.release();
                 }
-                if (packetId == SERVERBOUND_CONFIGURATION_CUSTOM_PAYLOAD_PACKET_ID) {
-                    var classification = MinecraftCustomPayloadClassifier.classify(body, largePayloadBytes);
+                if (profile.serverboundCustomPayloadPacketId().isPresent()
+                        && packetId == profile.serverboundCustomPayloadPacketId().getAsInt()) {
+                    var classification = MinecraftCustomPayloadClassifier.classify(
+                            body,
+                            largePayloadBytes,
+                            payloadLengthFormat());
                     var packet = new PacketView(
                             PacketDirection.SERVERBOUND,
-                            ProtocolState.CONFIGURATION,
+                            protocolState(),
                             -1,
                             packetId,
                             body.readableBytes(),
@@ -104,6 +124,18 @@ final class MinecraftCustomPayloadInspectionSampler {
             pending.discardReadBytes();
         }
         return results;
+    }
+
+    private ProtocolState protocolState() {
+        return profile.serverboundCustomPayloadInspectionState();
+    }
+
+    private MinecraftCustomPayloadClassifier.PayloadLengthFormat payloadLengthFormat() {
+        return switch (profile.serverboundCustomPayloadLengthFormat()) {
+            case REMAINING_BYTES -> MinecraftCustomPayloadClassifier.PayloadLengthFormat.REMAINING_BYTES;
+            case UNSIGNED_SHORT -> MinecraftCustomPayloadClassifier.PayloadLengthFormat.UNSIGNED_SHORT;
+            case VARSHORT -> MinecraftCustomPayloadClassifier.PayloadLengthFormat.VARSHORT;
+        };
     }
 
     private int recordCustomPayloadInWindow(long nowNanos) {

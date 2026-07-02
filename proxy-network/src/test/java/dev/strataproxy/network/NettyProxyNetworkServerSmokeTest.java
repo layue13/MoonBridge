@@ -496,6 +496,101 @@ final class NettyProxyNetworkServerSmokeTest {
     }
 
     @Test
+    void legacy1710GameCommandTransferSendsRespawnSwitchFrames() throws Exception {
+        var handshake = handshakeFrame(5, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var clientBytes = concat(handshake, login);
+        var commandFrame = playCommandFrame(0x01, "server survival-2");
+        var afterReplacementBytes = packetFrame(0x03, 117);
+        var executor = Executors.newFixedThreadPool(2);
+
+        try (var firstBackend = new ServerSocket(0);
+             var secondBackend = new ServerSocket(0)) {
+            firstBackend.setSoTimeout(5_000);
+            secondBackend.setSoTimeout(5_000);
+            var firstBackendClosedWithoutCommand = executor.submit(() -> {
+                try (var accepted = firstBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    readMinecraftFrame(accepted.getInputStream());
+                    readMinecraftFrame(accepted.getInputStream());
+                    return accepted.getInputStream().read() < 0;
+                }
+            });
+            var secondBackendRead = executor.submit(() -> {
+                try (var accepted = secondBackend.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    var first = readMinecraftFrame(accepted.getInputStream());
+                    var second = readMinecraftFrame(accepted.getInputStream());
+                    accepted.getOutputStream().write(concat(loginSuccessFrame(), joinGame1710Frame(12, 0, 0, 2, "default")));
+                    accepted.getOutputStream().flush();
+                    return new SwitchBackendRead(concat(first, second), accepted.getInputStream().readNBytes(afterReplacementBytes.length));
+                }
+            });
+
+            var first = server("survival-1", firstBackend.getLocalPort());
+            var second = server("survival-2", secondBackend.getLocalPort());
+            var metrics = new ProxyMetrics();
+            var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
+            var resolver = new ReplacementBackendResolver(first, second);
+            var proxyReference = new AtomicReference<NettyProxyNetworkServer>();
+            var commands = new DefaultCommandRegistry();
+            commands.register(new CommandSpec("server", List.of(), "", "", context ->
+                    proxyReference.get().transferPlayer(context.source().name(), context.arguments().get(0))
+                            .thenApply(result -> result.success()
+                                    ? CommandResult.ok()
+                                    : CommandResult.failure(result.outcome()))));
+            try (var proxy = new NettyProxyNetworkServer(
+                    1,
+                    resolver,
+                    metrics,
+                    tuning,
+                    commands,
+                    new SimpleEventBus())) {
+                proxyReference.set(proxy);
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.setSoTimeout(5_000);
+                    client.getOutputStream().write(clientBytes);
+                    client.getOutputStream().flush();
+                    awaitPlayerSession(metrics, "Steve", "survival-1");
+
+                    client.getOutputStream().write(commandFrame);
+                    client.getOutputStream().flush();
+                    awaitServerActiveConnections(metrics, "survival-2", 1);
+
+                    try {
+                        assertEquals(0x07, packetId(readMinecraftFrame(client.getInputStream())));
+                        assertEquals(0x07, packetId(readMinecraftFrame(client.getInputStream())));
+                    } catch (java.io.IOException exception) {
+                        var backendRead = secondBackendRead.isDone() ? secondBackendRead.get(5, TimeUnit.SECONDS) : null;
+                        throw new AssertionError(
+                                "secondBackendDone=" + secondBackendRead.isDone()
+                                        + " secondPlayBytes="
+                                        + (backendRead == null ? "pending" : backendRead.playBytes().length)
+                                        + " snapshot=" + metrics.snapshot(),
+                                exception);
+                    }
+
+                    client.getOutputStream().write(afterReplacementBytes);
+                    client.getOutputStream().flush();
+
+                    var secondRead = secondBackendRead.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(clientBytes, secondRead.loginBytes());
+                    assertArrayEquals(afterReplacementBytes, secondRead.playBytes());
+                    assertTrue(firstBackendClosedWithoutCommand.get(5, TimeUnit.SECONDS));
+                    assertEquals("survival-2", metrics.snapshot().playerSessions().get("Steve").server());
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void gameCommandResultMessageIsSentToClientAndNotForwarded() throws Exception {
         var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
         var login = loginStartFrame("Steve");
@@ -965,6 +1060,37 @@ final class NettyProxyNetworkServerSmokeTest {
 
     private static byte[] loginSuccessFrame() {
         return packetFrame(0x02, 0);
+    }
+
+    private static byte[] joinGame1710Frame(int entityId, int gameMode, int dimension, int difficulty, String levelType) {
+        var payload = new ByteArrayOutputStream();
+        writeVarInt(payload, 0x01);
+        payload.write((entityId >>> 24) & 0xFF);
+        payload.write((entityId >>> 16) & 0xFF);
+        payload.write((entityId >>> 8) & 0xFF);
+        payload.write(entityId & 0xFF);
+        payload.write(gameMode & 0xFF);
+        payload.write(dimension & 0xFF);
+        payload.write(difficulty & 0xFF);
+        payload.write(100);
+        writeString(payload, levelType);
+
+        var payloadBytes = payload.toByteArray();
+        var frame = new ByteArrayOutputStream();
+        writeVarInt(frame, payloadBytes.length);
+        frame.writeBytes(payloadBytes);
+        return frame.toByteArray();
+    }
+
+    private static int packetId(byte[] frameBytes) {
+        var frame = Unpooled.wrappedBuffer(frameBytes);
+        try {
+            var length = MinecraftVarInts.read(frame);
+            var body = frame.readSlice(length);
+            return MinecraftVarInts.read(body);
+        } finally {
+            frame.release();
+        }
     }
 
     private static byte[] readMinecraftFrame(InputStream input) throws java.io.IOException {

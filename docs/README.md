@@ -10,8 +10,9 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 2. [Configuration Guide](configuration.md): every important YAML section explained with copyable examples.
 3. [Command Reference](commands.md): Admin CLI and query/load-test commands grouped by task.
 4. [Zstd Compression Tuning](compression-zstd.md): optional modded-client Zstd codec, sample collection, dictionary training, and rollout guidance.
-5. [JavaDoc Reference](javadoc.md): source-level API documentation scope and generation workflow.
-6. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
+5. [Protocol Version Matrix](protocol-version-matrix.md): exact Minecraft version support, packet-format assumptions, and required gates before claiming compatibility.
+6. [JavaDoc Reference](javadoc.md): source-level API documentation scope and generation workflow.
+7. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
 
 ## Common Tasks
 
@@ -24,6 +25,7 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 | Write a proxy-side plugin or use in-game commands | [Plugins and In-Game Commands](plugins.md) |
 | Expose the Admin API safely | [Configuration Guide: Admin API](configuration.md#admin-api) |
 | Tune compression for modded traffic | [Zstd Compression Tuning](compression-zstd.md) |
+| Check whether a Minecraft version is actually supported | [Protocol Version Matrix](protocol-version-matrix.md) |
 | Deploy with systemd or a container | [Deployment Notes](../deployment/README.md) |
 | Run smoke or acceptance load checks | [Performance Profiles](../deployment/performance/README.md) |
 | Add Prometheus or Grafana | [Prometheus](../deployment/observability/prometheus/README.md) and [Grafana](../deployment/observability/grafana/README.md) |
@@ -36,6 +38,7 @@ Chinese documentation is under [zh-CN](zh-CN/README.md).
 | [Configuration Guide](configuration.md) | Practical YAML configuration reference |
 | [Command Reference](commands.md) | Operator command cookbook |
 | [Plugins and In-Game Commands](plugins.md) | Player commands and plugin jar entry points |
+| [Protocol Version Matrix](protocol-version-matrix.md) | Supported Minecraft protocol profiles and version-gate checklist |
 | [JavaDoc Reference](javadoc.md) | Source-level API documentation scope and generation workflow |
 | [Operations Manual](operations-manual.md) | Complete production runbook |
 | [Zstd Compression Tuning](compression-zstd.md) | Minecraft-specific Zstd and dictionary workflow |

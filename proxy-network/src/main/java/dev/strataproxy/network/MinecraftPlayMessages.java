@@ -9,9 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 final class MinecraftPlayMessages {
-    private static final int PROTOCOL_1_20_1 = 763;
-    private static final int CLIENTBOUND_SYSTEM_CHAT_1_20_1 = 0x64;
-
     private MinecraftPlayMessages() {
     }
 
@@ -21,15 +18,34 @@ final class MinecraftPlayMessages {
             String message,
             boolean compressed,
             int compressionThreshold) {
-        var packetId = systemChatPacketId(protocolVersion);
-        if (packetId < 0 || message == null || message.isBlank()) {
+        return systemChatFrame(
+                allocator,
+                MinecraftProtocolProfile.forVersion(protocolVersion),
+                message,
+                compressed,
+                compressionThreshold);
+    }
+
+    static Optional<ByteBuf> systemChatFrame(
+            ByteBufAllocator allocator,
+            MinecraftProtocolProfile profile,
+            String message,
+            boolean compressed,
+            int compressionThreshold) {
+        var resolvedProfile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
+        var packetId = resolvedProfile.clientboundChatPacketId();
+        if (packetId.isEmpty() || message == null || message.isBlank()) {
             return Optional.empty();
         }
         var packet = allocator.buffer();
         try {
-            MinecraftVarInts.write(packet, packetId);
+            MinecraftVarInts.write(packet, packetId.getAsInt());
             writeString(packet, "{\"text\":\"" + escapeJson(message) + "\"}");
-            packet.writeBoolean(false);
+            if (resolvedProfile.clientboundChatHasOverlayFlag()) {
+                packet.writeBoolean(false);
+            }
             if (compressed) {
                 try (var codec = new MinecraftCompressionCodec()) {
                     return Optional.of(codec.encodeFrame(allocator, packet, compressionThreshold));
@@ -39,10 +55,6 @@ final class MinecraftPlayMessages {
         } finally {
             packet.release();
         }
-    }
-
-    private static int systemChatPacketId(int protocolVersion) {
-        return protocolVersion == PROTOCOL_1_20_1 ? CLIENTBOUND_SYSTEM_CHAT_1_20_1 : -1;
     }
 
     private static ByteBuf frame(ByteBufAllocator allocator, ByteBuf packet) {

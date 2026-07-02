@@ -18,6 +18,7 @@ final class BackendConnector {
     private final MinecraftForwardingRuntime forwardingRuntime;
     private final boolean compressionRewriteEnabled;
     private final int compressionRewriteMaxEventLoopDelayMillis;
+    private final MinecraftProtocolProfile profile;
 
     BackendConnector(
             ProxyMetrics metrics,
@@ -26,7 +27,28 @@ final class BackendConnector {
             CompressionRuntime compressionRuntime,
             MinecraftForwardingRuntime forwardingRuntime,
             boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
+            int compressionRewriteMaxEventLoopDelayMillis,
+            int protocolVersion) {
+        this(
+                metrics,
+                tuning,
+                backendChannel,
+                compressionRuntime,
+                forwardingRuntime,
+                compressionRewriteEnabled,
+                compressionRewriteMaxEventLoopDelayMillis,
+                MinecraftProtocolProfile.forVersion(protocolVersion));
+    }
+
+    BackendConnector(
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            Class<? extends Channel> backendChannel,
+            CompressionRuntime compressionRuntime,
+            MinecraftForwardingRuntime forwardingRuntime,
+            boolean compressionRewriteEnabled,
+            int compressionRewriteMaxEventLoopDelayMillis,
+            MinecraftProtocolProfile profile) {
         this.metrics = metrics;
         this.tuning = tuning;
         this.backendChannel = backendChannel;
@@ -34,6 +56,9 @@ final class BackendConnector {
         this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
         this.compressionRewriteEnabled = compressionRewriteEnabled;
         this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
     }
 
     ChannelFuture connect(
@@ -58,6 +83,7 @@ final class BackendConnector {
                 .handler(new ChannelInitializer<Channel>() {
                     @Override
                     protected void initChannel(Channel backend) {
+                        var forgeHandshakeTracker = session.startForgeHandshakeTracker(tuning.maxFrameBytes(), profile);
                         backend.pipeline().addLast("backend-relay", new BackendRelayHandler(
                                 frontend,
                                 metrics,
@@ -69,7 +95,9 @@ final class BackendConnector {
                                 forwardingRuntime,
                                 compressionRewriteEnabled,
                                 compressionRewriteMaxEventLoopDelayMillis,
-                                replacementController));
+                                profile,
+                                replacementController,
+                                forgeHandshakeTracker));
                     }
                 });
         return bootstrap.connect(selected.descriptor().address());
@@ -80,6 +108,7 @@ final class BackendConnector {
             RegisteredServer selected,
             MinecraftCompressionAuditState compressionAudit,
             RelaySession session,
+            MinecraftForgeHandshakeTracker forgeHandshakeTracker,
             BackendSwitchLoginHandler.Listener listener) {
         var serverName = selected.descriptor().name();
         var bootstrap = new Bootstrap()
@@ -103,6 +132,8 @@ final class BackendConnector {
                                 compressionAudit,
                                 forwardingRuntime,
                                 session.identity(),
+                                profile,
+                                forgeHandshakeTracker,
                                 listener));
                     }
                 });

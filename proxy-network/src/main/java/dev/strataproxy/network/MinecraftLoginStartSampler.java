@@ -14,10 +14,17 @@ final class MinecraftLoginStartSampler {
     private boolean found;
 
     MinecraftLoginStartSampler(int maxFrameBytes) {
+        this(maxFrameBytes, Unpooled.EMPTY_BUFFER);
+    }
+
+    MinecraftLoginStartSampler(int maxFrameBytes, ByteBuf seed) {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
         }
         this.maxFrameBytes = maxFrameBytes;
+        if (seed != null && seed.isReadable()) {
+            this.pending.writeBytes(seed, seed.readerIndex(), seed.readableBytes());
+        }
     }
 
     Optional<String> observe(ByteBuf input) {

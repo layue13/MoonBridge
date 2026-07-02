@@ -64,10 +64,17 @@ public final class RoutingBackendResolver implements BackendResolver, ServerTarg
     @Override
     /** Provides resolve target. */
     public Optional<RegisteredServer> resolveTarget(String serverName) {
+        return resolveTarget(serverName, -1);
+    }
+
+    @Override
+    /** Provides resolve target. */
+    public Optional<RegisteredServer> resolveTarget(String serverName, int protocolVersion) {
         if (registry == null || serverName == null || serverName.isBlank()) {
             return Optional.empty();
         }
         return registry.get(serverName.trim())
+                .filter(server -> protocolVersion < 0 || server.descriptor().protocolRange().accepts(protocolVersion))
                 .filter(server -> !server.draining())
                 .filter(server -> server.health().canReceiveNewConnections())
                 .filter(server -> !server.load().isHardFull());

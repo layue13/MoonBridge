@@ -327,6 +327,59 @@ final class RelayTrafficMetricsTest {
     }
 
     @Test
+    void doesNotTreatPlayPacketThreeAsCompressionAfterLoginSuccess() {
+        var metrics = new ProxyMetrics();
+        var frontend = new EmbeddedChannel();
+        var backend = new EmbeddedChannel(new BackendRelayHandler(frontend, metrics, "survival-1", 1024));
+        var loginSuccess = packetFrame(0x02, 0);
+        var playPacketThree = packetFrame(0x03, 0);
+
+        backend.writeInbound(loginSuccess.retainedDuplicate());
+        backend.writeInbound(playPacketThree.retainedDuplicate());
+
+        releaseOutbound(frontend);
+        var snapshot = metrics.snapshot();
+        assertEquals(0, snapshot.compressionNegotiations());
+        assertEquals(false, snapshot.serverCompressionThresholds().containsKey("survival-1"));
+
+        loginSuccess.release();
+        playPacketThree.release();
+        backend.finishAndReleaseAll();
+        frontend.finishAndReleaseAll();
+    }
+
+    @Test
+    void doesNotDetectCompressionNegotiationForLegacyProtocol() {
+        var metrics = new ProxyMetrics();
+        var frontend = new EmbeddedChannel();
+        var backend = new EmbeddedChannel(new BackendRelayHandler(
+                frontend,
+                metrics,
+                "survival-1",
+                1024,
+                new MinecraftCompressionAuditState(1024),
+                CompressionRuntime.defaults(),
+                new RelaySessionIdentity(""),
+                MinecraftForwardingRuntime.none(),
+                false,
+                25,
+                5,
+                null));
+        var playPacketThree = packetFrame(0x03, 128);
+
+        backend.writeInbound(playPacketThree.retainedDuplicate());
+        releaseOutbound(frontend);
+
+        var snapshot = metrics.snapshot();
+        assertEquals(0, snapshot.compressionNegotiations());
+        assertEquals(false, snapshot.serverCompressionThresholds().containsKey("survival-1"));
+
+        playPacketThree.release();
+        backend.finishAndReleaseAll();
+        frontend.finishAndReleaseAll();
+    }
+
+    @Test
     void malformedCompressionNegotiationClosesRelay() {
         var metrics = new ProxyMetrics();
         var frontend = new EmbeddedChannel();

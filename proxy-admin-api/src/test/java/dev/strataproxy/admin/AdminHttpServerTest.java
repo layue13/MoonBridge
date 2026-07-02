@@ -585,9 +585,11 @@ final class AdminHttpServerTest {
         metrics.compressionDecision("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "threshold", 1024);
         metrics.packetTraffic("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "UNCOMPRESSED", 1, 128, 0);
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 256, 0);
+        metrics.forgeHandshake("survival-1", "Steve", "127.0.0.1:50000", "REGISTRY_DATA", "WAITING_SERVER_COMPLETE", "REGISTRY_DATA_SENT", false, true, 64, 66, 3, 32768);
         metrics.relayBackpressure("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, 512);
         metrics.startPayloadCapture("cap-1", "survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, 4, 8, java.time.Instant.now().plusSeconds(30));
         metrics.packetAnomaly("initial-handshake-malformed-frame", "127.0.0.1:50000", "survival-1", "frontend_to_backend", "HANDSHAKE", 0, 48, -1, "play.example.net");
+        metrics.playerTransfer(true, "success", "Steve", "lobby-1", "survival-1", "127.0.0.1:50000");
         metrics.playerSessionStarted("Steve", "survival-1", "127.0.0.1:50000");
         try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics, "", 10, false)) {
             admin.start();
@@ -611,14 +613,54 @@ final class AdminHttpServerTest {
             assertTrue(response.body().contains("\"kind\":\"FORGE_HANDSHAKE\",\"channel\":\"fml:handshake\",\"packets\":1,\"payloadBytes\":256"));
             assertTrue(response.body().contains("\"packetAnomalies\""));
             assertTrue(response.body().contains("\"rule\":\"initial-handshake-malformed-frame\",\"count\":1"));
+            assertTrue(response.body().contains("\"forgeHandshakes\""));
+            assertTrue(response.body().contains("\"stage\":\"REGISTRY_DATA\",\"clientPhase\":\"WAITING_SERVER_COMPLETE\",\"backendPhase\":\"REGISTRY_DATA_SENT\""));
             assertTrue(response.body().contains("\"relayBackpressure\""));
             assertTrue(response.body().contains("\"events\":1,\"lastBytesBeforeWritable\":512,\"maxBytesBeforeWritable\":512"));
             assertTrue(response.body().contains("\"payloadCaptures\""));
             assertTrue(response.body().contains("\"id\":\"cap-1\",\"server\":\"survival-1\",\"direction\":\"frontend_to_backend\""));
+            assertTrue(response.body().contains("\"playerTransfers\""));
+            assertTrue(response.body().contains("\"success\":true,\"outcome\":\"success\",\"player\":\"Steve\",\"sourceServer\":\"lobby-1\",\"targetServer\":\"survival-1\""));
             assertTrue(response.body().contains("\"playerSessions\""));
             assertTrue(response.body().contains("\"player\":\"Steve\",\"server\":\"survival-1\""));
             assertTrue(response.body().contains("\"remoteAddress\":\"127.0.0.1:50000\""));
             assertTrue(response.body().contains("\"detail\":\"play.example.net\""));
+        }
+    }
+
+    @Test
+    void exposesLegacyForgeHandshakeState() throws Exception {
+        var registry = new InMemoryServerRegistry();
+        var metrics = new ProxyMetrics();
+        metrics.forgeHandshake(
+                "lobby-1",
+                "Alex",
+                "127.0.0.1:50001",
+                "REGISTRY_DATA",
+                "WAITING_SERVER_COMPLETE",
+                "REGISTRY_DATA_SENT",
+                false,
+                true,
+                128,
+                130,
+                7,
+                65536);
+        try (var admin = new AdminHttpServer(new InetSocketAddress("127.0.0.1", 0), registry, metrics)) {
+            admin.start();
+            var base = "http://" + admin.bindAddress().getHostString() + ":" + admin.bindAddress().getPort();
+            var client = HttpClient.newHttpClient();
+
+            var handshakes = client.send(HttpRequest.newBuilder(URI.create(base + "/forge-handshakes")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            var prometheus = client.send(HttpRequest.newBuilder(URI.create(base + "/metrics")).GET().build(), HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, handshakes.statusCode());
+            assertTrue(handshakes.body().contains("\"active\":1"));
+            assertTrue(handshakes.body().contains("\"backendSwitchBlocked\":1"));
+            assertTrue(handshakes.body().contains("\"stage\":\"REGISTRY_DATA\""));
+            assertTrue(handshakes.body().contains("\"clientMods\":128"));
+            assertEquals(200, prometheus.statusCode());
+            assertTrue(prometheus.body().contains("strataproxy_forge_handshake_backend_switch_blocked{server=\"lobby-1\",player=\"Alex\",remote=\"127.0.0.1:50001\",stage=\"REGISTRY_DATA\",client_phase=\"WAITING_SERVER_COMPLETE\",backend_phase=\"REGISTRY_DATA_SENT\"} 1"));
+            assertTrue(prometheus.body().contains("strataproxy_forge_handshake_registry_bytes{server=\"lobby-1\",player=\"Alex\",remote=\"127.0.0.1:50001\",stage=\"REGISTRY_DATA\",client_phase=\"WAITING_SERVER_COMPLETE\",backend_phase=\"REGISTRY_DATA_SENT\"} 65536"));
         }
     }
 

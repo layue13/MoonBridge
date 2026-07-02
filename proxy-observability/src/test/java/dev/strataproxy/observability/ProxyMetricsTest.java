@@ -29,6 +29,19 @@ final class ProxyMetricsTest {
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 128, 0);
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "FORGE_HANDSHAKE", "fml:handshake", 256, 0);
         metrics.customPayload("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "UNKNOWN", "attacker:random", 512, 0);
+        metrics.forgeHandshake(
+                "survival-1",
+                "Alex",
+                "127.0.0.1:50000",
+                "REGISTRY_DATA",
+                "WAITING_SERVER_COMPLETE",
+                "REGISTRY_DATA_SENT",
+                false,
+                true,
+                128,
+                130,
+                9,
+                65536);
         metrics.frontendToBackendBytes("survival-1", 128);
         metrics.backendToFrontendBytes("survival-1", 256);
         metrics.compressionSample("survival-1", 1000, 400, 2_000_000);
@@ -99,6 +112,20 @@ final class ProxyMetricsTest {
         assertEquals("survival-1", snapshot.recentCustomPayloads().getFirst().server());
         assertEquals("CONFIGURATION", snapshot.recentCustomPayloads().getFirst().protocolState());
         assertEquals(-1, snapshot.recentCustomPayloads().getFirst().packetId());
+        var forgeHandshake = snapshot.forgeHandshakes().get(new ProxyMetrics.ForgeHandshakeKey(
+                "survival-1",
+                "Alex",
+                "127.0.0.1:50000"));
+        assertEquals("REGISTRY_DATA", forgeHandshake.stage());
+        assertEquals("WAITING_SERVER_COMPLETE", forgeHandshake.clientPhase());
+        assertEquals("REGISTRY_DATA_SENT", forgeHandshake.backendPhase());
+        assertEquals(false, forgeHandshake.complete());
+        assertEquals(true, forgeHandshake.backendSwitchBlocked());
+        assertEquals(128, forgeHandshake.clientMods());
+        assertEquals(130, forgeHandshake.serverMods());
+        assertEquals(9, forgeHandshake.registryPackets());
+        assertEquals(65536, forgeHandshake.registryBytes());
+        assertTrue(forgeHandshake.updatedAt() != null);
         assertEquals(128, snapshot.frontendToBackendBytes());
         assertEquals(256, snapshot.backendToFrontendBytes());
         assertEquals(128, snapshot.serverTraffic().get("survival-1").frontendToBackendBytes());
@@ -127,6 +154,30 @@ final class ProxyMetricsTest {
         assertEquals(2, snapshot.backendReplacements().get("success"));
         assertEquals(2, snapshot.serverConnections().get("survival-1").routedConnections());
         assertEquals(1, snapshot.serverConnections().get("survival-1").activeConnections());
+    }
+
+    @Test
+    void keepsOnlyMostRecentPlayerTransferSamples() {
+        var metrics = new ProxyMetrics();
+        for (var i = 0; i < 300; i++) {
+            metrics.playerTransfer(
+                    i % 2 == 0,
+                    i % 2 == 0 ? "success" : "connect_failure",
+                    "Player" + i,
+                    "lobby-1",
+                    "survival-" + i,
+                    "127.0.0.1:" + (50000 + i));
+        }
+
+        var samples = metrics.snapshot().recentPlayerTransfers();
+
+        assertEquals(256, samples.size());
+        assertEquals("Player299", samples.getFirst().player());
+        assertEquals("survival-299", samples.getFirst().targetServer());
+        assertEquals("connect_failure", samples.getFirst().outcome());
+        assertEquals("127.0.0.1:50299", samples.getFirst().remoteAddress());
+        assertEquals("Player44", samples.getLast().player());
+        assertTrue(samples.getFirst().sequence() > samples.getLast().sequence());
     }
 
     @Test
@@ -169,6 +220,46 @@ final class ProxyMetricsTest {
         assertEquals("127.0.0.1:50299", samples.getFirst().remoteAddress());
         assertEquals(44, samples.getLast().payloadBytes());
         assertTrue(samples.getFirst().sequence() > samples.getLast().sequence());
+    }
+
+    @Test
+    void removesClosedForgeHandshakeStateByConnectionKey() {
+        var metrics = new ProxyMetrics();
+        metrics.forgeHandshake(
+                "survival-1",
+                "Alex",
+                "127.0.0.1:50000",
+                "COMPLETE",
+                "COMPLETE",
+                "COMPLETE",
+                true,
+                false,
+                1,
+                1,
+                1,
+                128);
+        metrics.forgeHandshake(
+                "survival-1",
+                "Steve",
+                "127.0.0.1:50001",
+                "REGISTRY_DATA",
+                "WAITING_SERVER_COMPLETE",
+                "REGISTRY_DATA_SENT",
+                false,
+                true,
+                2,
+                2,
+                2,
+                256);
+
+        metrics.forgeHandshakeClosed("survival-1", "Alex", "127.0.0.1:50000");
+
+        var snapshot = metrics.snapshot();
+        assertEquals(1, snapshot.forgeHandshakes().size());
+        assertTrue(snapshot.forgeHandshakes().containsKey(new ProxyMetrics.ForgeHandshakeKey(
+                "survival-1",
+                "Steve",
+                "127.0.0.1:50001")));
     }
 
     @Test

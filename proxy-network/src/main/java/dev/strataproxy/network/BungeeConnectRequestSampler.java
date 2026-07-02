@@ -17,15 +17,23 @@ final class BungeeConnectRequestSampler implements AutoCloseable {
     private static final int MAX_BUNGEE_STRING_BYTES = 32767;
 
     private final int maxFrameBytes;
+    private final MinecraftProtocolProfile profile;
     private final MinecraftCompressionCodec codec = new MinecraftCompressionCodec();
     private ByteBuf pending = Unpooled.buffer();
     private boolean closed;
 
     BungeeConnectRequestSampler(int maxFrameBytes) {
+        this(maxFrameBytes, MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1));
+    }
+
+    BungeeConnectRequestSampler(int maxFrameBytes, MinecraftProtocolProfile profile) {
         if (maxFrameBytes <= 0) {
             throw new IllegalArgumentException("maxFrameBytes must be positive");
         }
         this.maxFrameBytes = maxFrameBytes;
+        this.profile = profile == null
+                ? MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_20_1)
+                : profile;
     }
 
     List<ConnectRequest> observeUncompressed(ByteBuf input) {
@@ -107,15 +115,21 @@ final class BungeeConnectRequestSampler implements AutoCloseable {
         var view = packet.retainedDuplicate();
         try {
             var packetId = MinecraftVarInts.read(view);
+            if (!profile.serverboundBungeeCustomPayloadPacketIds().contains(packetId)) {
+                return Optional.empty();
+            }
             var channel = readMinecraftString(view, MAX_CHANNEL_BYTES);
             if (!isBungeeChannel(channel)) {
                 return Optional.empty();
             }
-            var subchannel = readUnsignedShortString(view);
+            var payload = MinecraftCustomPayloadBodyCodec.readBody(
+                    view,
+                    profile.serverboundCustomPayloadLengthFormat());
+            var subchannel = readUnsignedShortString(payload);
             if (!"connect".equalsIgnoreCase(subchannel)) {
                 return Optional.empty();
             }
-            var targetServer = readUnsignedShortString(view);
+            var targetServer = readUnsignedShortString(payload);
             if (targetServer.isBlank()) {
                 return Optional.empty();
             }

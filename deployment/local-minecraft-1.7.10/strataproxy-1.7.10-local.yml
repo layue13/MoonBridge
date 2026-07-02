@@ -1,0 +1,136 @@
+network:
+  bind: "0.0.0.0:25577"
+  workerThreads: 0
+  nativeTransport: true
+  maxFrameBytes: "8mb"
+  connectTimeoutMillis: 5000
+  writeBufferLow: "4mb"
+  writeBufferHigh: "16mb"
+  maxConnections: 10000
+  maxConnectionsPerAddress: 200
+  maxNewConnectionsPerSecond: 0
+  maxNewConnectionsPerAddressPerSecond: 0
+  initialHandshakeTimeoutMillis: 5000
+  proxyProtocol: false
+
+registry:
+  staticServers: true
+  persistenceEnabled: false
+  persistencePath: "data/registry.json"
+  healthCheckEnabled: true
+  healthCheckInterval: "5s"
+  healthCheckTimeout: "2s"
+  healthCheckMode: "minecraft-status"
+
+compression:
+  mode: off
+  codec: zlib
+  minThreshold: 256
+  maxThreshold: 8192
+  cpuGuard: 0.75
+  rewriteEnabled: false
+  rewriteMaxEventLoopDelayMillis: 25
+  zstdLevel: 1
+  zstdDictionaryPath: ""
+
+packetAnalysis:
+  largePayloadWarnBytes: "1mb"
+  unknownChannelThrottleBytes: "256kb"
+  moddedHandshakeWarnBytes: "2mb"
+  customPayloadFloodMaxCount: 200
+  customPayloadFloodWindow: "10s"
+
+observability:
+  prometheus: true
+  packetTopN: 50
+  anomalySampling: true
+  flushIntervalSeconds: 5
+
+status:
+  enabled: true
+  motd: "StrataProxy local 1.7.10 pool"
+  protocolName: "Minecraft 1.7.10"
+  protocolVersion: 5
+  maxPlayers: 300
+  favicon: ""
+  faviconPath: ""
+  samplePlayers: []
+
+auth:
+  onlineMode: false
+  rsaKeyBits: 1024
+  verifyTokenBytes: 4
+  sessionVerification: false
+  sessionVerificationTimeout: "5s"
+
+forwarding:
+  mode: "none"
+  secret: ""
+
+native:
+  enabled: true
+  autoDetect: true
+  preferNativeTransport: true
+  requireNativeTransport: false
+  preferOpenSslTls: false
+  preferNativeCompression: false
+  disabledFeatures: []
+  forcedFeatures: []
+
+admin:
+  enabled: true
+  bind: "127.0.0.1:8080"
+  bearerToken: ""
+  tls:
+    enabled: false
+    keyStorePath: ""
+    keyStorePassword: ""
+    keyStoreType: "PKCS12"
+    trustStorePath: ""
+    trustStorePassword: ""
+    trustStoreType: "PKCS12"
+    clientAuth: false
+
+servers:
+  - name: "lobby-1"
+    address: "127.0.0.1:25565"
+    tags: ["lobby", "mc-1.7.10"]
+    capabilities: []
+    protocolRange: "5"
+    weight: 100
+    softCapacity: 80
+    hardCapacity: 100
+    drainMode: false
+    metadata:
+      group: "lobby"
+      host: "lobby.local"
+      route: "lobby"
+      version: "1.7.10"
+  - name: "survival-1"
+    address: "127.0.0.1:25566"
+    tags: ["survival", "mc-1.7.10"]
+    capabilities: []
+    protocolRange: "5"
+    weight: 100
+    softCapacity: 80
+    hardCapacity: 100
+    drainMode: false
+    metadata:
+      group: "survival"
+      host: "survival.local"
+      route: "survival"
+      version: "1.7.10"
+  - name: "minigame-1"
+    address: "127.0.0.1:25567"
+    tags: ["minigame", "mc-1.7.10"]
+    capabilities: []
+    protocolRange: "5"
+    weight: 100
+    softCapacity: 80
+    hardCapacity: 100
+    drainMode: false
+    metadata:
+      group: "minigame"
+      host: "minigame.local"
+      route: "minigame"
+      version: "1.7.10"

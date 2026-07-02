@@ -445,6 +445,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
         var compressionAudit = new MinecraftCompressionAuditState(tuning.maxFrameBytes());
         var session = new RelaySession(existingIdentity == null ? new RelaySessionIdentity(ClientAddress.text(frontend)) : existingIdentity);
         var identity = session.identity();
+        var profile = MinecraftProtocolProfile.forVersion(handshake.protocolVersion());
+        session.legacyForgeClientDetected(profile.legacyForgeHandshakeSupported() && handshake.legacyForgeClientMarker());
         var backendConnector = new BackendConnector(
                 metrics,
                 tuning,
@@ -452,7 +454,8 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 compressionRuntime,
                 forwardingRuntime,
                 compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis);
+                compressionRewriteMaxEventLoopDelayMillis,
+                profile);
         var replacementController = new BackendReplacementController(
                 ServerTargetResolver.from(backendResolver),
                 backendConnector,
@@ -466,7 +469,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 compressionRewriteMaxEventLoopDelayMillis,
                 commands,
                 events,
-                handshake.protocolVersion());
+                profile);
 
         backendConnector.connect(frontend, selected, compressionAudit, session, replacementController).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
@@ -514,40 +517,51 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 session.loginSession(new RelayLoginSession(outboundFirstFrame, pendingBytes));
             }
             frontend.pipeline().remove("initial-handshake-timeout");
-            var frontendRelay = new FrontendRelayHandler(
-                    backend,
-                    metrics,
-                    serverName,
-                    compressionAudit,
-                    compressionRuntime,
-                    tuning.maxFrameBytes(),
-                    customPayloadPolicy,
-                    initialLoginStart == null ? null : initialLoginStart.username(),
-                    identity,
-                    compressionRewriteEnabled,
-                    compressionRewriteMaxEventLoopDelayMillis,
-                    replacementController,
-                    commands,
-                    events,
-                    handshake.protocolVersion());
-            replacementController.relayAttached(frontendRelay, frontend, backend, serverName);
-            if (frontendHandlerNameToReplace == null) {
-                frontend.pipeline().replace(this, "frontend-relay", frontendRelay);
-            } else {
-                frontend.pipeline().replace(frontendHandlerNameToReplace, "frontend-relay", frontendRelay);
+            var loginStartSeed = initialLoginStart == null && pendingBytes != null && pendingBytes.isReadable()
+                    ? pendingBytes.retainedDuplicate()
+                    : null;
+            try {
+                var frontendRelay = new FrontendRelayHandler(
+                        backend,
+                        metrics,
+                        serverName,
+                        compressionAudit,
+                        compressionRuntime,
+                        tuning.maxFrameBytes(),
+                        customPayloadPolicy,
+                        initialLoginStart == null ? null : initialLoginStart.username(),
+                        identity,
+                        compressionRewriteEnabled,
+                        compressionRewriteMaxEventLoopDelayMillis,
+                        replacementController,
+                        commands,
+                        events,
+                        profile,
+                        loginStartSeed,
+                        session.forgeHandshakeTracker());
+                replacementController.relayAttached(frontendRelay, frontend, backend, serverName);
+                if (frontendHandlerNameToReplace == null) {
+                    frontend.pipeline().replace(this, "frontend-relay", frontendRelay);
+                } else {
+                    frontend.pipeline().replace(frontendHandlerNameToReplace, "frontend-relay", frontendRelay);
+                }
+                backend.write(outboundFirstFrame);
+                if (pendingBytes != null) {
+                    backend.write(pendingBytes);
+                }
+                backend.flush();
+                frontend.config().setAutoRead(false);
+                backend.config().setAutoRead(false);
+                if (initialLoginStart != null) {
+                    metrics.playerSessionStarted(initialLoginStart.username(), serverName, ClientAddress.text(frontend));
+                }
+                frontend.read();
+                backend.read();
+            } finally {
+                if (loginStartSeed != null && loginStartSeed.refCnt() > 0) {
+                    loginStartSeed.release();
+                }
             }
-            backend.write(outboundFirstFrame);
-            if (pendingBytes != null) {
-                backend.write(pendingBytes);
-            }
-            backend.flush();
-            frontend.config().setAutoRead(false);
-            backend.config().setAutoRead(false);
-            if (initialLoginStart != null) {
-                metrics.playerSessionStarted(initialLoginStart.username(), serverName, ClientAddress.text(frontend));
-            }
-            frontend.read();
-            backend.read();
         });
     }
 
