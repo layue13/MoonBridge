@@ -570,7 +570,8 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             var packetId = MinecraftProtocolCodec.readVarInt(packet);
             if (packetId == profile.clientboundPlayLoginPacketId().getAsInt()) {
                 packet.readerIndex(packetStart);
-                if (backendSwitchStrategy == MinecraftProtocolProfile.BackendSwitchStrategy.JOIN_GAME_THEN_RESPAWN) {
+                var legacyForgeSwitch = backendSwitchStrategy == MinecraftProtocolProfile.BackendSwitchStrategy.JOIN_GAME_THEN_RESPAWN;
+                if (legacyForgeSwitch) {
                     output.writeBytes(frame, frame.readerIndex(), frame.readableBytes());
                 }
                 var respawns = compressionAudit.negotiated()
@@ -579,8 +580,13 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
                                 packet,
                                 profile,
                                 legacySwitchCompressionCodec,
-                                compressionAudit.threshold())
-                        : MinecraftLegacyTransferPackets.respawnSequenceFromJoinGame(context.alloc(), packet, profile);
+                                compressionAudit.threshold(),
+                                legacyForgeSwitch)
+                        : MinecraftLegacyTransferPackets.respawnSequenceFromJoinGame(
+                                context.alloc(),
+                                packet,
+                                profile,
+                                legacyForgeSwitch);
                 try {
                     output.writeBytes(respawns, respawns.readerIndex(), respawns.readableBytes());
                 } finally {

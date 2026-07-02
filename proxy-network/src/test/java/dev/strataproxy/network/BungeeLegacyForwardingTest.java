@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class BungeeLegacyForwardingTest {
     @Test
@@ -67,6 +68,37 @@ final class BungeeLegacyForwardingTest {
                 assertEquals("modded.example.net", fields[0]);
                 assertEquals("203.0.113.7", fields[1]);
                 assertEquals("shared-secret", fields[4]);
+            } finally {
+                body.release();
+            }
+        } finally {
+            frame.release();
+        }
+    }
+
+    @Test
+    void preservesLegacyForgeHostnameTokenWhenForwardingPlayerInfo() {
+        var identity = new RelaySessionIdentity("/198.51.100.43:51234");
+        identity.playerName("ForgePlayer");
+
+        var frame = BungeeLegacyForwarding.rewriteHandshake(
+                UnpooledByteBufAllocator.DEFAULT,
+                new MinecraftHandshake(5, "modded.example.net\0FML\0", 25565, 2),
+                new MinecraftForwardingRuntime("bungee-legacy", ""),
+                identity);
+        try {
+            var body = unwrapFrame(frame);
+            try {
+                assertEquals(0, MinecraftVarInts.read(body));
+                assertEquals(5, MinecraftVarInts.read(body));
+                var host = readString(body);
+                var forwardedUuid = UUID.nameUUIDFromBytes("OfflinePlayer:ForgePlayer".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        .toString()
+                        .replace("-", "");
+                assertTrue(host.contains("\0FML\0"));
+                assertTrue(host.endsWith("\0" + "198.51.100.43" + "\0" + forwardedUuid + "\0[]"));
+                assertEquals(25565, body.readUnsignedShort());
+                assertEquals(2, MinecraftVarInts.read(body));
             } finally {
                 body.release();
             }

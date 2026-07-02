@@ -12,11 +12,15 @@ final class MinecraftLegacyTransferPackets {
     private MinecraftLegacyTransferPackets() {
     }
 
-    static ByteBuf respawnSequenceFromJoinGame(ByteBufAllocator allocator, ByteBuf joinGamePacket, MinecraftProtocolProfile profile) {
+    static ByteBuf respawnSequenceFromJoinGame(
+            ByteBufAllocator allocator,
+            ByteBuf joinGamePacket,
+            MinecraftProtocolProfile profile,
+            boolean legacyForgeClient) {
         if (profile.clientboundPlayRespawnPacketId().isEmpty()) {
             throw new IllegalArgumentException("profile does not define a respawn packet");
         }
-        var template = respawnTemplateFromJoinGame(joinGamePacket, profile);
+        var template = respawnTemplateFromJoinGame(joinGamePacket, profile, legacyForgeClient);
         var output = allocator.buffer();
         writeRespawnFrame(allocator, output, profile.clientboundPlayRespawnPacketId().getAsInt(),
                 template.dimension() >= 0 ? -1 : 0,
@@ -36,14 +40,15 @@ final class MinecraftLegacyTransferPackets {
             ByteBuf joinGamePacket,
             MinecraftProtocolProfile profile,
             MinecraftCompressionCodec codec,
-            int threshold) {
+            int threshold,
+            boolean legacyForgeClient) {
         if (profile.clientboundPlayRespawnPacketId().isEmpty()) {
             throw new IllegalArgumentException("profile does not define a respawn packet");
         }
         if (codec == null) {
             throw new IllegalArgumentException("codec is required");
         }
-        var template = respawnTemplateFromJoinGame(joinGamePacket, profile);
+        var template = respawnTemplateFromJoinGame(joinGamePacket, profile, legacyForgeClient);
         var output = allocator.buffer();
         writeCompressedRespawnFrame(allocator, output, codec, threshold, profile.clientboundPlayRespawnPacketId().getAsInt(),
                 template.dimension() >= 0 ? -1 : 0,
@@ -60,7 +65,8 @@ final class MinecraftLegacyTransferPackets {
 
     private static RespawnTemplate respawnTemplateFromJoinGame(
             ByteBuf joinGamePacket,
-            MinecraftProtocolProfile profile) {
+            MinecraftProtocolProfile profile,
+            boolean legacyForgeClient) {
         var view = joinGamePacket.retainedDuplicate();
         try {
             var packetId = MinecraftProtocolCodec.readVarInt(view);
@@ -70,7 +76,11 @@ final class MinecraftLegacyTransferPackets {
             }
             view.readInt();
             var gameMode = view.readUnsignedByte();
-            var dimension = view.readByte();
+            var dimension = switch (profile.joinGameDimensionLayout(legacyForgeClient)) {
+                case BYTE -> view.readByte();
+                case INT -> view.readInt();
+                case NONE -> throw new IllegalArgumentException("profile does not define a Join Game dimension layout");
+            };
             var difficulty = view.readUnsignedByte();
             view.readUnsignedByte();
             var levelType = MinecraftProtocolCodec.readString(view, 16);

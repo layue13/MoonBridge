@@ -265,12 +265,12 @@ final class BackendSwitchLoginHandlerTest {
                 true));
 
         backend.writeInbound(combine(
-                joinGameFrame(12, 0, 0, 2, "default"),
+                joinGameForge1710Frame(12, 0, 0, 2, "default"),
                 frame(packet(0x08))));
 
         var frames = (ByteBuf) frontend.readOutbound();
         try {
-            assertJoinGame(frames, 12, 0, 0, 2, "default");
+            assertJoinGameForge1710(frames, 12, 0, 0, 2, "default");
             assertRespawn(frames, -1, 2, 0, "default");
             assertRespawn(frames, 0, 2, 0, "default");
             var payload = payload(frames);
@@ -279,6 +279,41 @@ final class BackendSwitchLoginHandlerTest {
             } finally {
                 payload.release();
             }
+            assertEquals(0, frames.readableBytes());
+        } finally {
+            release(frames);
+            backend.finishAndReleaseAll();
+            frontend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void backendRelayParsesForge1710JoinGameWithIntDimensionDuringSafeSwitch() {
+        var profile = MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_7_10);
+        var frontend = new EmbeddedChannel();
+        var backend = new EmbeddedChannel(new BackendRelayHandler(
+                frontend,
+                new ProxyMetrics(),
+                "forge-1",
+                4096,
+                new MinecraftCompressionAuditState(4096),
+                CompressionRuntime.defaults(),
+                new RelaySessionIdentity("127.0.0.1:50000"),
+                MinecraftForwardingRuntime.none(),
+                false,
+                25,
+                profile,
+                null,
+                null,
+                profile.backendSwitchStrategy(true)));
+
+        backend.writeInbound(joinGameForge1710Frame(12, 0, 300, 2, "default"));
+
+        var frames = (ByteBuf) frontend.readOutbound();
+        try {
+            assertJoinGameForge1710(frames, 12, 0, 300, 2, "default");
+            assertRespawn(frames, -1, 2, 0, "default");
+            assertRespawn(frames, 300, 2, 0, "default");
             assertEquals(0, frames.readableBytes());
         } finally {
             release(frames);
@@ -453,6 +488,23 @@ final class BackendSwitchLoginHandlerTest {
         return frame(packet);
     }
 
+    private static ByteBuf joinGameForge1710Frame(
+            int entityId,
+            int gameMode,
+            int dimension,
+            int difficulty,
+            String levelType) {
+        var packet = Unpooled.buffer();
+        MinecraftVarInts.write(packet, 0x01);
+        packet.writeInt(entityId);
+        packet.writeByte(gameMode);
+        packet.writeInt(dimension);
+        packet.writeByte(difficulty);
+        packet.writeByte(20);
+        writeString(packet, levelType);
+        return frame(packet);
+    }
+
     private static ByteBuf joinGame18Frame(
             int entityId,
             int gameMode,
@@ -573,6 +625,28 @@ final class BackendSwitchLoginHandlerTest {
             assertEquals(entityId, payload.readInt());
             assertEquals(gameMode, payload.readUnsignedByte());
             assertEquals(dimension, payload.readByte());
+            assertEquals(difficulty, payload.readUnsignedByte());
+            payload.readUnsignedByte();
+            assertEquals(levelType, readString(payload));
+            assertEquals(0, payload.readableBytes());
+        } finally {
+            payload.release();
+        }
+    }
+
+    private static void assertJoinGameForge1710(
+            ByteBuf frames,
+            int entityId,
+            int gameMode,
+            int dimension,
+            int difficulty,
+            String levelType) {
+        var payload = payload(frames);
+        try {
+            assertEquals(0x01, MinecraftVarInts.read(payload));
+            assertEquals(entityId, payload.readInt());
+            assertEquals(gameMode, payload.readUnsignedByte());
+            assertEquals(dimension, payload.readInt());
             assertEquals(difficulty, payload.readUnsignedByte());
             payload.readUnsignedByte();
             assertEquals(levelType, readString(payload));

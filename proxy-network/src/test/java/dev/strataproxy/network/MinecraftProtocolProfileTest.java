@@ -33,6 +33,10 @@ final class MinecraftProtocolProfileTest {
         assertEquals(MinecraftProtocolProfile.ScoreboardObjectiveLayout.NAME_ACTION,
                 profile.scoreboardObjectiveLayout());
         assertEquals(OptionalInt.of(0x3E), profile.clientboundTeamPacketId());
+        assertEquals(MinecraftProtocolProfile.JoinGameDimensionLayout.BYTE,
+                profile.joinGameDimensionLayout(false));
+        assertEquals(MinecraftProtocolProfile.JoinGameDimensionLayout.INT,
+                profile.joinGameDimensionLayout(true));
         assertEquals(MinecraftProtocolProfile.BackendSwitchStrategy.RESPAWN_ONLY,
                 profile.backendSwitchStrategy(false));
         assertEquals(MinecraftProtocolProfile.BackendSwitchStrategy.JOIN_GAME_THEN_RESPAWN,
@@ -66,6 +70,10 @@ final class MinecraftProtocolProfileTest {
         assertEquals(MinecraftProtocolProfile.ScoreboardObjectiveLayout.NAME_ACTION,
                 profile.scoreboardObjectiveLayout());
         assertEquals(OptionalInt.of(0x3E), profile.clientboundTeamPacketId());
+        assertEquals(MinecraftProtocolProfile.JoinGameDimensionLayout.BYTE,
+                profile.joinGameDimensionLayout(false));
+        assertEquals(MinecraftProtocolProfile.JoinGameDimensionLayout.BYTE,
+                profile.joinGameDimensionLayout(true));
         assertEquals(MinecraftProtocolProfile.BackendSwitchStrategy.RESPAWN_ONLY,
                 profile.backendSwitchStrategy(false));
         assertEquals(MinecraftProtocolProfile.BackendSwitchStrategy.JOIN_GAME_THEN_RESPAWN,
@@ -83,6 +91,8 @@ final class MinecraftProtocolProfileTest {
         assertEquals(ProtocolState.CONFIGURATION, profile.serverboundCustomPayloadInspectionState());
         assertEquals(MinecraftProtocolProfile.BackendSwitchStrategy.NONE,
                 profile.backendSwitchStrategy(false));
+        assertEquals(MinecraftProtocolProfile.JoinGameDimensionLayout.NONE,
+                profile.joinGameDimensionLayout(false));
         assertTrue(profile.backendReplacementSupported());
         assertFalse(profile.legacyForgeHandshakeSupported());
     }

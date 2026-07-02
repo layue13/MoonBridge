@@ -31,6 +31,8 @@ final class MinecraftProtocolProfile {
             CustomPayloadLengthFormat.VARSHORT,
             OptionalInt.of(0x01),
             OptionalInt.of(0x07),
+            JoinGameDimensionLayout.BYTE,
+            JoinGameDimensionLayout.INT,
             OptionalInt.of(0x38),
             PlayerListItemLayout.LEGACY_NAME,
             OptionalInt.of(0x3B),
@@ -59,6 +61,8 @@ final class MinecraftProtocolProfile {
             CustomPayloadLengthFormat.REMAINING_BYTES,
             OptionalInt.of(0x01),
             OptionalInt.of(0x07),
+            JoinGameDimensionLayout.BYTE,
+            JoinGameDimensionLayout.BYTE,
             OptionalInt.of(0x38),
             PlayerListItemLayout.UUID_ACTION,
             OptionalInt.of(0x3B),
@@ -87,6 +91,8 @@ final class MinecraftProtocolProfile {
             CustomPayloadLengthFormat.REMAINING_BYTES,
             OptionalInt.empty(),
             OptionalInt.empty(),
+            JoinGameDimensionLayout.NONE,
+            JoinGameDimensionLayout.NONE,
             OptionalInt.empty(),
             PlayerListItemLayout.NONE,
             OptionalInt.empty(),
@@ -114,6 +120,8 @@ final class MinecraftProtocolProfile {
     private final CustomPayloadLengthFormat clientboundCustomPayloadLengthFormat;
     private final OptionalInt clientboundPlayLoginPacketId;
     private final OptionalInt clientboundPlayRespawnPacketId;
+    private final JoinGameDimensionLayout joinGameDimensionLayout;
+    private final JoinGameDimensionLayout legacyForgeJoinGameDimensionLayout;
     private final OptionalInt clientboundPlayerListItemPacketId;
     private final PlayerListItemLayout playerListItemLayout;
     private final OptionalInt clientboundScoreboardObjectivePacketId;
@@ -142,6 +150,8 @@ final class MinecraftProtocolProfile {
             CustomPayloadLengthFormat clientboundCustomPayloadLengthFormat,
             OptionalInt clientboundPlayLoginPacketId,
             OptionalInt clientboundPlayRespawnPacketId,
+            JoinGameDimensionLayout joinGameDimensionLayout,
+            JoinGameDimensionLayout legacyForgeJoinGameDimensionLayout,
             OptionalInt clientboundPlayerListItemPacketId,
             PlayerListItemLayout playerListItemLayout,
             OptionalInt clientboundScoreboardObjectivePacketId,
@@ -170,6 +180,12 @@ final class MinecraftProtocolProfile {
         this.clientboundCustomPayloadLengthFormat = clientboundCustomPayloadLengthFormat;
         this.clientboundPlayLoginPacketId = clientboundPlayLoginPacketId;
         this.clientboundPlayRespawnPacketId = clientboundPlayRespawnPacketId;
+        this.joinGameDimensionLayout = joinGameDimensionLayout == null
+                ? JoinGameDimensionLayout.NONE
+                : joinGameDimensionLayout;
+        this.legacyForgeJoinGameDimensionLayout = legacyForgeJoinGameDimensionLayout == null
+                ? this.joinGameDimensionLayout
+                : legacyForgeJoinGameDimensionLayout;
         this.clientboundPlayerListItemPacketId = clientboundPlayerListItemPacketId;
         this.playerListItemLayout = playerListItemLayout == null ? PlayerListItemLayout.NONE : playerListItemLayout;
         this.clientboundScoreboardObjectivePacketId = clientboundScoreboardObjectivePacketId;
@@ -213,6 +229,8 @@ final class MinecraftProtocolProfile {
                 CustomPayloadLengthFormat.REMAINING_BYTES,
                 OptionalInt.empty(),
                 OptionalInt.empty(),
+                JoinGameDimensionLayout.NONE,
+                JoinGameDimensionLayout.NONE,
                 OptionalInt.empty(),
                 PlayerListItemLayout.NONE,
                 OptionalInt.empty(),
@@ -292,6 +310,12 @@ final class MinecraftProtocolProfile {
         return clientboundPlayRespawnPacketId;
     }
 
+    JoinGameDimensionLayout joinGameDimensionLayout(boolean legacyForgeClient) {
+        return legacyForgeClient && legacyForgeHandshakeSupported
+                ? legacyForgeJoinGameDimensionLayout
+                : joinGameDimensionLayout;
+    }
+
     OptionalInt clientboundPlayerListItemPacketId() {
         return clientboundPlayerListItemPacketId;
     }
@@ -340,6 +364,12 @@ final class MinecraftProtocolProfile {
         NONE,
         LEGACY_NAME,
         UUID_ACTION
+    }
+
+    enum JoinGameDimensionLayout {
+        NONE,
+        BYTE,
+        INT
     }
 
     enum ScoreboardObjectiveLayout {

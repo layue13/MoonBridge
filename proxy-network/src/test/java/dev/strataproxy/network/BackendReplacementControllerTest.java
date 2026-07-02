@@ -634,7 +634,7 @@ final class BackendReplacementControllerTest {
                 nextBackend,
                 new MinecraftCompressionAuditState(4096),
                 null,
-                joinGame1710(12, 0, 0, 2, "default"),
+                joinGameForge1710(12, 0, 0, 2, "default"),
                 false,
                 swap,
                 result);
@@ -643,9 +643,68 @@ final class BackendReplacementControllerTest {
 
         var frames = (ByteBuf) frontend.readOutbound();
         try {
-            assertJoinGame1710(frames, 12, 0, 0, 2, "default");
+            assertJoinGameForge1710(frames, 12, 0, 0, 2, "default");
             assertRespawn1710(frames, -1, 2, 0, "default");
             assertRespawn1710(frames, 0, 2, 0, "default");
+            assertEquals(0, frames.readableBytes());
+            assertTrue(result.join().success());
+        } finally {
+            release(frames);
+            frontend.finishAndReleaseAll();
+            oldBackend.finishAndReleaseAll();
+            nextBackend.finishAndReleaseAll();
+            session.forgeHandshakeTracker().close();
+        }
+    }
+
+    @Test
+    void replacementParsesForge1710JoinGameWithIntDimensionDuringSafeSwitch() {
+        var profile = MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_7_10);
+        var metrics = new ProxyMetrics();
+        var session = new RelaySession("127.0.0.1:50000");
+        session.identity().playerName("Steve");
+        session.legacyForgeClientDetected(true);
+        var frontend = new EmbeddedChannel();
+        var oldBackend = new EmbeddedChannel();
+        var nextBackend = new EmbeddedChannel();
+        session.attach(frontend, oldBackend, "lobby-1");
+        var controller = new BackendReplacementController(
+                name -> Optional.of(server(name)),
+                null,
+                metrics,
+                NetworkTuning.defaults(),
+                CompressionRuntime.defaults(),
+                CustomPayloadAnomalyPolicy.defaults(),
+                session,
+                new RelaySessionRegistry(),
+                false,
+                25,
+                null,
+                null,
+                profile);
+        var swap = session.beginForgeHandshakeTrackerSwap(4096, profile);
+        var result = new CompletableFuture<PlayerTransferResult>();
+
+        controller.completeReplacement(
+                frontend,
+                oldBackend,
+                "lobby-1",
+                "forge-1",
+                nextBackend,
+                new MinecraftCompressionAuditState(4096),
+                null,
+                joinGameForge1710(12, 0, 300, 2, "default"),
+                false,
+                swap,
+                result);
+        frontend.runPendingTasks();
+        nextBackend.runPendingTasks();
+
+        var frames = (ByteBuf) frontend.readOutbound();
+        try {
+            assertJoinGameForge1710(frames, 12, 0, 300, 2, "default");
+            assertRespawn1710(frames, -1, 2, 0, "default");
+            assertRespawn1710(frames, 300, 2, 0, "default");
             assertEquals(0, frames.readableBytes());
             assertTrue(result.join().success());
         } finally {
@@ -699,7 +758,7 @@ final class BackendReplacementControllerTest {
                 nextBackend,
                 new MinecraftCompressionAuditState(4096),
                 null,
-                joinGame1710(12, 0, 0, 2, "default"),
+                joinGameForge1710(12, 0, 0, 2, "default"),
                 false,
                 swap,
                 result);
@@ -709,7 +768,7 @@ final class BackendReplacementControllerTest {
         var switchFrames = (ByteBuf) frontend.readOutbound();
         var replayedRegister = (ByteBuf) nextBackend.readOutbound();
         try {
-            assertJoinGame1710(switchFrames, 12, 0, 0, 2, "default");
+            assertJoinGameForge1710(switchFrames, 12, 0, 0, 2, "default");
             assertRespawn1710(switchFrames, -1, 2, 0, "default");
             assertRespawn1710(switchFrames, 0, 2, 0, "default");
             assertEquals(0, switchFrames.readableBytes());
@@ -1003,6 +1062,18 @@ final class BackendReplacementControllerTest {
         return frame(packet);
     }
 
+    private static ByteBuf joinGameForge1710(int entityId, int gameMode, int dimension, int difficulty, String levelType) {
+        var packet = Unpooled.buffer();
+        dev.strataproxy.codec.minecraft.MinecraftVarInts.write(packet, 0x01);
+        packet.writeInt(entityId);
+        packet.writeByte(gameMode);
+        packet.writeInt(dimension);
+        packet.writeByte(difficulty);
+        packet.writeByte(20);
+        writeString(packet, levelType);
+        return frame(packet);
+    }
+
     private static ByteBuf compressedJoinGame1710(
             int entityId,
             int gameMode,
@@ -1167,6 +1238,28 @@ final class BackendReplacementControllerTest {
             assertEquals(entityId, payload.readInt());
             assertEquals(gameMode, payload.readUnsignedByte());
             assertEquals(dimension, payload.readByte());
+            assertEquals(difficulty, payload.readUnsignedByte());
+            payload.readUnsignedByte();
+            assertEquals(levelType, readString(payload));
+            assertEquals(0, payload.readableBytes());
+        } finally {
+            payload.release();
+        }
+    }
+
+    private static void assertJoinGameForge1710(
+            ByteBuf frames,
+            int entityId,
+            int gameMode,
+            int dimension,
+            int difficulty,
+            String levelType) {
+        var payload = payload(frames);
+        try {
+            assertEquals(0x01, dev.strataproxy.codec.minecraft.MinecraftVarInts.read(payload));
+            assertEquals(entityId, payload.readInt());
+            assertEquals(gameMode, payload.readUnsignedByte());
+            assertEquals(dimension, payload.readInt());
             assertEquals(difficulty, payload.readUnsignedByte());
             payload.readUnsignedByte();
             assertEquals(levelType, readString(payload));
