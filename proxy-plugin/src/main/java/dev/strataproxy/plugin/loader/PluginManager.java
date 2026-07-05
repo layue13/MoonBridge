@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Properties;
 import java.util.ServiceLoader;
+import java.util.function.Function;
 import java.util.jar.JarFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,7 +34,7 @@ public final class PluginManager implements AutoCloseable {
     private final CommandRegistry commands;
     private final EventBus events;
     private final PlayerService players;
-    private final ServerService servers;
+    private final Function<PluginMetadata, ServerService> servers;
     private final Scheduler scheduler;
     private final Logger logger;
     private final List<LoadedPlugin> plugins = new ArrayList<>();
@@ -55,10 +56,30 @@ public final class PluginManager implements AutoCloseable {
             ServerService servers,
             Scheduler scheduler,
             Logger logger) {
+        this(commands, events, players, ignored -> servers, scheduler, logger);
+    }
+
+    /**
+     * Creates a plugin manager backed by proxy services.
+     *
+     * @param commands command registry exposed to plugins
+     * @param events event bus exposed to plugins
+     * @param players player service exposed to plugins
+     * @param servers server service factory bound to the current plugin metadata
+     * @param scheduler scheduler exposed to plugins
+     * @param logger logger for plugin manager diagnostics
+     */
+    public PluginManager(
+            CommandRegistry commands,
+            EventBus events,
+            PlayerService players,
+            Function<PluginMetadata, ServerService> servers,
+            Scheduler scheduler,
+            Logger logger) {
         this.commands = commands;
         this.events = events;
         this.players = players;
-        this.servers = servers;
+        this.servers = servers == null ? ignored -> null : servers;
         this.scheduler = scheduler;
         this.logger = logger == null ? LoggerFactory.getLogger(PluginManager.class) : logger;
     }
@@ -113,7 +134,7 @@ public final class PluginManager implements AutoCloseable {
                     commands,
                     events,
                     players,
-                    servers,
+                    servers.apply(loaded.metadata()),
                     scheduler));
             loaded.instance().onEnable();
             plugins.add(loaded);

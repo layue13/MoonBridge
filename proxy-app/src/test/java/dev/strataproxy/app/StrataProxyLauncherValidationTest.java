@@ -1,21 +1,33 @@
 package dev.strataproxy.app;
 
 import dev.strataproxy.bootstrap.ConfigLoader;
+import dev.strataproxy.plugin.PluginContext;
+import dev.strataproxy.plugin.ProxyPlugin;
+import dev.strataproxy.plugin.service.ServerMutationResult;
+import dev.strataproxy.plugin.service.ServerPersistence;
+import dev.strataproxy.plugin.service.ServerRegistration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.PrintStream;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class StrataProxyLauncherValidationTest {
@@ -389,6 +401,87 @@ final class StrataProxyLauncherValidationTest {
     }
 
     @Test
+    void pluginCanPersistentlyRegisterOwnedServer(@TempDir Path tempDir) throws Exception {
+        PersistentRegistryPlugin.result = new CompletableFuture<>();
+        var configDirectory = tempDir.resolve("conf");
+        var pluginDirectory = configDirectory.resolve("plugins");
+        Files.createDirectories(pluginDirectory);
+        writePluginJar(pluginDirectory, "persistent-registry-plugin", PersistentRegistryPlugin.class);
+        var config = configDirectory.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                network:
+                  bind: "127.0.0.1:0"
+                  workerThreads: 1
+                  nativeTransport: false
+                registry:
+                  staticServers: false
+                  persistenceEnabled: true
+                  persistencePath: "data/registry.json"
+                  healthCheckEnabled: false
+                admin:
+                  enabled: false
+                observability:
+                  flushIntervalSeconds: 1
+                servers: []
+                """);
+        var loaded = new ConfigLoader().load(config);
+
+        try (var runtime = StrataProxyLauncher.startRuntime(
+                loaded,
+                config,
+                new PrintStream(ByteArrayOutputStream.nullOutputStream(), true, StandardCharsets.UTF_8),
+                false)) {
+            assertTrue(runtime.bindAddress().getPort() > 0);
+            var result = PersistentRegistryPlugin.result.get(5, TimeUnit.SECONDS);
+            assertTrue(result.success());
+            assertEquals("registered", result.outcome());
+            assertEquals("plugin-dynamic-1", result.server().name());
+        }
+
+        var persisted = Files.readString(configDirectory.resolve("data").resolve("registry.json"));
+        assertTrue(persisted.contains("plugin-dynamic-1"));
+        assertTrue(persisted.contains("persistent-registry-plugin"));
+    }
+
+    @Test
+    void pluginCannotReplaceStaticServerByDefault(@TempDir Path tempDir) throws Exception {
+        StaticOverwritePlugin.result = new CompletableFuture<>();
+        var configDirectory = tempDir.resolve("conf");
+        var pluginDirectory = configDirectory.resolve("plugins");
+        Files.createDirectories(pluginDirectory);
+        writePluginJar(pluginDirectory, "static-overwrite-plugin", StaticOverwritePlugin.class);
+        var config = configDirectory.resolve("strataproxy.yml");
+        Files.writeString(config, """
+                network:
+                  bind: "127.0.0.1:0"
+                  workerThreads: 1
+                  nativeTransport: false
+                registry:
+                  persistenceEnabled: false
+                  healthCheckEnabled: false
+                admin:
+                  enabled: false
+                observability:
+                  flushIntervalSeconds: 1
+                servers:
+                  - name: "lobby-1"
+                    address: "127.0.0.1:25565"
+                """);
+        var loaded = new ConfigLoader().load(config);
+
+        try (var runtime = StrataProxyLauncher.startRuntime(
+                loaded,
+                config,
+                new PrintStream(ByteArrayOutputStream.nullOutputStream(), true, StandardCharsets.UTF_8),
+                false)) {
+            assertTrue(runtime.bindAddress().getPort() > 0);
+            var result = StaticOverwritePlugin.result.get(5, TimeUnit.SECONDS);
+            assertFalse(result.success());
+            assertEquals("server_not_owned", result.outcome());
+        }
+    }
+
+    @Test
     void runningRuntimeCloseIsIdempotentAndReleasesListener(@TempDir Path tempDir) throws Exception {
         var config = tempDir.resolve("strataproxy.yml");
         Files.writeString(config, """
@@ -499,6 +592,20 @@ final class StrataProxyLauncherValidationTest {
         }
     }
 
+    private static void writePluginJar(Path directory, String id, Class<?> pluginClass) throws Exception {
+        var pluginJar = directory.resolve(id + ".jar");
+        try (var output = new JarOutputStream(Files.newOutputStream(pluginJar))) {
+            output.putNextEntry(new JarEntry("strataproxy-plugin.properties"));
+            output.write(("""
+                    id=%s
+                    name=%s
+                    version=1.0.0
+                    main=%s
+                    """.formatted(id, id, pluginClass.getName())).getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+    }
+
     private static byte[] statusHandshake(int protocolVersion, String host, int port) {
         var payload = new ByteArrayOutputStream();
         writeVarInt(payload, 0);
@@ -593,5 +700,59 @@ final class StrataProxyLauncherValidationTest {
     }
 
     private record Result(int exitCode, String output, String error) {
+    }
+
+    public static final class PersistentRegistryPlugin implements ProxyPlugin {
+        private static CompletableFuture<ServerMutationResult> result = new CompletableFuture<>();
+
+        @Override
+        public void onLoad(PluginContext context) {
+            var registration = new ServerRegistration(
+                    "plugin-dynamic-1",
+                    new InetSocketAddress("127.0.0.1", 25570),
+                    Set.of("dynamic"),
+                    Set.of("modern-forwarding"),
+                    null,
+                    50,
+                    10,
+                    20,
+                    false,
+                    Map.of("group", "plugin-test"),
+                    ServerPersistence.PERSISTENT);
+            context.servers().register(registration).whenComplete((mutation, exception) -> {
+                if (exception == null) {
+                    result.complete(mutation);
+                } else {
+                    result.completeExceptionally(exception);
+                }
+            });
+        }
+    }
+
+    public static final class StaticOverwritePlugin implements ProxyPlugin {
+        private static CompletableFuture<ServerMutationResult> result = new CompletableFuture<>();
+
+        @Override
+        public void onLoad(PluginContext context) {
+            var registration = new ServerRegistration(
+                    "lobby-1",
+                    new InetSocketAddress("127.0.0.1", 25571),
+                    Set.of("dynamic"),
+                    Set.of(),
+                    null,
+                    50,
+                    10,
+                    20,
+                    false,
+                    Map.of(),
+                    ServerPersistence.EPHEMERAL);
+            context.servers().register(registration).whenComplete((mutation, exception) -> {
+                if (exception == null) {
+                    result.complete(mutation);
+                } else {
+                    result.completeExceptionally(exception);
+                }
+            });
+        }
     }
 }

@@ -50,7 +50,36 @@ main=com.example.ExamplePlugin
 
 It can also use a standard Java `ServiceLoader` provider for `dev.strataproxy.plugin.ProxyPlugin`.
 
-Plugins can register commands, subscribe to events, query players and servers, schedule async work, and request player transfers through the plugin context. Plugin code should not block Netty event-loop threads.
+Plugins can register commands, subscribe to events, query players and servers, register dynamic backends, schedule async work, and request player transfers through the plugin context. Plugin code should not block Netty event-loop threads.
+
+## Dynamic Backend Registration
+
+Plugins can call `context.servers().register(...)` to publish runtime backends for service discovery, room servers, instance servers, or external orchestrator sync. Registrations default to `ServerPersistence.EPHEMERAL`, which affects only the running proxy. Use `ServerPersistence.PERSISTENT` when the backend should survive a proxy restart.
+
+Plugin-registered servers are stamped with owner metadata. By default, a plugin may only replace, remove, or drain servers it registered itself; it cannot silently overwrite YAML static servers or servers owned by another plugin.
+
+```java
+var registration = new ServerRegistration(
+        "arena-1",
+        new InetSocketAddress("127.0.0.1", 25570),
+        Set.of("arena"),
+        Set.of("modern-forwarding"),
+        ServerProtocolRange.any(),
+        100,
+        80,
+        100,
+        false,
+        Map.of("group", "arena"),
+        ServerPersistence.EPHEMERAL);
+
+context.servers().register(registration).thenAccept(result -> {
+    if (!result.success()) {
+        context.logger().warn("Failed to register backend: {} {}", result.outcome(), result.message());
+    }
+});
+```
+
+Capability names follow the same semantics as config values. Matching is case-insensitive and normalizes `-` to `_`, so `modern-forwarding` maps to `MODERN_FORWARDING`.
 
 ## Minimal Plugin
 
