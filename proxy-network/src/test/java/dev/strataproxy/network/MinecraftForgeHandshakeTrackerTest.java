@@ -484,6 +484,43 @@ final class MinecraftForgeHandshakeTrackerTest {
         }
     }
 
+    @Test
+    void observesSplitCompressedFramesAfterFirstInputIsReleased() {
+        var profile = MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_8);
+        var tracker = new MinecraftForgeHandshakeTracker(4096, profile);
+        var frame = compressedCustomPayload18(0x17, "REGISTER", registerPayload(), 0);
+        try {
+            var first = frame.readRetainedSlice(2);
+            var second = frame.readRetainedSlice(frame.readableBytes());
+            try {
+                assertTrue(tracker.observeCompressed(
+                                MinecraftForgeHandshakeTracker.Direction.SERVERBOUND,
+                                UnpooledByteBufAllocator.DEFAULT,
+                                first,
+                                0)
+                        .isEmpty());
+            } finally {
+                first.release();
+            }
+
+            try {
+                var events = tracker.observeCompressed(
+                        MinecraftForgeHandshakeTracker.Direction.SERVERBOUND,
+                        UnpooledByteBufAllocator.DEFAULT,
+                        second,
+                        0);
+                assertEquals(1, events.size());
+                assertEquals("register", events.get(0).type());
+                assertTrue(events.get(0).expected());
+            } finally {
+                second.release();
+            }
+        } finally {
+            frame.release();
+            tracker.close();
+        }
+    }
+
     private static MinecraftForgeHandshakeTracker tracker() {
         return new MinecraftForgeHandshakeTracker(
                 4096,

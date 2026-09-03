@@ -17,6 +17,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class FrontendForgeHandshakeGateTest {
@@ -105,6 +106,48 @@ final class FrontendForgeHandshakeGateTest {
         try {
             assertFalse(frontend.writeInbound(customPayload(0x17, "FML", bytes(1), false)));
             assertNull(backend.readOutbound());
+        } finally {
+            frontend.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+            tracker.close();
+        }
+    }
+
+    @Test
+    void forwardsCompleteNonRaceFrameWithoutCopy() {
+        var profile = MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_7_10);
+        var tracker = new MinecraftForgeHandshakeTracker(4096, profile);
+        var backend = new EmbeddedChannel();
+        var frontend = new EmbeddedChannel(new FrontendRelayHandler(
+                backend,
+                new ProxyMetrics(),
+                "forge-1",
+                new MinecraftCompressionAuditState(4096),
+                CompressionRuntime.defaults(),
+                4096,
+                CustomPayloadAnomalyPolicy.defaults(),
+                "Steve",
+                new RelaySessionIdentity("127.0.0.1:50000"),
+                false,
+                25,
+                null,
+                null,
+                null,
+                profile,
+                null,
+                tracker));
+
+        try {
+            var frame = frame(packet(0x0B));
+            assertFalse(frontend.writeInbound(frame));
+
+            var forwarded = (ByteBuf) backend.readOutbound();
+            try {
+                assertSame(frame, forwarded);
+                assertEquals(0x0B, packetId(forwarded));
+            } finally {
+                release(forwarded);
+            }
         } finally {
             frontend.finishAndReleaseAll();
             backend.finishAndReleaseAll();

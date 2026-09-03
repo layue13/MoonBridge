@@ -113,6 +113,32 @@ final class MinecraftPluginChannelRegistryTest {
         }
     }
 
+    @Test
+    void observesSplitCompressedFramesAfterFirstInputIsReleased() {
+        var profile = MinecraftProtocolProfile.forVersion(MinecraftProtocolProfile.PROTOCOL_1_8);
+        var registry = new MinecraftPluginChannelRegistry(4096);
+        var frame = compressedCustomPayload18("REGISTER", "FML|HS\0FML", 0);
+        try {
+            var first = frame.readRetainedSlice(2);
+            var second = frame.readRetainedSlice(frame.readableBytes());
+            try {
+                registry.observeServerboundCompressed(UnpooledByteBufAllocator.DEFAULT, first, 0, profile);
+            } finally {
+                first.release();
+            }
+
+            try {
+                registry.observeServerboundCompressed(UnpooledByteBufAllocator.DEFAULT, second, 0, profile);
+                assertEquals(Set.of("FML|HS", "FML"), registry.channels());
+            } finally {
+                second.release();
+            }
+        } finally {
+            frame.release();
+            registry.close();
+        }
+    }
+
     private static ByteBuf customPayload(int packetId, String channel, String payloadText) {
         var payload = Unpooled.wrappedBuffer(payloadText.getBytes(StandardCharsets.UTF_8));
         var packet = Unpooled.buffer();

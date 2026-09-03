@@ -59,14 +59,28 @@ final class MinecraftForgeHandshakeTracker implements AutoCloseable {
             return List.of();
         }
         var pending = pending(direction);
-        if (pending.readableBytes() + input.readableBytes() > maxFrameBytes + 5) {
-            close();
-            return List.of(new Event(direction, "pending_overflow", "", -1, 0, stage, false));
+        if (pending.isReadable()) {
+            if (pending.readableBytes() + input.readableBytes() > maxFrameBytes + 5) {
+                close();
+                return List.of(new Event(direction, "pending_overflow", "", -1, 0, stage, false));
+            }
+            pending.writeBytes(input, input.readerIndex(), input.readableBytes());
+            var events = observeFrames(direction, pending);
+            if (!closed) {
+                pending.discardReadBytes();
+            }
+            return events;
         }
-        pending.writeBytes(input, input.readerIndex(), input.readableBytes());
+        var frames = input.slice();
+        var events = observeFrames(direction, frames);
+        appendPartialFrame(direction, pending, frames, events);
+        return events;
+    }
+
+    private List<Event> observeFrames(Direction direction, ByteBuf frames) {
         var events = new ArrayList<Event>();
-        while (pending.isReadable()) {
-            var frameLength = MinecraftVarInts.probe(pending);
+        while (frames.isReadable()) {
+            var frameLength = MinecraftVarInts.probe(frames);
             if (!frameLength.complete()) {
                 break;
             }
@@ -76,16 +90,11 @@ final class MinecraftForgeHandshakeTracker implements AutoCloseable {
                 break;
             }
             var totalBytes = frameLength.bytes() + frameLength.value();
-            if (pending.readableBytes() < totalBytes) {
+            if (frames.readableBytes() < totalBytes) {
                 break;
             }
-            var frame = pending.readRetainedSlice(totalBytes);
-            try {
-                parseFrame(direction, frame, frameLength.bytes(), frameLength.value()).forEach(events::add);
-            } finally {
-                frame.release();
-            }
-            pending.discardReadBytes();
+            var frame = frames.readSlice(totalBytes);
+            parseFrame(direction, frame, frameLength.bytes(), frameLength.value()).forEach(events::add);
         }
         return events;
     }
@@ -99,14 +108,29 @@ final class MinecraftForgeHandshakeTracker implements AutoCloseable {
             return List.of();
         }
         var pending = compressedPending(direction);
-        if (pending.readableBytes() + input.readableBytes() > maxFrameBytes + 5) {
-            close();
-            return List.of(new Event(direction, "pending_overflow", "", -1, 0, stage, false));
+        if (pending.isReadable()) {
+            if (pending.readableBytes() + input.readableBytes() > maxFrameBytes + 5) {
+                close();
+                return List.of(new Event(direction, "pending_overflow", "", -1, 0, stage, false));
+            }
+            pending.writeBytes(input, input.readerIndex(), input.readableBytes());
+            var events = observeCompressedFrames(direction, allocator, pending, threshold);
+            if (!closed) {
+                pending.discardReadBytes();
+            }
+            return events;
         }
-        pending.writeBytes(input, input.readerIndex(), input.readableBytes());
+        var frames = input.slice();
+        var events = observeCompressedFrames(direction, allocator, frames, threshold);
+        appendPartialFrame(direction, pending, frames, events);
+        return events;
+    }
+
+    private List<Event> observeCompressedFrames(
+            Direction direction, ByteBufAllocator allocator, ByteBuf frames, int threshold) {
         var events = new ArrayList<Event>();
-        while (pending.isReadable()) {
-            var frameLength = MinecraftVarInts.probe(pending);
+        while (frames.isReadable()) {
+            var frameLength = MinecraftVarInts.probe(frames);
             if (!frameLength.complete()) {
                 break;
             }
@@ -116,10 +140,10 @@ final class MinecraftForgeHandshakeTracker implements AutoCloseable {
                 break;
             }
             var totalBytes = frameLength.bytes() + frameLength.value();
-            if (pending.readableBytes() < totalBytes) {
+            if (frames.readableBytes() < totalBytes) {
                 break;
             }
-            var frame = pending.readRetainedSlice(totalBytes);
+            var frame = frames.readSlice(totalBytes);
             try {
                 var packet = compressionCodec.decodeFrame(allocator, frame, threshold, maxFrameBytes);
                 try {
@@ -129,12 +153,21 @@ final class MinecraftForgeHandshakeTracker implements AutoCloseable {
                 }
             } catch (RuntimeException exception) {
                 events.add(new Event(direction, "malformed", "", -1, frame.readableBytes(), stage, false));
-            } finally {
-                frame.release();
             }
-            pending.discardReadBytes();
         }
         return events;
+    }
+
+    private void appendPartialFrame(Direction direction, ByteBuf pending, ByteBuf frames, List<Event> events) {
+        if (closed || !frames.isReadable()) {
+            return;
+        }
+        if (frames.readableBytes() > maxFrameBytes + 5) {
+            close();
+            events.add(new Event(direction, "pending_overflow", "", -1, 0, stage, false));
+            return;
+        }
+        pending.writeBytes(frames, frames.readerIndex(), frames.readableBytes());
     }
 
     Stage stage() {

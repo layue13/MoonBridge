@@ -581,6 +581,25 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         if (!profile.legacyForgeHandshakeSupported()) {
             return buffer;
         }
+        if (legacyForgeRacePending != null && legacyForgeRacePending.isReadable()) {
+            return suppressLegacyForgeRaceFramesWithPending(context, buffer);
+        }
+        releaseLegacyForgeRacePending();
+        var frames = buffer.slice();
+        while (frames.isReadable()) {
+            var probe = MinecraftProtocolCodec.probeFrame(frames, maxFrameBytes);
+            if (!probe.complete()) {
+                return suppressLegacyForgeRaceFramesWithPending(context, buffer);
+            }
+            var frame = frames.readSlice(probe.totalBytes());
+            if (legacyForgeRaceFrame(context, frame)) {
+                return suppressLegacyForgeRaceFramesWithPending(context, buffer);
+            }
+        }
+        return buffer;
+    }
+
+    private ByteBuf suppressLegacyForgeRaceFramesWithPending(ChannelHandlerContext context, ByteBuf buffer) {
         if (legacyForgeRacePending == null) {
             legacyForgeRacePending = context.alloc().buffer(buffer.readableBytes());
         }

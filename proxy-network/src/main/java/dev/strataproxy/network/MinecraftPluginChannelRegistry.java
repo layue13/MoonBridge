@@ -35,19 +35,27 @@ final class MinecraftPluginChannelRegistry implements AutoCloseable {
                 || profile.serverboundCustomPayloadPacketId().isEmpty()) {
             return;
         }
-        appendPending(input, false);
-        while (pending.isReadable()) {
-            var probe = MinecraftProtocolCodec.probeFrame(pending, maxFrameBytes);
+        if (pending.isReadable()) {
+            appendPending(input, false);
+            observeFrames(pending, profile);
+            pending.discardReadBytes();
+            return;
+        }
+        var frames = input.slice();
+        observeFrames(frames, profile);
+        if (frames.isReadable()) {
+            appendPending(frames, false);
+        }
+    }
+
+    private void observeFrames(ByteBuf frames, MinecraftProtocolProfile profile) {
+        while (frames.isReadable()) {
+            var probe = MinecraftProtocolCodec.probeFrame(frames, maxFrameBytes);
             if (!probe.complete()) {
                 break;
             }
-            var frame = pending.readRetainedSlice(probe.totalBytes());
-            try {
-                observeFrame(frame, profile);
-            } finally {
-                frame.release();
-            }
-            pending.discardReadBytes();
+            var frame = frames.readSlice(probe.totalBytes());
+            observeFrame(frame, profile);
         }
     }
 
@@ -64,24 +72,33 @@ final class MinecraftPluginChannelRegistry implements AutoCloseable {
                 || profile.serverboundCustomPayloadPacketId().isEmpty()) {
             return;
         }
-        appendPending(input, true);
-        while (pending.isReadable()) {
-            var probe = MinecraftProtocolCodec.probeFrame(pending, maxFrameBytes);
+        if (pending.isReadable()) {
+            appendPending(input, true);
+            observeCompressedFrames(allocator, pending, threshold, profile);
+            pending.discardReadBytes();
+            return;
+        }
+        var frames = input.slice();
+        observeCompressedFrames(allocator, frames, threshold, profile);
+        if (frames.isReadable()) {
+            appendPending(frames, true);
+        }
+    }
+
+    private void observeCompressedFrames(
+            ByteBufAllocator allocator, ByteBuf frames, int threshold, MinecraftProtocolProfile profile) {
+        while (frames.isReadable()) {
+            var probe = MinecraftProtocolCodec.probeFrame(frames, maxFrameBytes);
             if (!probe.complete()) {
                 break;
             }
-            var frame = pending.readRetainedSlice(probe.totalBytes());
+            var frame = frames.readSlice(probe.totalBytes());
+            var packet = compressionCodec.decodeFrame(allocator, frame, threshold, maxFrameBytes);
             try {
-                var packet = compressionCodec.decodeFrame(allocator, frame, threshold, maxFrameBytes);
-                try {
-                    observePacket(packet, profile);
-                } finally {
-                    packet.release();
-                }
+                observePacket(packet, profile);
             } finally {
-                frame.release();
+                packet.release();
             }
-            pending.discardReadBytes();
         }
     }
 
