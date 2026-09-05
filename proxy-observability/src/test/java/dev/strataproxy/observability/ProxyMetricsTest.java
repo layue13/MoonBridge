@@ -313,6 +313,40 @@ final class ProxyMetricsTest {
     }
 
     @Test
+    void keepsMultipleOwnedPayloadCapturesIsolated() {
+        var metrics = new ProxyMetrics();
+        var expiry = Instant.now().plusSeconds(30);
+        metrics.startPayloadCapture(
+                "cap-1",
+                "survival-1",
+                ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                1,
+                4,
+                expiry);
+        metrics.startPayloadCapture(
+                "cap-2",
+                "survival-1",
+                ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                1,
+                4,
+                expiry);
+
+        metrics.payloadCapturedOwned(
+                "survival-1",
+                ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND,
+                4,
+                -1,
+                new byte[] {1, 2, 3, 4},
+                "Steve",
+                "127.0.0.1:50000");
+
+        var first = metrics.payloadCaptureSamples("cap-1").getFirst().prefixBytes();
+        var second = metrics.payloadCaptureSamples("cap-2").getFirst().prefixBytes();
+        first[0] = 99;
+        assertEquals(1, second[0]);
+    }
+
+    @Test
     void activeConnectionGaugesNeverGoBelowZero() {
         var metrics = new ProxyMetrics();
 

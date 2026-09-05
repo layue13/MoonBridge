@@ -1149,7 +1149,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
         }
         var bytes = new byte[Math.min(buffer.readableBytes(), request.maxBytesPerSample())];
         buffer.getBytes(buffer.readerIndex(), bytes);
-        metrics.payloadCaptured(
+        metrics.payloadCapturedOwned(
                 serverName,
                 direction,
                 buffer.readableBytes(),

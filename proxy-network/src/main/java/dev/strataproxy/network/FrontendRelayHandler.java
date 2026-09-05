@@ -1059,7 +1059,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
         var bytes = new byte[Math.min(buffer.readableBytes(), request.maxBytesPerSample())];
         buffer.getBytes(buffer.readerIndex(), bytes);
-        metrics.payloadCaptured(
+        metrics.payloadCapturedOwned(
                 serverName,
                 direction,
                 buffer.readableBytes(),

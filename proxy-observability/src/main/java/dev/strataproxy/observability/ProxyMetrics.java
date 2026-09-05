@@ -570,10 +570,45 @@ public final class ProxyMetrics {
             byte[] prefixBytes,
             String player,
             String remoteAddress) {
+        payloadCaptured(server, direction, rawBytes, compressedBytes, prefixBytes, player, remoteAddress, false);
+    }
+
+    /**
+     * Provides payload captured while taking ownership of the prefix array.
+     * The caller must not modify {@code prefixBytes} after this call.
+     * @param server server value
+     * @param direction direction value
+     * @param rawBytes raw bytes value
+     * @param compressedBytes compressed bytes value
+     * @param prefixBytes owned prefix bytes value
+     * @param player player value
+     * @param remoteAddress remote address value
+     */
+    public void payloadCapturedOwned(
+            String server,
+            CompressionDirection direction,
+            long rawBytes,
+            long compressedBytes,
+            byte[] prefixBytes,
+            String player,
+            String remoteAddress) {
+        payloadCaptured(server, direction, rawBytes, compressedBytes, prefixBytes, player, remoteAddress, true);
+    }
+
+    private void payloadCaptured(
+            String server,
+            CompressionDirection direction,
+            long rawBytes,
+            long compressedBytes,
+            byte[] prefixBytes,
+            String player,
+            String remoteAddress,
+            boolean ownsPrefixBytes) {
         if (server == null || server.isBlank() || direction == null || prefixBytes == null || payloadCaptures.isEmpty()) {
             return;
         }
         var now = Instant.now();
+        PayloadCaptureBuffer ownedCapture = null;
         for (var entry : payloadCaptures.entrySet()) {
             var buffer = entry.getValue();
             var capture = buffer.capture();
@@ -583,8 +618,15 @@ public final class ProxyMetrics {
             }
             if (capture.server().equals(server) && capture.direction() == direction) {
                 var limit = Math.min(capture.maxBytesPerSample(), prefixBytes.length);
-                buffer.record(rawBytes, compressedBytes, Arrays.copyOf(prefixBytes, limit), player, remoteAddress, now);
+                if (ownsPrefixBytes && limit == prefixBytes.length && ownedCapture == null) {
+                    ownedCapture = buffer;
+                } else {
+                    buffer.record(rawBytes, compressedBytes, Arrays.copyOf(prefixBytes, limit), player, remoteAddress, now);
+                }
             }
+        }
+        if (ownedCapture != null) {
+            ownedCapture.record(rawBytes, compressedBytes, prefixBytes, player, remoteAddress, now);
         }
     }
 
