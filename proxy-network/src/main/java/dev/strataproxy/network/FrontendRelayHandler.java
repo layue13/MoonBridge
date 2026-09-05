@@ -27,6 +27,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
 
     private final Channel backend;
     private final ProxyMetrics metrics;
+    private final ProxyMetrics.ServerTrafficRecorder trafficRecorder;
     private final String serverName;
     private final MinecraftCompressionAuditState compressionAudit;
     private final CompressionRuntime compressionRuntime;
@@ -255,6 +256,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             MinecraftForgeHandshakeTracker forgeHandshakeTracker) {
         this.backend = backend;
         this.metrics = metrics;
+        this.trafficRecorder = metrics.serverTrafficRecorder(serverName);
         this.serverName = serverName;
         this.compressionAudit = compressionAudit;
         this.compressionRuntime = compressionRuntime;
@@ -298,7 +300,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         List<CompressionAction> compressionActions = List.of();
         if (message instanceof ByteBuf buffer) {
             var legacyForgeBlockedBefore = legacyForgeHandshakeBlocksServerboundFrames();
-            metrics.frontendToBackendBytes(serverName, buffer.readableBytes());
+            trafficRecorder.frontendToBackendBytes(buffer.readableBytes());
             capturePayloadPrefix(buffer, CompressionDirection.FRONTEND_TO_BACKEND);
             observeLoginStart(context, buffer);
             observeForgeHandshake(context, buffer);

@@ -252,6 +252,15 @@ public final class ProxyMetrics {
     }
 
     /**
+     * Binds byte counters for one relay server.
+     * @param server server value
+     * @return bound byte counter recorder
+     */
+    public ServerTrafficRecorder serverTrafficRecorder(String server) {
+        return new ServerTrafficRecorder(serverTraffic(server));
+    }
+
+    /**
      * Provides packet anomaly.
       * @param rule rule value
      */
@@ -987,6 +996,35 @@ public final class ProxyMetrics {
 
         private ServerTraffic snapshot() {
             return new ServerTraffic(frontendToBackendBytes.sum(), backendToFrontendBytes.sum());
+        }
+    }
+
+    /**
+     * Per-relay byte counter recorder bound to one server.
+     */
+    public final class ServerTrafficRecorder {
+        private final ServerTrafficCounters counters;
+
+        private ServerTrafficRecorder(ServerTrafficCounters counters) {
+            this.counters = counters;
+        }
+
+        /**
+         * Records frontend to backend bytes.
+         * @param bytes byte count
+         */
+        public void frontendToBackendBytes(long bytes) {
+            ProxyMetrics.this.frontendToBackendBytes.add(bytes);
+            counters.frontendToBackendBytes.add(bytes);
+        }
+
+        /**
+         * Records backend to frontend bytes.
+         * @param bytes byte count
+         */
+        public void backendToFrontendBytes(long bytes) {
+            ProxyMetrics.this.backendToFrontendBytes.add(bytes);
+            counters.backendToFrontendBytes.add(bytes);
         }
     }
 

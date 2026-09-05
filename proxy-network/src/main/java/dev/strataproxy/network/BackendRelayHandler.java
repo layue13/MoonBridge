@@ -26,6 +26,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
 
     private final Channel frontend;
     private final ProxyMetrics metrics;
+    private final ProxyMetrics.ServerTrafficRecorder trafficRecorder;
     private final String serverName;
     private final MinecraftCompressionAuditState compressionAudit;
     private final MinecraftCompressionNegotiationDetector compressionDetector;
@@ -341,6 +342,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
             MinecraftProtocolProfile.BackendSwitchStrategy backendSwitchStrategy) {
         this.frontend = frontend;
         this.metrics = metrics;
+        this.trafficRecorder = metrics.serverTrafficRecorder(serverName);
         this.serverName = serverName;
         this.compressionAudit = compressionAudit;
         this.profile = profile == null
@@ -435,7 +437,7 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
                 ReferenceCountUtil.release(outbound);
                 return;
             }
-            metrics.backendToFrontendBytes(serverName, buffer.readableBytes());
+            trafficRecorder.backendToFrontendBytes(buffer.readableBytes());
             capturePayloadPrefix(buffer, CompressionDirection.BACKEND_TO_FRONTEND);
             observeForgeHandshake(context, buffer);
             observeLegacyClientState(context, buffer);
