@@ -850,8 +850,12 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             return CompressionObservation.allow();
         }
         try {
-            var actions = new ArrayList<CompressionAction>();
-            for (var sample : compressionAudit.observeFrontend(buffer)) {
+            var samples = compressionAudit.observeFrontend(buffer);
+            if (samples.isEmpty()) {
+                return CompressionObservation.rewriteAllow();
+            }
+            var actions = new ArrayList<CompressionAction>(samples.size());
+            for (var sample : samples) {
                 metrics.compressionSample(
                         serverName,
                         CompressionDirection.FRONTEND_TO_BACKEND,
@@ -866,7 +870,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                         ratio(sample),
                         0));
             }
-            return new CompressionObservation(true, true, List.copyOf(actions));
+            return new CompressionObservation(true, true, actions);
         } catch (RuntimeException exception) {
             metrics.packetAnomaly(
                     RULE_COMPRESSION_AUDIT_MALFORMED,
@@ -1129,12 +1133,20 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private record CompressionObservation(boolean shouldForward, boolean rewriteEligible, List<CompressionAction> actions) {
+        private static final CompressionObservation ALLOW = new CompressionObservation(true, false, List.of());
+        private static final CompressionObservation REWRITE_ALLOW = new CompressionObservation(true, true, List.of());
+        private static final CompressionObservation BLOCK = new CompressionObservation(false, false, List.of());
+
         private static CompressionObservation allow() {
-            return new CompressionObservation(true, false, List.of());
+            return ALLOW;
+        }
+
+        private static CompressionObservation rewriteAllow() {
+            return REWRITE_ALLOW;
         }
 
         private static CompressionObservation block() {
-            return new CompressionObservation(false, false, List.of());
+            return BLOCK;
         }
     }
 }
