@@ -448,7 +448,7 @@ final class InitialHandshakeRouteHandler extends ByteToMessageDecoder {
                 frontend.config().setAutoRead(false);
                 backend.config().setAutoRead(false);
                 if (initialLoginStart != null) {
-                    metrics.playerSessionStarted(initialLoginStart.username(), serverName, ClientAddress.text(frontend));
+                    metrics.playerSessionStarted(initialLoginStart.username(), identity.playerId(), identity.connectionId(), serverName, ClientAddress.text(frontend));
                 }
                 frontend.read();
                 backend.read();

@@ -1,7 +1,7 @@
 proxy:
   host: "127.0.0.1"
   port: 25578
-  # Must match proxy backendAgent.sharedSecret. Generate a random value with at least 32 characters.
+  # Must match proxy backendAgent.sharedSecret. All trusted backend agents use this value.
   sharedSecret: "replace-with-a-random-secret"
 
 backend:

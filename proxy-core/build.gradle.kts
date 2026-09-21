@@ -5,6 +5,7 @@ plugins {
 }
 
 val nettyVersion = libs.findVersion("netty").get().requiredVersion
+val runtimeJavaHome = System.getProperty("java.home")
 
 dependencies {
     // The plugin contract is the only stable external boundary. Everything else
@@ -32,6 +33,7 @@ val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {
 
     val installDir = layout.buildDirectory.dir("install/strataproxy")
     inputs.dir(installDir)
+    environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
@@ -48,6 +50,7 @@ val installedDistProductionConfigSmokeTest = tasks.register<Exec>("installedDist
 
     val installDir = layout.buildDirectory.dir("install/strataproxy")
     inputs.dir(installDir)
+    environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
@@ -64,6 +67,7 @@ val installedDistHelpSmokeTest = tasks.register<Exec>("installedDistHelpSmokeTes
 
     val installDir = layout.buildDirectory.dir("install/strataproxy")
     inputs.dir(installDir)
+    environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
@@ -79,6 +83,7 @@ val installedDistVersionSmokeTest = tasks.register<Exec>("installedDistVersionSm
 
     val installDir = layout.buildDirectory.dir("install/strataproxy")
     inputs.dir(installDir)
+    environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")

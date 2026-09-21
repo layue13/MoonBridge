@@ -1,6 +1,7 @@
 package dev.strataproxy.network;
 
 final class RelaySessionIdentity {
+    private final String connectionId = java.util.UUID.randomUUID().toString();
     private final String remoteAddress;
     private volatile String playerName;
     private volatile MinecraftSessionVerifier.GameProfile profile;
@@ -13,6 +14,10 @@ final class RelaySessionIdentity {
     String remoteAddress() {
         return remoteAddress;
     }
+
+    String connectionId() { return connectionId; }
+
+    java.util.UUID playerId() { return profile == null ? null : profile.id(); }
 
     String playerName() {
         return playerName == null ? "" : playerName;

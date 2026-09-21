@@ -18,6 +18,14 @@ public interface PlayerService {
     CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer);
 
     /**
+     * Sends an opaque plugin-message payload to the player's current backend.
+     * Completion means Netty accepted the packet for writing, not that Bukkit processed it.
+     */
+    default CompletionStage<PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
+        return java.util.concurrent.CompletableFuture.completedFuture(PluginMessageResult.failure("unsupported"));
+    }
+
+    /**
  * Provides find.
  *
      * @param playerName player name

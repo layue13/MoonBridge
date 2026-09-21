@@ -58,6 +58,15 @@ final class RelaySessionRegistry {
         return controller.replaceBackend(targetServerName);
     }
 
+    CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
+        var session = find(playerName).orElse(null);
+        if (session == null) return CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("player_not_found"));
+        var controller = session.replacementController();
+        return controller == null
+                ? CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("backend_unavailable"))
+                : controller.sendPluginMessage(channel, payload);
+    }
+
     private static String key(String playerName) {
         return playerName.trim().toLowerCase(Locale.ROOT);
     }

@@ -23,7 +23,7 @@ plugins {
 
 allprojects {
     group = "dev.strataproxy"
-    version = "0.1.0-SNAPSHOT"
+    version = "0.2.0-SNAPSHOT"
 }
 
 tasks.register("check") {
@@ -35,19 +35,27 @@ val bukkitAgentDirectory = layout.projectDirectory.dir("integrations/bukkit-back
 val rootGradleWrapper = layout.projectDirectory.file(
     if (System.getProperty("os.name").lowercase().contains("windows")) "gradlew.bat" else "gradlew"
 ).asFile
+val rootGradleCommand = if (System.getProperty("os.name").lowercase().contains("windows")) {
+    listOf(rootGradleWrapper.absolutePath)
+} else {
+    listOf("bash", rootGradleWrapper.absolutePath)
+}
+val buildJavaHome = System.getProperty("java.home")
 
 val buildBukkitBackendAgent = tasks.register<Exec>("buildBukkitBackendAgent") {
     group = "verification"
     description = "Builds the standalone Java 8-compatible Bukkit backend agent."
     workingDir = projectDir
-    commandLine(rootGradleWrapper.absolutePath, "-p", bukkitAgentDirectory.absolutePath, "clean", "jar", "--no-daemon")
+    environment("JAVA_HOME", buildJavaHome)
+    commandLine(rootGradleCommand + listOf("-p", bukkitAgentDirectory.absolutePath, "clean", "jar", "--no-daemon"))
 }
 
 val publishBukkitBackendAgent = tasks.register<Exec>("publishBukkitBackendAgent") {
     group = "publishing"
     description = "Publishes the standalone Bukkit backend agent through its native Gradle publication."
     workingDir = projectDir
-    commandLine(rootGradleWrapper.absolutePath, "-p", bukkitAgentDirectory.absolutePath, "publish", "--no-daemon")
+    environment("JAVA_HOME", buildJavaHome)
+    commandLine(rootGradleCommand + listOf("-p", bukkitAgentDirectory.absolutePath, "publish", "--no-daemon"))
 }
 
 tasks.named("check") {
@@ -504,11 +512,11 @@ abstract class ReleaseAuditTask : DefaultTask() {
             }
         }
         listOf(
-            "strataproxy-0.1.0-SNAPSHOT.zip",
-            "strataproxy-0.1.0-SNAPSHOT.sbom.cdx.json",
-            "strataproxy-0.1.0-SNAPSHOT.metadata.json",
-            "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT.jar",
-            "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT-sources.jar"
+            "strataproxy-0.2.0-SNAPSHOT.zip",
+            "strataproxy-0.2.0-SNAPSHOT.sbom.cdx.json",
+            "strataproxy-0.2.0-SNAPSHOT.metadata.json",
+            "plugin-api/proxy-plugin-api-0.2.0-SNAPSHOT.jar",
+            "plugin-api/proxy-plugin-api-0.2.0-SNAPSHOT-sources.jar"
         ).forEach { token ->
             require(checksums.contains(token)) { "release checksums missing $token" }
         }

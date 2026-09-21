@@ -69,8 +69,11 @@ servers:
 backendAgent:
   enabled: true
   bind: "127.0.0.1:25578"
-  sharedSecret: "替换为至少 32 个字符的随机密钥"
+  sharedSecret: "所有受信任子服共用的至少 32 字符随机密钥"
   heartbeatTimeout: "30s"
+  maxConnections: 32
+  maxQueuedConnections: 64
+  maxNonces: 4096
 ```
 
 构建适配器：
@@ -98,7 +101,7 @@ heartbeatSeconds: 10
 unregisterOnDisable: true
 ```
 
-`sharedSecret` 两端必须相同，且不能保留示例中的占位符；配置错误时插件会拒绝启动。端点只接受注册、心跳和注销，心跳超时后代理会移除该后端。建议保持 `bind` 在环回地址，或以防火墙限制到可信 Bukkit 主机。
+所有受信任 backend agent 共用 `sharedSecret`；每个 `backend.name` 仍必须唯一。插件每次启动会生成 instance ID，旧实例的心跳或注销不能影响新实例。端点限制请求长度、并发连接、排队和 replay nonce；建议保持 `bind` 在环回地址，或以防火墙限制到可信 Bukkit 主机。
 
 ## 代理插件
 
@@ -119,9 +122,15 @@ repositories {
 }
 
 dependencies {
-    compileOnly("dev.strataproxy:proxy-plugin-api:0.1.0-SNAPSHOT")
+    compileOnly("dev.strataproxy:proxy-plugin-api:0.2.0-SNAPSHOT")
 }
 ```
+
+### 0.2 API 与兼容性验证
+
+`0.2.0-SNAPSHOT` 是破坏性 API 版本：`PlayerView` 与转服事件新增 UUID/连接 ID，转服结果明确为代理网络层 `NETWORK_READY`，不承诺 Bukkit 业务已完成；`PlayerService.sendPluginMessage` 的完成也只表示代理已接受写入。核心与 plugin API 使用 Java 25；Bukkit agent 保持 Java 8 字节码。
+
+发布前必须在目标 1.7.10 Forge 整合包执行连续转服、目标后端不可用、代理/后端重启恢复和至少 24 小时运行测试，并保存版本、mod 列表、日志和结果。单元测试及配置 smoke test 不能替代该门禁。
 
 JAR 根目录需要 `strataproxy-plugin.properties`：
 

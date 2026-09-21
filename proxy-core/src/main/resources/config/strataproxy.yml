@@ -26,12 +26,15 @@ registry:
   healthCheckMode: "tcp"
 
 # Dedicated backend-agent endpoint for the official Bukkit adapter. This is not an Admin API.
-# Keep it disabled unless a backend agent is installed; use a random secret of at least 32 characters.
+# Keep it disabled unless a backend agent is installed; all trusted agents share this random secret.
 backendAgent:
   enabled: false
   bind: "127.0.0.1:25578"
   sharedSecret: ""
   heartbeatTimeout: "30s"
+  maxConnections: 32
+  maxQueuedConnections: 64
+  maxNonces: 4096
 
 compression:
   mode: adaptive

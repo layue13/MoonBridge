@@ -54,13 +54,16 @@ public final class ProxyMetrics {
                 .activeConnections.updateAndGet(value -> Math.max(0, value - 1));
     }
     public void playerSessionStarted(String player, String server, String remoteAddress) {
-        if (player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), normalize(server), normalize(remoteAddress)));
+        playerSessionStarted(player, null, "", server, remoteAddress);
+    }
+    public void playerSessionStarted(String player, java.util.UUID playerId, String connectionId, String server, String remoteAddress) {
+        if (player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), playerId, connectionId == null ? "" : connectionId, normalize(server), normalize(remoteAddress)));
     }
     public void playerSessionClosed(String player) {
         if (player != null && !player.isBlank()) playerSessions.remove(player.trim());
     }
     public void playerTransfer(boolean success, String outcome, String player, String sourceServer, String targetServer, String remoteAddress) {
-        if (success && player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), normalize(targetServer), normalize(remoteAddress)));
+        if (success && player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), null, "", normalize(targetServer), normalize(remoteAddress)));
     }
     public long currentEventLoopDelayNanos() { return eventLoopDelayNanos.get(); }
     public void eventLoopDelayNanos(long nanos) { eventLoopDelayNanos.set(Math.max(0, nanos)); }
@@ -106,7 +109,7 @@ public final class ProxyMetrics {
     }
     public record ServerTraffic(long frontendToBackendBytes, long backendToFrontendBytes) { }
     public record ServerConnections(long activeConnections, long routedConnections) { }
-    public record PlayerSession(String player, String server, String remoteAddress) { }
+    public record PlayerSession(String player, java.util.UUID playerId, String connectionId, String server, String remoteAddress) { }
     public record Snapshot(long acceptedConnections, long activeConnections, long rejectedConnections,
                            Map<String, Long> rejectedConnectionsByReason, long handshakeTimeouts, long routedConnections,
                            long failedRoutes, long backendConnectFailures, Map<String, Long> backendReplacements,

@@ -14,6 +14,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +28,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -42,7 +46,8 @@ public final class BackendAgentServer implements AutoCloseable {
     private final ObjectMapper mapper = new ObjectMapper();
     private final Map<String, Long> nonces = new ConcurrentHashMap<>();
     private final Map<String, Lease> leases = new ConcurrentHashMap<>();
-    private final ExecutorService connections = Executors.newCachedThreadPool(runnable -> new Thread(runnable, "strataproxy-backend-agent"));
+    private final Object leaseLock = new Object();
+    private final ExecutorService connections;
     private final ScheduledExecutorService maintenance = Executors.newSingleThreadScheduledExecutor(runnable -> new Thread(runnable, "strataproxy-backend-agent-lease"));
     private volatile ServerSocket socket;
     private volatile boolean closed;
@@ -50,22 +55,36 @@ public final class BackendAgentServer implements AutoCloseable {
     public BackendAgentServer(ProxyConfig.BackendAgentConfig config, ServerService servers) {
         this.config = config;
         this.servers = servers;
+        this.connections = new ThreadPoolExecutor(
+                config.maxConnections(), config.maxConnections(), 0L, TimeUnit.MILLISECONDS,
+                config.maxQueuedConnections() == 0 ? new SynchronousQueue<>() : new ArrayBlockingQueue<>(config.maxQueuedConnections()),
+                runnable -> new Thread(runnable, "strataproxy-backend-agent"),
+                (runnable, executor) -> {
+                    if (runnable instanceof ConnectionTask task) task.close();
+                });
     }
 
     /** Starts the endpoint and the lease sweeper. */
     public void start() throws IOException {
         socket = new ServerSocket();
         socket.bind(config.bindAddress());
-        connections.execute(this::acceptLoop);
+        var acceptor = new Thread(this::acceptLoop, "strataproxy-backend-agent-accept");
+        acceptor.setDaemon(true);
+        acceptor.start();
         var delay = Math.max(1_000L, config.heartbeatTimeout().toMillis() / 2L);
         maintenance.scheduleWithFixedDelay(this::expireLeases, delay, delay, TimeUnit.MILLISECONDS);
+    }
+
+    /** Returns the actual listener address after start, including an ephemeral port when requested. */
+    public java.net.SocketAddress localAddress() {
+        return socket == null ? null : socket.getLocalSocketAddress();
     }
 
     private void acceptLoop() {
         while (!closed) {
             try {
                 var connection = socket.accept();
-                connections.execute(() -> handle(connection));
+                connections.execute(new ConnectionTask(connection));
             } catch (IOException exception) {
                 if (!closed) {
                     // The next accept is not useful after a listener failure.
@@ -75,13 +94,21 @@ public final class BackendAgentServer implements AutoCloseable {
         }
     }
 
+    private final class ConnectionTask implements Runnable {
+        private final Socket connection;
+
+        private ConnectionTask(Socket connection) { this.connection = connection; }
+        @Override public void run() { handle(connection); }
+        private void close() { try { connection.close(); } catch (IOException ignored) { } }
+    }
+
     private void handle(Socket connection) {
         try (connection;
              var reader = new BufferedReader(new java.io.InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
              var writer = new BufferedWriter(new java.io.OutputStreamWriter(connection.getOutputStream(), StandardCharsets.UTF_8))) {
             connection.setSoTimeout(5_000);
-            var line = reader.readLine();
-            var response = line == null || line.length() > MAX_LINE_LENGTH
+            var line = readBoundedLine(connection.getInputStream());
+            var response = line == null
                     ? Response.failure("invalid_request", "request is missing or too large")
                     : process(line);
             writer.write(mapper.writeValueAsString(response));
@@ -95,42 +122,47 @@ public final class BackendAgentServer implements AutoCloseable {
     private Response process(String line) {
         try {
             var envelope = mapper.readValue(line, Envelope.class);
-            if (envelope == null || envelope.nonce == null || envelope.payload == null || envelope.signature == null) {
+            if (envelope == null || envelope.agentId == null || envelope.nonce == null || envelope.payload == null || envelope.signature == null) {
                 return Response.failure("invalid_request", "missing authentication fields");
             }
+            var agentId = envelope.agentId.trim();
+            if (agentId.isEmpty() || config.sharedSecret().isBlank()) return Response.failure("unauthorized", "backend agent authentication is not configured");
             var now = System.currentTimeMillis();
             if (Math.abs(now - envelope.timestamp) > MAX_CLOCK_SKEW_MILLIS) {
                 return Response.failure("unauthorized", "request timestamp is outside the allowed clock skew");
             }
-            if (nonces.putIfAbsent(envelope.nonce, now) != null) {
-                return Response.failure("unauthorized", "request nonce was already used");
-            }
-            var signed = envelope.timestamp + "\n" + envelope.nonce + "\n" + envelope.payload;
-            var expected = hmac(signed);
+            var signed = envelope.agentId + "\n" + envelope.timestamp + "\n" + envelope.nonce + "\n" + envelope.payload;
+            var expected = hmac(config.sharedSecret(), signed);
             if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII), envelope.signature.getBytes(StandardCharsets.US_ASCII))) {
                 return Response.failure("unauthorized", "invalid request signature");
             }
+            evictNonces(now);
+            var nonceKey = agentId + '\u0000' + envelope.nonce;
+            if (nonces.size() >= config.maxNonces() && !nonces.containsKey(nonceKey)) {
+                return Response.failure("rate_limited", "nonce cache is at capacity");
+            }
+            if (nonces.putIfAbsent(nonceKey, now) != null) return Response.failure("unauthorized", "request nonce was already used");
             var command = mapper.readValue(Base64.getUrlDecoder().decode(envelope.payload), Command.class);
             if (command == null || command.operation == null || command.name == null || command.name.isBlank()) {
                 return Response.failure("invalid_request", "operation and backend name are required");
             }
+            if (!agentId.equals(command.name.trim()) || command.instanceId == null || command.instanceId.isBlank()) {
+                return Response.failure("unauthorized", "agent may only operate its own backend with an instance ID");
+            }
             return switch (command.operation) {
-                case "register" -> register(command);
-                case "heartbeat" -> heartbeat(command);
-                case "unregister" -> unregister(command);
+                case "register" -> register(agentId, command);
+                case "heartbeat" -> heartbeat(agentId, command);
+                case "unregister" -> unregister(agentId, command);
                 default -> Response.failure("invalid_request", "unsupported operation");
             };
         } catch (IllegalArgumentException exception) {
             return Response.failure("invalid_request", exception.getMessage());
         } catch (Exception exception) {
             return Response.failure("request_failed", rootMessage(exception));
-        } finally {
-            var cutoff = System.currentTimeMillis() - MAX_CLOCK_SKEW_MILLIS;
-            nonces.entrySet().removeIf(entry -> entry.getValue() < cutoff);
         }
     }
 
-    private Response register(Command command) throws Exception {
+    private Response register(String agentId, Command command) throws Exception {
         if (command.host == null || command.host.isBlank() || command.port < 1 || command.port > 65535) {
             return Response.failure("invalid_request", "backend host and port are required");
         }
@@ -151,46 +183,70 @@ public final class BackendAgentServer implements AutoCloseable {
                 command.drainMode,
                 command.metadata == null ? Map.of() : Map.copyOf(command.metadata),
                 persistence);
-        var result = servers.register(registration).toCompletableFuture().get(5, TimeUnit.SECONDS);
-        if (result.success()) {
-            leases.put(command.name.trim(), new Lease(System.currentTimeMillis(), persistence));
+        synchronized (leaseLock) {
+            var result = servers.register(registration).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            if (result.success()) leases.put(command.name.trim(), new Lease(agentId, command.instanceId, System.currentTimeMillis(), persistence));
+            return response(result);
         }
-        return response(result);
     }
 
-    private Response heartbeat(Command command) {
-        var lease = leases.get(command.name.trim());
-        if (lease == null) {
-            return Response.failure("not_registered", "backend must register before sending heartbeats");
+    private Response heartbeat(String agentId, Command command) {
+        synchronized (leaseLock) {
+            var lease = leases.get(command.name.trim());
+            if (lease == null || !lease.ownedBy(agentId, command.instanceId)) {
+                return Response.failure("not_registered", "backend must register this instance before sending heartbeats");
+            }
+            leases.put(command.name.trim(), new Lease(agentId, command.instanceId, System.currentTimeMillis(), lease.persistence));
+            return Response.success("heartbeat", "");
         }
-        leases.put(command.name.trim(), new Lease(System.currentTimeMillis(), lease.persistence));
-        return Response.success("heartbeat", "");
     }
 
-    private Response unregister(Command command) throws Exception {
-        var lease = leases.get(command.name.trim());
-        var persistence = lease == null ? (command.persistent ? ServerPersistence.PERSISTENT : ServerPersistence.EPHEMERAL) : lease.persistence;
-        var result = servers.unregister(command.name, new ServerRemoval(true, false, Duration.ZERO, persistence))
-                .toCompletableFuture().get(5, TimeUnit.SECONDS);
-        if (result.success()) {
-            leases.remove(command.name.trim());
+    private Response unregister(String agentId, Command command) throws Exception {
+        synchronized (leaseLock) {
+            var lease = leases.get(command.name.trim());
+            if (lease == null || !lease.ownedBy(agentId, command.instanceId)) return Response.failure("not_registered", "backend instance is not registered");
+            var result = servers.unregister(command.name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            if (result.success()) leases.remove(command.name.trim(), lease);
+            return response(result);
         }
-        return response(result);
     }
 
     private void expireLeases() {
         var cutoff = System.currentTimeMillis() - config.heartbeatTimeout().toMillis();
-        leases.forEach((name, lease) -> {
-            if (lease.lastSeen < cutoff && leases.remove(name, lease)) {
-                servers.unregister(name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence));
-            }
-        });
+        synchronized (leaseLock) {
+            leases.forEach((name, lease) -> {
+                if (lease.lastSeen < cutoff && leases.remove(name, lease)) {
+                    try {
+                        servers.unregister(name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
+                                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    } catch (Exception ignored) { }
+                }
+            });
+        }
     }
 
-    private String hmac(String value) throws Exception {
+    private String hmac(String secret, String value) throws Exception {
         var mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(config.sharedSecret().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private String readBoundedLine(InputStream input) throws IOException {
+        var bytes = new java.io.ByteArrayOutputStream(Math.min(MAX_LINE_LENGTH, 1024));
+        for (int value; (value = input.read()) != -1;) {
+            if (value == '\n') return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+            if (value != '\r') {
+                if (bytes.size() >= MAX_LINE_LENGTH) return null;
+                bytes.write(value);
+            }
+        }
+        return bytes.size() == 0 ? null : new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private void evictNonces(long now) {
+        var cutoff = now - MAX_CLOCK_SKEW_MILLIS;
+        nonces.entrySet().removeIf(entry -> entry.getValue() < cutoff);
     }
 
     private static Response response(ServerMutationResult result) {
@@ -216,9 +272,14 @@ public final class BackendAgentServer implements AutoCloseable {
         connections.shutdownNow();
     }
 
-    private record Lease(long lastSeen, ServerPersistence persistence) { }
+    private record Lease(String agentId, String instanceId, long lastSeen, ServerPersistence persistence) {
+        boolean ownedBy(String expectedAgentId, String expectedInstanceId) {
+            return agentId.equals(expectedAgentId) && instanceId.equals(expectedInstanceId);
+        }
+    }
 
     public static final class Envelope {
+        public String agentId;
         public long timestamp;
         public String nonce;
         public String payload;
@@ -228,6 +289,7 @@ public final class BackendAgentServer implements AutoCloseable {
     public static final class Command {
         public String operation;
         public String name;
+        public String instanceId;
         public String host;
         public int port;
         public Set<String> tags;

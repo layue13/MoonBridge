@@ -664,7 +664,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             if (username.isPresent()) {
                 playerName = username.get();
                 identity.playerName(playerName);
-                metrics.playerSessionStarted(playerName, serverName, remoteAddress(context));
+                metrics.playerSessionStarted(playerName, identity.playerId(), identity.connectionId(), serverName, remoteAddress(context));
                 if (replacementController != null) {
                     replacementController.playerNameDiscovered(playerName);
                 }

@@ -77,6 +77,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         private final String secret;
         private final String backendJson;
         private final String backendName;
+        private final String instanceId = UUID.randomUUID().toString();
 
         private BackendAgentClient(String proxyHost, int proxyPort, String secret, String backendJson, String backendName) {
             this.proxyHost = proxyHost;
@@ -116,12 +117,12 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         }
 
         String call(String operation) throws Exception {
-            String payload = operation.equals("register") ? backendJsonWithOperation(operation) : "{\"operation\":\"" + operation + "\",\"name\":\"" + escape(backendName) + "\"}";
+            String payload = operation.equals("register") ? backendJsonWithOperation(operation) : "{\"operation\":\"" + operation + "\",\"name\":\"" + escape(backendName) + "\",\"instanceId\":\"" + instanceId + "\"}";
             String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.getBytes(StandardCharsets.UTF_8));
             long timestamp = System.currentTimeMillis();
             String nonce = UUID.randomUUID().toString().replace("-", "");
-            String signature = hex(hmac(timestamp + "\n" + nonce + "\n" + encoded));
-            String envelope = "{\"timestamp\":" + timestamp + ",\"nonce\":\"" + nonce + "\",\"payload\":\"" + encoded + "\",\"signature\":\"" + signature + "\"}";
+            String signature = hex(hmac(backendName + "\n" + timestamp + "\n" + nonce + "\n" + encoded));
+            String envelope = "{\"agentId\":\"" + escape(backendName) + "\",\"timestamp\":" + timestamp + ",\"nonce\":\"" + nonce + "\",\"payload\":\"" + encoded + "\",\"signature\":\"" + signature + "\"}";
             Socket socket = new Socket(proxyHost, proxyPort);
             try {
                 socket.setSoTimeout(5000);
@@ -137,7 +138,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         }
 
         private String backendJsonWithOperation(String operation) {
-            return "{\"operation\":\"" + operation + "\"," + backendJson.substring(1);
+            return "{\"operation\":\"" + operation + "\",\"instanceId\":\"" + instanceId + "\"," + backendJson.substring(1);
         }
 
         private byte[] hmac(String input) throws Exception {

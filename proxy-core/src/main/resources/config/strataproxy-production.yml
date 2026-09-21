@@ -31,6 +31,9 @@ backendAgent:
   bind: "127.0.0.1:25578"
   sharedSecret: "${STRATAPROXY_BACKEND_AGENT_SECRET:}"
   heartbeatTimeout: "30s"
+  maxConnections: 32
+  maxQueuedConnections: 64
+  maxNonces: 4096
 
 compression:
   mode: adaptive

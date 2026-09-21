@@ -200,7 +200,11 @@ public final class ConfigLoader {
                             backendAgentFile.enabled,
                             parseAddress(backendAgentFile.bind, 25578),
                             backendAgentFile.sharedSecret,
-                            java.time.Duration.ofMillis(parseDurationMillis(backendAgentFile.heartbeatTimeout, 30_000))));
+                            java.time.Duration.ofMillis(parseDurationMillis(backendAgentFile.heartbeatTimeout, 30_000)),
+                            backendAgentFile.agentSecrets,
+                            backendAgentFile.maxConnections,
+                            backendAgentFile.maxQueuedConnections,
+                            backendAgentFile.maxNonces));
             var descriptors = registry.staticServers
                     ? servers.stream().map(ServerFile::toDescriptor).toList()
                     : List.<ServerDescriptor>of();
@@ -238,10 +242,18 @@ public final class ConfigLoader {
         public boolean enabled = false;
         /** Bind address; keep loopback unless backend agents are on another protected host. */
         public String bind = "127.0.0.1:25578";
-        /** Shared secret used to authenticate each request. */
+        /** Legacy shared secret. It is rejected when the endpoint is enabled. */
         public String sharedSecret = "";
+        /** Per-agent secrets keyed by agent/backend ID. */
+        public Map<String, String> agentSecrets = Map.of();
         /** Maximum interval without a heartbeat before an agent-owned backend is removed. */
         public String heartbeatTimeout = "30s";
+        /** Maximum active agent request workers. */
+        public int maxConnections = 32;
+        /** Maximum accepted requests waiting for an agent worker. */
+        public int maxQueuedConnections = 64;
+        /** Maximum authenticated replay nonces retained across all agents. */
+        public int maxNonces = 4096;
     }
 
     /**

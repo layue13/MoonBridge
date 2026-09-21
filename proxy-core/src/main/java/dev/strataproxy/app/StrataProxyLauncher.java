@@ -69,7 +69,7 @@ import org.slf4j.LoggerFactory;
  * Main application entry point that wires configuration, registry, network, plugins, and shutdown.
  */
 public final class StrataProxyLauncher {
-    private static final String VERSION = "0.1.0-SNAPSHOT";
+    private static final String VERSION = "0.2.0-SNAPSHOT";
 
     private StrataProxyLauncher() {
     }
@@ -470,9 +470,22 @@ public final class StrataProxyLauncher {
                     .thenApply(result -> new PlayerTransfer(
                             result.success(),
                             result.outcome(),
+                            new dev.strataproxy.plugin.service.PlayerIdentity(null, ""),
                             result.player(),
                             result.sourceServer(),
-                            result.targetServer()));
+                            result.targetServer(),
+                            result.success() ? PlayerTransfer.TransferStage.NETWORK_READY : PlayerTransfer.TransferStage.REJECTED,
+                            !result.success(),
+                            result.success() ? result.targetServer() : result.sourceServer()));
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(
+                String playerName, String channel, byte[] payload) {
+            var current = server.get();
+            return current == null
+                    ? CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("server_not_started"))
+                    : current.sendPluginMessage(playerName, channel, payload);
         }
 
         @Override
@@ -484,14 +497,14 @@ public final class StrataProxyLauncher {
             var session = metrics.snapshot().playerSessions().get(playerName.trim());
             return session == null
                     ? Optional.empty()
-                    : Optional.of(new PlayerView(session.player(), session.server(), session.remoteAddress()));
+                    : Optional.of(new PlayerView(new dev.strataproxy.plugin.service.PlayerIdentity(session.playerId(), session.connectionId()), session.player(), session.server(), session.remoteAddress()));
         }
 
         @Override
         /** Provides online players. */
         public Collection<PlayerView> onlinePlayers() {
             return metrics.snapshot().playerSessions().values().stream()
-                    .map(session -> new PlayerView(session.player(), session.server(), session.remoteAddress()))
+                    .map(session -> new PlayerView(new dev.strataproxy.plugin.service.PlayerIdentity(session.playerId(), session.connectionId()), session.player(), session.server(), session.remoteAddress()))
                     .toList();
         }
     }

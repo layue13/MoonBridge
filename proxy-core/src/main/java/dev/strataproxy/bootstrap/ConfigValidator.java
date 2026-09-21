@@ -239,6 +239,9 @@ public final class ConfigValidator {
             errors.add("backendAgent.sharedSecret must be at least 32 characters when backendAgent is enabled");
         }
         validatePositive("backendAgent.heartbeatTimeout", backendAgent.heartbeatTimeout(), errors);
+        if (backendAgent.maxConnections() < 1 || backendAgent.maxQueuedConnections() < 0 || backendAgent.maxNonces() < 1) {
+            errors.add("backendAgent connection and nonce limits must be positive (queue may be zero)");
+        }
     }
 
     private static void validateFeatureSet(String field, java.util.Set<String> features, ArrayList<String> errors) {

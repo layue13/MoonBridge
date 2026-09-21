@@ -665,6 +665,12 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         return relaySessions.transferPlayer(playerName, targetServerName);
     }
 
+    /** Sends a plugin message to the current backend selected for one player. */
+    public CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
+        if (closed.get()) return CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("server_closed"));
+        return relaySessions.sendPluginMessage(playerName, channel, payload);
+    }
+
     @Override
     /** Provides close. */
     public void close() {

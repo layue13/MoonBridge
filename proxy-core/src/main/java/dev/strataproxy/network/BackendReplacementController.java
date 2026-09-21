@@ -3,7 +3,11 @@ package dev.strataproxy.network;
 import dev.strataproxy.observability.ProxyMetrics;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
+import dev.strataproxy.plugin.event.PlayerTransferEvent;
+import dev.strataproxy.plugin.service.PlayerIdentity;
+import dev.strataproxy.plugin.service.PlayerTransfer;
 import dev.strataproxy.codec.minecraft.MinecraftCompressionCodec;
+import dev.strataproxy.codec.minecraft.MinecraftVarInts;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.util.AttributeKey;
@@ -113,6 +117,44 @@ final class BackendReplacementController {
                         targetServerName));
             }
         }
+        return result;
+    }
+
+    CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(String channel, byte[] payload) {
+        var result = new CompletableFuture<dev.strataproxy.plugin.service.PluginMessageResult>();
+        var backend = session.backend();
+        if (backend == null || !backend.isActive()) {
+            result.complete(dev.strataproxy.plugin.service.PluginMessageResult.failure("backend_unavailable"));
+            return result;
+        }
+        backend.eventLoop().execute(() -> {
+            if (channel == null || channel.isBlank() || channel.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 128) {
+                result.complete(dev.strataproxy.plugin.service.PluginMessageResult.failure("invalid_channel"));
+                return;
+            }
+            var bytes = payload == null ? new byte[0] : payload.clone();
+            if (bytes.length > tuning.maxFrameBytes() || profile.serverboundCustomPayloadPacketId().isEmpty()) {
+                result.complete(dev.strataproxy.plugin.service.PluginMessageResult.failure("payload_too_large_or_unsupported"));
+                return;
+            }
+            var packet = backend.alloc().buffer();
+            try {
+                MinecraftVarInts.write(packet, profile.serverboundCustomPayloadPacketId().getAsInt());
+                writeString(packet, channel);
+                MinecraftCustomPayloadBodyCodec.writeLength(packet, profile.serverboundCustomPayloadLengthFormat(), bytes.length);
+                packet.writeBytes(bytes);
+                var frame = backend.alloc().buffer(MinecraftVarInts.encodedSize(packet.readableBytes()) + packet.readableBytes());
+                MinecraftVarInts.write(frame, packet.readableBytes());
+                frame.writeBytes(packet);
+                backend.writeAndFlush(frame).addListener(future -> result.complete(future.isSuccess()
+                        ? dev.strataproxy.plugin.service.PluginMessageResult.acceptedForWrite()
+                        : dev.strataproxy.plugin.service.PluginMessageResult.failure("write_failed")));
+            } catch (RuntimeException exception) {
+                result.complete(dev.strataproxy.plugin.service.PluginMessageResult.failure("encode_failed"));
+            } finally {
+                packet.release();
+            }
+        });
         return result;
     }
 
@@ -418,7 +460,7 @@ final class BackendReplacementController {
             metrics.routedConnection();
             metrics.serverConnectionOpened(nextServerName);
             if (!identity.playerName().isBlank()) {
-                metrics.playerSessionStarted(identity.playerName(), nextServerName, identity.remoteAddress());
+                metrics.playerSessionStarted(identity.playerName(), identity.playerId(), identity.connectionId(), nextServerName, identity.remoteAddress());
             }
             session.commitForgeHandshakeTrackerSwap(forgeTrackerSwap);
             completeTransfer(result, PlayerTransferResult.success(identity.playerName(), currentServerName, nextServerName));
@@ -579,6 +621,12 @@ final class BackendReplacementController {
         return PlayerTransferResult.failure(outcome, session.identity().playerName(), sourceServer, targetServer);
     }
 
+    private static void writeString(io.netty.buffer.ByteBuf output, String value) {
+        var bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        MinecraftVarInts.write(output, bytes.length);
+        output.writeBytes(bytes);
+    }
+
     private void completeTransfer(CompletableFuture<PlayerTransferResult> result, PlayerTransferResult transfer) {
         metrics.playerTransfer(
                 transfer.success(),
@@ -587,6 +635,16 @@ final class BackendReplacementController {
                 transfer.sourceServer(),
                 transfer.targetServer(),
                 session.identity().remoteAddress());
+        var identity = session.identity();
+        var stage = transfer.success() ? PlayerTransfer.TransferStage.NETWORK_READY
+                : "player_session_closed".equals(transfer.outcome()) ? PlayerTransfer.TransferStage.DISCONNECTED
+                : PlayerTransfer.TransferStage.REJECTED;
+        if (events != null) {
+            events.publish(new PlayerTransferEvent(
+                    new PlayerIdentity(identity.playerId(), identity.connectionId()), transfer.player(), transfer.sourceServer(),
+                    transfer.targetServer(), transfer.success(), transfer.outcome(), stage, !transfer.success(),
+                    transfer.success() ? transfer.targetServer() : session.serverName()));
+        }
         result.complete(transfer);
     }
 
