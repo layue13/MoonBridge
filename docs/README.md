@@ -6,6 +6,7 @@
 | YAML 参数 | [配置说明](configuration.md) |
 | 部署与检查 | [运维说明](operations-manual.md) |
 | 插件与游戏内命令 | [插件开发](plugins.md) |
+| Bukkit 后端自动注册 | [Bukkit 适配器](../integrations/bukkit-backend-agent/README.md) |
 | 模块边界 | [架构](architecture.md) |
 | 协议支持范围 | [协议矩阵](protocol-version-matrix.md) |
 

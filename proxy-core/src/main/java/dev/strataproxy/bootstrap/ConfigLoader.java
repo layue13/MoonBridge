@@ -126,6 +126,8 @@ public final class ConfigLoader {
         /** Public field for native runtime. */
         @JsonProperty("native")
         public NativeFile nativeRuntime = new NativeFile();
+        /** YAML value for the authenticated backend-agent endpoint. */
+        public BackendAgentFile backendAgent = new BackendAgentFile();
         /** YAML value for servers. */
         /** Public field for servers. */
         public List<ServerFile> servers = List.of();
@@ -133,6 +135,7 @@ public final class ConfigLoader {
         LoadedProxyConfig toLoadedConfig(Path configDirectory) {
             var nativeFile = nativeRuntime == null ? new NativeFile() : nativeRuntime;
             var statusFile = status == null ? new StatusFile() : status;
+            var backendAgentFile = backendAgent == null ? new BackendAgentFile() : backendAgent;
             var bind = parseAddress(network.bind, 25577);
             var proxy = new ProxyConfig(
                     bind,
@@ -192,7 +195,12 @@ public final class ConfigLoader {
                             nativeFile.preferOpenSslTls,
                             nativeFile.preferNativeCompression,
                             nativeFile.disabledFeatures,
-                            nativeFile.forcedFeatures));
+                            nativeFile.forcedFeatures),
+                    new ProxyConfig.BackendAgentConfig(
+                            backendAgentFile.enabled,
+                            parseAddress(backendAgentFile.bind, 25578),
+                            backendAgentFile.sharedSecret,
+                            java.time.Duration.ofMillis(parseDurationMillis(backendAgentFile.heartbeatTimeout, 30_000))));
             var descriptors = registry.staticServers
                     ? servers.stream().map(ServerFile::toDescriptor).toList()
                     : List.<ServerDescriptor>of();
@@ -220,6 +228,20 @@ public final class ConfigLoader {
                 throw new IllegalArgumentException("failed to read status.faviconPath: " + path, exception);
             }
         }
+    }
+
+    /**
+     * YAML configuration for the narrow backend-agent registration endpoint.
+     */
+    public static final class BackendAgentFile {
+        /** Enables the endpoint. */
+        public boolean enabled = false;
+        /** Bind address; keep loopback unless backend agents are on another protected host. */
+        public String bind = "127.0.0.1:25578";
+        /** Shared secret used to authenticate each request. */
+        public String sharedSecret = "";
+        /** Maximum interval without a heartbeat before an agent-owned backend is removed. */
+        public String heartbeatTimeout = "30s";
     }
 
     /**

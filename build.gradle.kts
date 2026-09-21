@@ -9,6 +9,7 @@ import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.bundling.Zip
 import java.security.MessageDigest
@@ -30,6 +31,35 @@ tasks.register("check") {
     description = "Runs root-level StrataProxy verification tasks."
 }
 
+val bukkitAgentDirectory = layout.projectDirectory.dir("integrations/bukkit-backend-agent").asFile
+val rootGradleWrapper = layout.projectDirectory.file(
+    if (System.getProperty("os.name").lowercase().contains("windows")) "gradlew.bat" else "gradlew"
+).asFile
+
+val buildBukkitBackendAgent = tasks.register<Exec>("buildBukkitBackendAgent") {
+    group = "verification"
+    description = "Builds the standalone Java 8-compatible Bukkit backend agent."
+    workingDir = projectDir
+    commandLine(rootGradleWrapper.absolutePath, "-p", bukkitAgentDirectory.absolutePath, "clean", "jar", "--no-daemon")
+}
+
+val publishBukkitBackendAgent = tasks.register<Exec>("publishBukkitBackendAgent") {
+    group = "publishing"
+    description = "Publishes the standalone Bukkit backend agent through its native Gradle publication."
+    workingDir = projectDir
+    commandLine(rootGradleWrapper.absolutePath, "-p", bukkitAgentDirectory.absolutePath, "publish", "--no-daemon")
+}
+
+tasks.named("check") {
+    dependsOn(buildBukkitBackendAgent)
+}
+
+tasks.register("publish") {
+    group = "publishing"
+    description = "Publishes StrataProxy plugin contracts and official Bukkit integration."
+    dependsOn(":proxy-plugin-api:publish", publishBukkitBackendAgent)
+}
+
 gradle.projectsEvaluated {
     val releaseName = "strataproxy-${project.version}"
     val releaseStaging = layout.buildDirectory.dir("release/staging/$releaseName")
@@ -37,7 +67,7 @@ gradle.projectsEvaluated {
     val releaseChecksum = layout.buildDirectory.file("release/$releaseName.zip.sha256")
     val releaseSbom = layout.buildDirectory.file("release/$releaseName.sbom.cdx.json")
     val releaseMetadata = layout.buildDirectory.file("release/$releaseName.metadata.json")
-    val app = project(":proxy-app")
+    val app = project(":proxy-core")
     val pluginApi = project(":proxy-plugin-api")
     val appDistZip = app.layout.buildDirectory.file("distributions/strataproxy-${project.version}.zip")
     val pluginApiJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}.jar")
@@ -107,7 +137,7 @@ gradle.projectsEvaluated {
         from("examples") {
             into("examples")
         }
-        from("proxy-app/src/main/resources/config") {
+        from("proxy-core/src/main/resources/config") {
             into("config")
         }
         from(layout.buildDirectory.file("release/RELEASE-MANIFEST.txt"))

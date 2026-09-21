@@ -31,7 +31,25 @@ public record ProxyConfig(
         StatusConfig status,
         AuthConfig auth,
         ForwardingConfig forwarding,
-        NativeConfig nativeRuntime) {
+        NativeConfig nativeRuntime,
+        BackendAgentConfig backendAgent) {
+    /**
+     * Compatibility constructor for callers that do not configure the backend-agent endpoint.
+     */
+    public ProxyConfig(
+            InetSocketAddress bindAddress,
+            int workerThreads,
+            boolean nativeTransport,
+            NetworkConfig network,
+            RegistryConfig registry,
+            CompressionConfig compression,
+            ObservabilityConfig observability,
+            StatusConfig status,
+            AuthConfig auth,
+            ForwardingConfig forwarding,
+            NativeConfig nativeRuntime) {
+        this(bindAddress, workerThreads, nativeTransport, network, registry, compression, observability, status, auth, forwarding, nativeRuntime, BackendAgentConfig.defaults());
+    }
     /**
      * Validates and normalizes record components.
      */
@@ -47,6 +65,7 @@ public record ProxyConfig(
         auth = auth == null ? AuthConfig.defaults() : auth;
         forwarding = forwarding == null ? ForwardingConfig.defaults() : forwarding;
         nativeRuntime = nativeRuntime == null ? NativeConfig.defaults() : nativeRuntime;
+        backendAgent = backendAgent == null ? BackendAgentConfig.defaults() : backendAgent;
     }
 
     /**
@@ -75,7 +94,28 @@ public record ProxyConfig(
                 StatusConfig.defaults(),
                 AuthConfig.defaults(),
                 ForwardingConfig.defaults(),
-                NativeConfig.defaults());
+                NativeConfig.defaults(),
+                BackendAgentConfig.defaults());
+    }
+
+    /**
+     * Dedicated, authenticated endpoint used only by backend agents such as the Bukkit adapter.
+     * It is disabled by default and is not a general-purpose administration API.
+     */
+    public record BackendAgentConfig(
+            boolean enabled,
+            InetSocketAddress bindAddress,
+            String sharedSecret,
+            Duration heartbeatTimeout) {
+        public BackendAgentConfig {
+            bindAddress = bindAddress == null ? new InetSocketAddress("127.0.0.1", 25578) : bindAddress;
+            sharedSecret = sharedSecret == null ? "" : sharedSecret;
+            heartbeatTimeout = heartbeatTimeout == null ? Duration.ofSeconds(30) : heartbeatTimeout;
+        }
+
+        public static BackendAgentConfig defaults() {
+            return new BackendAgentConfig(false, new InetSocketAddress("127.0.0.1", 25578), "", Duration.ofSeconds(30));
+        }
     }
 
     /**

@@ -2,7 +2,7 @@
 
 StrataProxy 会从当前配置文件旁边的 `plugins/` 目录加载代理插件。插件 jar 是可选的；目录不存在时代理照常启动。
 
-公开插件接口是 `dev.strataproxy:proxy-plugin-api` artifact。插件项目只应该依赖这个 API；`proxy-core`、`proxy-app` 和其他运行时模块都是内部实现细节。
+公开插件接口是 `dev.strataproxy:proxy-plugin-api` artifact。插件项目只应该依赖这个 API；`proxy-core` 是内部实现细节。
 
 在本仓库本地开发时，先发布 API 到本机 Maven：
 

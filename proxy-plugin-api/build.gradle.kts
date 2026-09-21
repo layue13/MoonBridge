@@ -25,8 +25,14 @@ publishing {
     }
     repositories {
         maven {
-            name = "localPluginApi"
-            url = uri(layout.buildDirectory.dir("repo"))
+            name = "giteaPackages"
+            url = uri(providers.environmentVariable("MAVEN_URL")
+                .orElse("https://git.nest.potatolab.uk:8443/api/packages/layue13/maven")
+                .get())
+            credentials {
+                username = providers.environmentVariable("MAVEN_USER").orElse("NONE").get()
+                password = providers.environmentVariable("MAVEN_PASSWORD").orElse("NONE").get()
+            }
         }
     }
 }

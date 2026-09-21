@@ -22,6 +22,4 @@ rootProject.name = "strataproxy"
 include(
     "proxy-core",
     "proxy-plugin-api",
-    "proxy-plugin",
-    "proxy-app",
 )

@@ -130,6 +130,7 @@ public final class ConfigValidator {
         validateStatus(config.status(), errors);
         validateForwarding(config.forwarding(), errors);
         validateNative(config.nativeRuntime(), errors, warnings);
+        validateBackendAgent(config.backendAgent(), errors);
 
     }
 
@@ -229,6 +230,17 @@ public final class ConfigValidator {
         }
     }
 
+    private static void validateBackendAgent(ProxyConfig.BackendAgentConfig backendAgent, ArrayList<String> errors) {
+        if (backendAgent == null || !backendAgent.enabled()) {
+            return;
+        }
+        validateAddress("backendAgent.bind", backendAgent.bindAddress(), errors);
+        if (backendAgent.sharedSecret().trim().length() < 32) {
+            errors.add("backendAgent.sharedSecret must be at least 32 characters when backendAgent is enabled");
+        }
+        validatePositive("backendAgent.heartbeatTimeout", backendAgent.heartbeatTimeout(), errors);
+    }
+
     private static void validateFeatureSet(String field, java.util.Set<String> features, ArrayList<String> errors) {
         if (features == null) {
             return;
@@ -263,7 +275,7 @@ public final class ConfigValidator {
                 warnings.add("server." + server.name() + " starts in drain mode");
             }
         }
-        if (count == 0) {
+        if (count == 0 && (config.backendAgent() == null || !config.backendAgent().enabled())) {
             errors.add("at least one server must be configured");
         }
     }

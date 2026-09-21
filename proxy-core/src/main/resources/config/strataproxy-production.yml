@@ -25,6 +25,13 @@ registry:
   # Use minecraft-status when backends should only receive traffic after a valid server-list response.
   healthCheckMode: "minecraft-status"
 
+# Enable only when using an authenticated backend agent such as integrations/bukkit-backend-agent.
+backendAgent:
+  enabled: false
+  bind: "127.0.0.1:25578"
+  sharedSecret: "${STRATAPROXY_BACKEND_AGENT_SECRET:}"
+  heartbeatTimeout: "30s"
+
 compression:
   mode: adaptive
   minThreshold: 256

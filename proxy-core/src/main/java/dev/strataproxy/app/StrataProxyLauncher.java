@@ -4,6 +4,7 @@ import dev.strataproxy.app.registry.RegistryPersistenceService;
 import dev.strataproxy.app.registry.JsonRegistryStore;
 import dev.strataproxy.app.registry.NoopRegistryStore;
 import dev.strataproxy.app.registry.RegistryStore;
+import dev.strataproxy.agent.BackendAgentServer;
 import dev.strataproxy.bootstrap.ConfigLoader;
 import dev.strataproxy.bootstrap.ConfigValidationResult;
 import dev.strataproxy.bootstrap.ConfigValidator;
@@ -255,6 +256,16 @@ public final class StrataProxyLauncher {
             loadReporter.start();
             started.add(loadReporter);
             out.println("StrataProxy observed load flush interval " + config.observability().flushInterval());
+
+            if (config.backendAgent().enabled()) {
+                var backendAgent = new BackendAgentServer(
+                        config.backendAgent(),
+                        new PluginServerService(registry, registryPersistence, scheduler, "bukkit-agent"));
+                backendAgent.start();
+                started.add(backendAgent);
+                out.println("StrataProxy backend-agent bound on " + config.backendAgent().bindAddress()
+                        + " heartbeatTimeout=" + config.backendAgent().heartbeatTimeout());
+            }
 
             var server = new NettyProxyNetworkServer(
                     config.resolvedWorkerThreads(),

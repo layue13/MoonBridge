@@ -33,4 +33,18 @@ servers:
 
 `network` 控制监听、帧上限和连接限制；`registry` 控制静态后端、健康检查和本地持久化；`compression` 控制 Minecraft 压缩协商与重写；`observability.flushIntervalSeconds` 仅控制后端已观测负载写回间隔。
 
-`status` 控制服务器列表响应，`auth` 控制 online-mode 登录校验，`forwarding` 可选 `none`、`velocity-modern`、`bungee-legacy` 或 `bungee-guard`，`native` 控制 Netty 原生传输偏好。完整默认值见 [strataproxy.yml](../proxy-app/src/main/resources/config/strataproxy.yml)。
+`status` 控制服务器列表响应，`auth` 控制 online-mode 登录校验，`forwarding` 可选 `none`、`velocity-modern`、`bungee-legacy` 或 `bungee-guard`，`native` 控制 Netty 原生传输偏好。完整默认值见 [strataproxy.yml](../proxy-core/src/main/resources/config/strataproxy.yml)。
+
+## Bukkit 后端自动注册
+
+`backendAgent` 默认关闭，且不是 Admin API。启用后只允许持有共享密钥的后端适配器注册、发送心跳或下线自己的服务：
+
+```yaml
+backendAgent:
+  enabled: true
+  bind: "127.0.0.1:25578"
+  sharedSecret: "至少32字符的随机密钥"
+  heartbeatTimeout: "30s"
+```
+
+若 Bukkit 服务在另一台受保护的主机，可把 `bind` 改为内网地址，并通过防火墙只允许该主机访问。适配器位于 [`integrations/bukkit-backend-agent`](../integrations/bukkit-backend-agent)，其 `config.yml` 的密钥必须完全一致；心跳超时后代理会移除该适配器注册的后端。

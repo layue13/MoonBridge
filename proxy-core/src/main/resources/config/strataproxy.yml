@@ -25,6 +25,14 @@ registry:
   # tcp keeps compatibility; minecraft-status verifies the backend speaks the Minecraft status protocol.
   healthCheckMode: "tcp"
 
+# Dedicated backend-agent endpoint for the official Bukkit adapter. This is not an Admin API.
+# Keep it disabled unless a backend agent is installed; use a random secret of at least 32 characters.
+backendAgent:
+  enabled: false
+  bind: "127.0.0.1:25578"
+  sharedSecret: ""
+  heartbeatTimeout: "30s"
+
 compression:
   mode: adaptive
   minThreshold: 256
