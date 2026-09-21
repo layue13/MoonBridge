@@ -24,26 +24,13 @@ registry:
 
 compression:
   mode: off
-  codec: zlib
   minThreshold: 256
   maxThreshold: 8192
   cpuGuard: 0.75
   rewriteEnabled: false
   rewriteMaxEventLoopDelayMillis: 25
-  zstdLevel: 1
-  zstdDictionaryPath: ""
-
-packetAnalysis:
-  largePayloadWarnBytes: "1mb"
-  unknownChannelThrottleBytes: "256kb"
-  moddedHandshakeWarnBytes: "2mb"
-  customPayloadFloodMaxCount: 200
-  customPayloadFloodWindow: "10s"
 
 observability:
-  prometheus: true
-  packetTopN: 50
-  anomalySampling: true
   flushIntervalSeconds: 5
 
 status:
@@ -76,20 +63,6 @@ native:
   preferNativeCompression: false
   disabledFeatures: []
   forcedFeatures: []
-
-admin:
-  enabled: true
-  bind: "127.0.0.1:8080"
-  bearerToken: ""
-  tls:
-    enabled: false
-    keyStorePath: ""
-    keyStorePassword: ""
-    keyStoreType: "PKCS12"
-    trustStorePath: ""
-    trustStorePassword: ""
-    trustStoreType: "PKCS12"
-    clientAuth: false
 
 servers:
   - name: "lobby-1"

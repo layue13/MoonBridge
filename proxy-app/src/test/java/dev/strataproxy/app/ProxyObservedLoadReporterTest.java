@@ -38,8 +38,6 @@ final class ProxyObservedLoadReporterTest {
 
             metrics.frontendToBackendBytes("survival-1", 512);
             metrics.backendToFrontendBytes("survival-1", 1024);
-            metrics.packetTraffic("survival-1", ProxyMetrics.CompressionDirection.FRONTEND_TO_BACKEND, "UNCOMPRESSED", 1, 256, 0);
-            metrics.packetTraffic("survival-1", ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND, "UNCOMPRESSED", 2, 512, 0);
             metrics.eventLoopDelayNanos(2_500_000);
             reporter.flushOnce();
         }
@@ -50,7 +48,7 @@ final class ProxyObservedLoadReporterTest {
         assertEquals(240, load.hardCapacity());
         assertEquals(256, load.inboundBytesPerSecond());
         assertEquals(512, load.outboundBytesPerSecond());
-        assertEquals(1, load.packetsPerSecond());
+        assertEquals(0, load.packetsPerSecond());
         assertEquals(2.5d, load.eventLoopDelayMillis());
     }
 }

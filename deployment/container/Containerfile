@@ -14,9 +14,8 @@ RUN mkdir -p /opt/strataproxy/data \
     && cp /opt/strataproxy/config/strataproxy-production.yml /opt/strataproxy/config/strataproxy.yml \
     && chown -R strataproxy:strataproxy /opt/strataproxy
 USER strataproxy
-EXPOSE 25577 8080
+EXPOSE 25577
 VOLUME ["/opt/strataproxy/data"]
 ENV JAVA_OPTS="-Xms2g -Xmx2g -XX:MaxDirectMemorySize=2g -XX:+UseZGC -XX:+AlwaysPreTouch -XX:+ExitOnOutOfMemoryError -Dio.netty.leakDetection.level=disabled"
-ENV STRATAPROXY_ADMIN_TOKEN="change-me"
 ENTRYPOINT ["/opt/strataproxy/bin/strataproxy"]
 CMD ["/opt/strataproxy/config/strataproxy.yml"]

@@ -42,11 +42,9 @@ final class ProxyObservedLoadReporter implements AutoCloseable {
         for (var server : registry.snapshot()) {
             var name = server.descriptor().name();
             var traffic = snapshot.serverTraffic().getOrDefault(name, new ProxyMetrics.ServerTraffic(0, 0));
-            var packetCount = packetCount(snapshot, name);
             var current = new PreviousServerCounters(
                     traffic.frontendToBackendBytes(),
-                    traffic.backendToFrontendBytes(),
-                    packetCount);
+                    traffic.backendToFrontendBytes());
             var prior = previous.getOrDefault(name, current);
             var load = server.load();
             registry.updateLoad(name, new ServerLoad(
@@ -55,7 +53,7 @@ final class ProxyObservedLoadReporter implements AutoCloseable {
                     load.hardCapacity(),
                     rate(current.frontendToBackendBytes() - prior.frontendToBackendBytes(), seconds),
                     rate(current.backendToFrontendBytes() - prior.backendToFrontendBytes(), seconds),
-                    rate(current.packets() - prior.packets(), seconds),
+                    0,
                     snapshot.eventLoopDelayNanos() / 1_000_000.0d));
             next.put(name, current);
         }
@@ -76,20 +74,12 @@ final class ProxyObservedLoadReporter implements AutoCloseable {
         }
     }
 
-    private static long packetCount(ProxyMetrics.Snapshot snapshot, String server) {
-        return snapshot.packetTraffic().entrySet().stream()
-                .filter(entry -> entry.getKey().server().equals(server))
-                .mapToLong(entry -> entry.getValue().packets())
-                .sum();
-    }
-
     private static long rate(long delta, double seconds) {
         return Math.max(0L, Math.round(delta / seconds));
     }
 
     private record PreviousServerCounters(
             long frontendToBackendBytes,
-            long backendToFrontendBytes,
-            long packets) {
+            long backendToFrontendBytes) {
     }
 }

@@ -16,7 +16,7 @@ network:
   proxyProtocol: false
 
 registry:
-  staticServers: false
+  staticServers: true
   persistenceEnabled: true
   persistencePath: "${STRATAPROXY_DATA_DIR:../data}/registry.json"
   healthCheckEnabled: true
@@ -27,26 +27,13 @@ registry:
 
 compression:
   mode: adaptive
-  codec: zlib
   minThreshold: 256
   maxThreshold: 8192
   cpuGuard: 0.75
   rewriteEnabled: false
   rewriteMaxEventLoopDelayMillis: 25
-  zstdLevel: 1
-  zstdDictionaryPath: ""
-
-packetAnalysis:
-  largePayloadWarnBytes: "1mb"
-  unknownChannelThrottleBytes: "256kb"
-  moddedHandshakeWarnBytes: "2mb"
-  customPayloadFloodMaxCount: 200
-  customPayloadFloodWindow: "10s"
 
 observability:
-  prometheus: true
-  packetTopN: 50
-  anomalySampling: true
   flushIntervalSeconds: 5
 
 status:
@@ -83,18 +70,16 @@ native:
   disabledFeatures: []
   forcedFeatures: []
 
-admin:
-  enabled: true
-  bind: "127.0.0.1:8080"
-  bearerToken: "${STRATAPROXY_ADMIN_TOKEN:}"
-  tls:
-    enabled: false
-    keyStorePath: ""
-    keyStorePassword: ""
-    keyStoreType: "PKCS12"
-    trustStorePath: ""
-    trustStorePassword: ""
-    trustStoreType: "PKCS12"
-    clientAuth: false
-
-servers: []
+servers:
+  - name: "lobby-1"
+    address: "127.0.0.1:25565"
+    tags: ["lobby"]
+    capabilities: ["modern-forwarding"]
+    protocolRange: "any"
+    weight: 100
+    softCapacity: 500
+    hardCapacity: 600
+    drainMode: false
+    metadata:
+      group: "lobby"
+      host: "localhost"

@@ -1,45 +1,12 @@
-# StrataProxy Documentation
+# StrataProxy 文档
 
-This is the user-facing documentation index. If you have used BungeeCord, Waterfall, or Velocity before, start with the short path below: install, edit YAML, start the proxy, then manage servers with the Admin CLI.
-
-Chinese documentation is under [zh-CN](zh-CN/README.md).
-
-## Start Here
-
-1. [Quick Start](quick-start.md): build the proxy, edit the first backend, start it, and check that it answers.
-2. [Configuration Guide](configuration.md): every important YAML section explained with copyable examples.
-3. [Command Reference](commands.md): Admin CLI and query/load-test commands grouped by task.
-4. [Zstd Compression Tuning](compression-zstd.md): optional modded-client Zstd codec, sample collection, dictionary training, and rollout guidance.
-5. [Protocol Version Matrix](protocol-version-matrix.md): exact Minecraft version support, packet-format assumptions, and required gates before claiming compatibility.
-6. [JavaDoc Reference](javadoc.md): source-level API documentation scope and generation workflow.
-7. [Operations Manual](operations-manual.md): full production operations, observability, troubleshooting, and acceptance checks.
-
-## Common Tasks
-
-| I want to... | Read |
+| 目标 | 文档 |
 | --- | --- |
-| Run one proxy in front of one backend | [Quick Start](quick-start.md) |
-| Add or remove backend servers while the proxy is running | [Command Reference: Backend Servers](commands.md#backend-servers) |
-| Understand what each config key does | [Configuration Guide](configuration.md) |
-| Use Velocity or Bungee-style IP forwarding | [Configuration Guide: Forwarding](configuration.md#forwarding) |
-| Write a proxy-side plugin or use in-game commands | [Plugins and In-Game Commands](plugins.md) |
-| Expose the Admin API safely | [Configuration Guide: Admin API](configuration.md#admin-api) |
-| Tune compression for modded traffic | [Zstd Compression Tuning](compression-zstd.md) |
-| Check whether a Minecraft version is actually supported | [Protocol Version Matrix](protocol-version-matrix.md) |
-| Deploy with systemd or a container | [Deployment Notes](../deployment/README.md) |
-| Run smoke or acceptance load checks | [Performance Profiles](../deployment/performance/README.md) |
-| Add Prometheus or Grafana | [Prometheus](../deployment/observability/prometheus/README.md) and [Grafana](../deployment/observability/grafana/README.md) |
+| 本地启动 | [快速开始](quick-start.md) |
+| YAML 参数 | [配置说明](configuration.md) |
+| 部署与检查 | [运维说明](operations-manual.md) |
+| 插件与游戏内命令 | [插件开发](plugins.md) |
+| 模块边界 | [架构](architecture.md) |
+| 协议支持范围 | [协议矩阵](protocol-version-matrix.md) |
 
-## Document Map
-
-| Document | Purpose |
-| --- | --- |
-| [Quick Start](quick-start.md) | First successful local or staging run |
-| [Configuration Guide](configuration.md) | Practical YAML configuration reference |
-| [Command Reference](commands.md) | Operator command cookbook |
-| [Plugins and In-Game Commands](plugins.md) | Player commands and plugin jar entry points |
-| [Protocol Version Matrix](protocol-version-matrix.md) | Supported Minecraft protocol profiles and version-gate checklist |
-| [JavaDoc Reference](javadoc.md) | Source-level API documentation scope and generation workflow |
-| [Operations Manual](operations-manual.md) | Complete production runbook |
-| [Zstd Compression Tuning](compression-zstd.md) | Minecraft-specific Zstd and dictionary workflow |
-| [Deployment Notes](../deployment/README.md) | Linux service, container, JVM, and release bundle notes |
+文档只描述当前代码。Admin、数据包抓取、包异常分析和 Prometheus 端点均已删除。

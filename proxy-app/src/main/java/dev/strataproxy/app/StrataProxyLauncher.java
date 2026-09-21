@@ -1,12 +1,9 @@
 package dev.strataproxy.app;
 
-import dev.strataproxy.admin.AdminHttpServer;
-import dev.strataproxy.admin.AdminRegistryService;
-import dev.strataproxy.admin.JsonRegistryStore;
-import dev.strataproxy.admin.NoopRegistryStore;
-import dev.strataproxy.admin.PlayerTransferService;
-import dev.strataproxy.admin.RegistryStore;
-import dev.strataproxy.analysis.CustomPayloadAnomalyPolicy;
+import dev.strataproxy.app.registry.RegistryPersistenceService;
+import dev.strataproxy.app.registry.JsonRegistryStore;
+import dev.strataproxy.app.registry.NoopRegistryStore;
+import dev.strataproxy.app.registry.RegistryStore;
 import dev.strataproxy.bootstrap.ConfigLoader;
 import dev.strataproxy.bootstrap.ConfigValidationResult;
 import dev.strataproxy.bootstrap.ConfigValidator;
@@ -49,7 +46,6 @@ import dev.strataproxy.api.server.ServerDescriptor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyStore;
 import java.util.Collection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -66,13 +62,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManagerFactory;
 import org.slf4j.LoggerFactory;
 
 /**
- * Main application entry point that wires configuration, registry, network, plugins, admin API, and shutdown.
+ * Main application entry point that wires configuration, registry, network, plugins, and shutdown.
  */
 public final class StrataProxyLauncher {
     private static final String VERSION = "0.1.0-SNAPSHOT";
@@ -178,25 +171,25 @@ public final class StrataProxyLauncher {
                     registry.register(descriptor);
                 }
             }
-            var adminRegistry = new AdminRegistryService(registry, registryStore);
-            adminRegistry.persist();
+            var registryPersistence = new RegistryPersistenceService(registry, registryStore);
+            registryPersistence.persist();
 
             var router = new WeightedHealthAwareRouter(registry);
             var resolver = new RoutingBackendResolver(router, registry);
-            var metrics = new ProxyMetrics(config.observability().anomalySampling());
+            var metrics = new ProxyMetrics();
             var commandRegistry = new DefaultCommandRegistry();
             var eventBus = new SimpleEventBus();
             var scheduler = new DefaultScheduler();
             started.add(scheduler);
             var serverReference = new AtomicReference<NettyProxyNetworkServer>();
             var pluginPlayers = new PluginPlayerService(serverReference, metrics);
-            var pluginServers = new PluginServerService(registry, adminRegistry, scheduler, "strataproxy");
+            var pluginServers = new PluginServerService(registry, registryPersistence, scheduler, "strataproxy");
             BuiltInProxyCommands.register(commandRegistry, pluginPlayers, pluginServers);
             var pluginManager = new PluginManager(
                     commandRegistry,
                     eventBus,
                     pluginPlayers,
-                    metadata -> new PluginServerService(registry, adminRegistry, scheduler, metadata.id()),
+                    metadata -> new PluginServerService(registry, registryPersistence, scheduler, metadata.id()),
                     scheduler,
                     LoggerFactory.getLogger("dev.strataproxy.plugin"));
             started.add(pluginManager);
@@ -216,13 +209,6 @@ public final class StrataProxyLauncher {
                     nativeDecision.requireNativeTransport(),
                     nativeDecision.capabilities().featureMap(nativeDecision.enabledFeatures()));
             var compressionStrategy = CompressionStrategies.from(config.compression().mode());
-            var customPayloadPolicy = new CustomPayloadAnomalyPolicy(
-                    config.packetAnalysis().largePayloadWarnBytes(),
-                    config.packetAnalysis().unknownChannelThrottleBytes(),
-                    config.packetAnalysis().moddedHandshakeWarnBytes(),
-                    config.packetAnalysis().customPayloadFloodMaxCount(),
-                    config.packetAnalysis().customPayloadFloodWindow());
-
             out.println("StrataProxy config: " + configPath.toAbsolutePath());
             out.println("StrataProxy servers: " + registry.snapshot().size());
             out.println("StrataProxy compression: " + config.compression().mode()
@@ -290,7 +276,7 @@ public final class StrataProxyLauncher {
                     config.compression().minThreshold(),
                     config.compression().maxThreshold(),
                     config.compression().cpuGuard(),
-                    customPayloadPolicy,
+                    null,
                     authRuntime(config.auth()),
                     forwardingRuntime(config.forwarding()),
                     statusRuntime(config.status(), metrics),
@@ -306,25 +292,6 @@ public final class StrataProxyLauncher {
             server.bind(config.bindAddress()).toCompletableFuture().join();
             out.println("StrataProxy bound on " + server.bindAddress() + " using " + server.transportName() + " transport");
 
-            if (config.admin().enabled()) {
-                var adminSslContext = adminSslContext(config.admin().tls());
-                var admin = new AdminHttpServer(
-                        config.admin().bindAddress(),
-                        adminRegistry,
-                        metrics,
-                        config.admin().bearerToken(),
-                        config.observability().packetTopN(),
-                        config.observability().prometheus(),
-                        adminSslContext,
-                        config.admin().tls().clientAuth(),
-                        playerTransferService(server));
-                admin.start();
-                started.add(admin);
-                out.println("StrataProxy admin listening on "
-                        + (adminSslContext == null ? "http://" : "https://")
-                        + config.admin().bindAddress()
-                        + (config.admin().tls().clientAuth() ? " with client certificate authentication" : ""));
-            }
             eventBus.publish(new ProxyStartedEvent());
             var running = new RunningProxy(server, List.copyOf(started), metrics);
             if (registerShutdownHooks) {
@@ -387,37 +354,6 @@ public final class StrataProxyLauncher {
         return current.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
-    private static SSLContext adminSslContext(ProxyConfig.AdminTlsConfig tls) throws Exception {
-        if (tls == null || !tls.enabled()) {
-            return null;
-        }
-        var keyStore = loadKeyStore(tls.keyStoreType(), tls.keyStorePath(), tls.keyStorePassword());
-        var keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        keyManagerFactory.init(keyStore, tls.keyStorePassword().toCharArray());
-
-        TrustManagerFactory trustManagerFactory = null;
-        if (tls.clientAuth()) {
-            var trustStore = loadKeyStore(tls.trustStoreType(), tls.trustStorePath(), tls.trustStorePassword());
-            trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            trustManagerFactory.init(trustStore);
-        }
-
-        var context = SSLContext.getInstance("TLS");
-        context.init(
-                keyManagerFactory.getKeyManagers(),
-                trustManagerFactory == null ? null : trustManagerFactory.getTrustManagers(),
-                null);
-        return context;
-    }
-
-    private static KeyStore loadKeyStore(String type, String path, String password) throws Exception {
-        var store = KeyStore.getInstance(type);
-        try (var input = Files.newInputStream(Path.of(path))) {
-            store.load(input, password.toCharArray());
-        }
-        return store;
-    }
-
     private static Path resolveConfigRelativePath(Path configPath, String configuredPath) {
         var path = Path.of(configuredPath);
         if (path.isAbsolute()) {
@@ -443,26 +379,6 @@ public final class StrataProxyLauncher {
                 registry.healthCheckTimeout(),
                 registry.healthCheckMode());
 
-        var admin = config.admin();
-        var tls = admin.tls();
-        var resolvedTls = new ProxyConfig.AdminTlsConfig(
-                tls.enabled(),
-                tls.keyStorePath().isBlank()
-                        ? tls.keyStorePath()
-                        : resolveConfigRelativePath(configPath, tls.keyStorePath()).toString(),
-                tls.keyStorePassword(),
-                tls.keyStoreType(),
-                tls.trustStorePath().isBlank()
-                        ? tls.trustStorePath()
-                        : resolveConfigRelativePath(configPath, tls.trustStorePath()).toString(),
-                tls.trustStorePassword(),
-                tls.trustStoreType(),
-                tls.clientAuth());
-        var resolvedAdmin = new ProxyConfig.AdminConfig(
-                admin.enabled(),
-                admin.bindAddress(),
-                admin.bearerToken(),
-                resolvedTls);
         var resolvedConfig = new ProxyConfig(
                 config.bindAddress(),
                 config.workerThreads(),
@@ -470,9 +386,7 @@ public final class StrataProxyLauncher {
                 config.network(),
                 resolvedRegistry,
                 config.compression(),
-                config.packetAnalysis(),
                 config.observability(),
-                resolvedAdmin,
                 config.status(),
                 config.auth(),
                 config.forwarding(),
@@ -523,16 +437,6 @@ public final class StrataProxyLauncher {
                         .map(player -> new MinecraftStatusRuntime.SamplePlayer(player.name(), player.id()))
                         .toList(),
                 () -> metrics.snapshot().playerSessions().size());
-    }
-
-    private static PlayerTransferService playerTransferService(NettyProxyNetworkServer server) {
-        return (playerName, targetServer) -> server.transferPlayer(playerName, targetServer)
-                .thenApply(result -> new PlayerTransferService.TransferResult(
-                        result.success(),
-                        result.outcome(),
-                        result.player(),
-                        result.sourceServer(),
-                        result.targetServer()));
     }
 
     private static final class PluginPlayerService implements dev.strataproxy.plugin.service.PlayerService {
@@ -588,17 +492,17 @@ public final class StrataProxyLauncher {
         private static final String PERSISTENCE_KEY = "strataproxy.persistence";
 
         private final dev.strataproxy.api.server.ServerRegistry registry;
-        private final AdminRegistryService adminRegistry;
+        private final RegistryPersistenceService registryPersistence;
         private final Scheduler scheduler;
         private final String pluginId;
 
         private PluginServerService(
                 dev.strataproxy.api.server.ServerRegistry registry,
-                AdminRegistryService adminRegistry,
+                RegistryPersistenceService registryPersistence,
                 Scheduler scheduler,
                 String pluginId) {
             this.registry = registry;
-            this.adminRegistry = adminRegistry;
+            this.registryPersistence = registryPersistence;
             this.scheduler = scheduler;
             this.pluginId = pluginId == null || pluginId.isBlank() ? "unknown" : pluginId.trim();
         }
@@ -643,7 +547,7 @@ public final class StrataProxyLauncher {
                 }
                 var descriptor = descriptor(registration);
                 var server = registration.persistence() == ServerPersistence.PERSISTENT
-                        ? adminRegistry.register(descriptor)
+                        ? registryPersistence.register(descriptor)
                         : registry.registerOrReplace(descriptor);
                 return ServerMutationResult.success("registered", view(server));
             });
@@ -668,7 +572,7 @@ public final class StrataProxyLauncher {
                         request.migrateExistingPlayers(),
                         request.gracePeriod());
                 var removed = request.persistence() == ServerPersistence.PERSISTENT
-                        ? adminRegistry.unregister(name, policy)
+                        ? registryPersistence.unregister(name, policy)
                         : registry.unregister(name, policy);
                 return removed
                         ? ServerMutationResult.success("unregistered", view(existing.get()))
@@ -692,7 +596,7 @@ public final class StrataProxyLauncher {
                     return ownershipFailure;
                 }
                 if (persistence == ServerPersistence.PERSISTENT) {
-                    var changed = adminRegistry.updateDrainMode(name, drainMode);
+                    var changed = registryPersistence.updateDrainMode(name, drainMode);
                     if (!changed) {
                         return ServerMutationResult.failure("not_found", "server is not registered: " + name);
                     }

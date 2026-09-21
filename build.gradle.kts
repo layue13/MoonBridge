@@ -11,7 +11,6 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.bundling.Zip
-import groovy.json.JsonSlurper
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -39,12 +38,8 @@ gradle.projectsEvaluated {
     val releaseSbom = layout.buildDirectory.file("release/$releaseName.sbom.cdx.json")
     val releaseMetadata = layout.buildDirectory.file("release/$releaseName.metadata.json")
     val app = project(":proxy-app")
-    val admin = project(":proxy-admin-cli")
-    val query = project(":proxy-query")
     val pluginApi = project(":proxy-plugin-api")
     val appDistZip = app.layout.buildDirectory.file("distributions/strataproxy-${project.version}.zip")
-    val adminDistZip = admin.layout.buildDirectory.file("distributions/strataproxy-admin-${project.version}.zip")
-    val queryDistZip = query.layout.buildDirectory.file("distributions/strataproxy-query-${project.version}.zip")
     val pluginApiJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}.jar")
     val pluginApiSourcesJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}-sources.jar")
 
@@ -53,8 +48,6 @@ gradle.projectsEvaluated {
         description = "Writes the StrataProxy release manifest."
         dependsOn(
             app.tasks.named("distZip"),
-            admin.tasks.named("distZip"),
-            query.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
             pluginApi.tasks.named("sourcesJar")
         )
@@ -62,8 +55,6 @@ gradle.projectsEvaluated {
         nameValue.set(releaseName)
         versionValue.set(project.version.toString())
         appArchive.set(appDistZip.map { it.asFile.name })
-        adminArchive.set(adminDistZip.map { it.asFile.name })
-        queryArchive.set(queryDistZip.map { it.asFile.name })
         pluginApiArchive.set(pluginApiJar.map { it.asFile.name })
     }
 
@@ -72,7 +63,7 @@ gradle.projectsEvaluated {
         description = "Generates a CycloneDX-style SBOM for StrataProxy runtime artifacts."
         outputFile.set(releaseSbom)
         bomVersion.set(project.version.toString())
-        components.set(runtimeComponents(app, admin, query))
+        components.set(runtimeComponents(app))
     }
 
     val writeReleaseMetadata = tasks.register<ReleaseMetadataTask>("writeReleaseMetadata") {
@@ -80,8 +71,6 @@ gradle.projectsEvaluated {
         description = "Writes release metadata with checksums and optional HMAC signature."
         dependsOn(
             app.tasks.named("distZip"),
-            admin.tasks.named("distZip"),
-            query.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
             pluginApi.tasks.named("sourcesJar"),
             generateReleaseSbom
@@ -92,7 +81,7 @@ gradle.projectsEvaluated {
         signingKey.set(providers.gradleProperty("strataproxy.releaseSigningKey")
             .orElse(providers.environmentVariable("STRATAPROXY_RELEASE_SIGNING_KEY"))
             .orElse(""))
-        artifactFiles.from(appDistZip, adminDistZip, queryDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom)
+        artifactFiles.from(appDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom)
     }
 
     val stageRelease = tasks.register<Sync>("stageRelease") {
@@ -100,8 +89,6 @@ gradle.projectsEvaluated {
         description = "Stages all StrataProxy release artifacts."
         dependsOn(
             app.tasks.named("distZip"),
-            admin.tasks.named("distZip"),
-            query.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
             pluginApi.tasks.named("sourcesJar"),
             writeReleaseManifest,
@@ -112,6 +99,7 @@ gradle.projectsEvaluated {
         from("README.md")
         from("docs") {
             into("docs")
+            exclude("history/**")
         }
         from("deployment") {
             into("deployment")
@@ -126,12 +114,6 @@ gradle.projectsEvaluated {
         from(releaseSbom)
         from(releaseMetadata)
         from(appDistZip) {
-            into("archives")
-        }
-        from(adminDistZip) {
-            into("archives")
-        }
-        from(queryDistZip) {
             into("archives")
         }
         from(pluginApiJar) {
@@ -155,7 +137,7 @@ gradle.projectsEvaluated {
         group = "distribution"
         description = "Writes SHA-256 checksums for StrataProxy release artifacts."
         dependsOn(releaseBundle)
-        inputFiles.from(releaseZip, appDistZip, adminDistZip, queryDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom, releaseMetadata)
+        inputFiles.from(releaseZip, appDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom, releaseMetadata)
         outputFile.set(releaseChecksum)
     }
 
@@ -166,18 +148,8 @@ gradle.projectsEvaluated {
         metadataFile.set(releaseMetadata)
         sbomFile.set(releaseSbom)
         checksumFile.set(releaseChecksum)
-        chineseReadme.set(layout.projectDirectory.file("docs/zh-CN/README.md"))
+        chineseReadme.set(layout.projectDirectory.file("docs/README.md"))
         runtimeArtifacts.from(app.configurations.getByName("runtimeClasspath"))
-    }
-
-    val performanceProfilesSmokeTest = tasks.register<PerformanceProfilesAuditTask>("performanceProfilesSmokeTest") {
-        group = "verification"
-        description = "Validates packaged StrataProxy performance profile definitions."
-        runnerFile.set(layout.projectDirectory.file("deployment/performance/run_profile.py"))
-        profileFiles.from(fileTree("deployment/performance") {
-            include("profiles/*.json")
-            include("profile-result-template.json")
-        })
     }
 
     tasks.register("release") {
@@ -188,7 +160,6 @@ gradle.projectsEvaluated {
 
     tasks.named("check") {
         dependsOn(releaseAuditSmokeTest)
-        dependsOn(performanceProfilesSmokeTest)
     }
 }
 
@@ -221,12 +192,6 @@ abstract class ReleaseManifestTask : DefaultTask() {
     abstract val appArchive: Property<String>
 
     @get:Input
-    abstract val adminArchive: Property<String>
-
-    @get:Input
-    abstract val queryArchive: Property<String>
-
-    @get:Input
     abstract val pluginApiArchive: Property<String>
 
     @TaskAction
@@ -239,10 +204,8 @@ abstract class ReleaseManifestTask : DefaultTask() {
             version=${versionValue.get()}
             java=25
             appArchive=${appArchive.get()}
-            adminArchive=${adminArchive.get()}
-            queryArchive=${queryArchive.get()}
             pluginApiArchive=${pluginApiArchive.get()}
-            includes=docs,deployment,configs,observability,native-runtime,plugin-api,examples,checksums
+            includes=docs,deployment,configs,native-runtime,plugin-api,examples,checksums
             """.trimIndent() + System.lineSeparator()
         )
     }
@@ -487,15 +450,13 @@ abstract class ReleaseAuditTask : DefaultTask() {
         val sbom = sbomFile.get().asFile.readText()
         val checksums = checksumFile.get().asFile.readText()
         val chineseDocs = chineseReadme.get().asFile.readText()
-        listOf("StrataProxy 中文文档", "Native 策略", "Minecraft 加密", "负载与验收").forEach { token ->
-            require(chineseDocs.contains(token)) { "Chinese documentation missing $token" }
+        listOf("StrataProxy 文档", "快速开始", "运维说明", "架构").forEach { token ->
+            require(chineseDocs.contains(token)) { "Chinese documentation index missing $token" }
         }
         listOf(
             "\"name\": \"strataproxy-",
             "\"java\": \"25\"",
             "\"signature\":",
-            "archives/strataproxy-admin-",
-            "archives/strataproxy-query-",
             "plugin-api/proxy-plugin-api-"
         ).forEach { token ->
             require(metadata.contains(token)) { "release metadata missing $token" }
@@ -507,8 +468,7 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "pkg:maven/io.netty/netty-transport",
             "pkg:maven/io.netty/netty-transport-native-epoll",
             "pkg:maven/io.netty/netty-transport-native-kqueue",
-            "pkg:maven/com.fasterxml.jackson.core/jackson-databind",
-            "pkg:maven/info.picocli/picocli"
+            "pkg:maven/com.fasterxml.jackson.core/jackson-databind"
         ).forEach { token ->
             require(sbom.contains(token)) { "release SBOM missing $token" }
         }
@@ -527,66 +487,10 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "strataproxy-0.1.0-SNAPSHOT.zip",
             "strataproxy-0.1.0-SNAPSHOT.sbom.cdx.json",
             "strataproxy-0.1.0-SNAPSHOT.metadata.json",
-            "archives/strataproxy-admin-0.1.0-SNAPSHOT.zip",
-            "archives/strataproxy-query-0.1.0-SNAPSHOT.zip",
             "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT.jar",
             "plugin-api/proxy-plugin-api-0.1.0-SNAPSHOT-sources.jar"
         ).forEach { token ->
             require(checksums.contains(token)) { "release checksums missing $token" }
         }
-    }
-}
-
-abstract class PerformanceProfilesAuditTask : DefaultTask() {
-    @get:InputFile
-    abstract val runnerFile: RegularFileProperty
-
-    @get:InputFiles
-    abstract val profileFiles: ConfigurableFileCollection
-
-    @TaskAction
-    fun audit() {
-        val runner = runnerFile.get().asFile
-        require(runner.isFile) { "missing performance profile runner: ${runner.path}" }
-        val runnerText = runner.readText()
-        require(runnerText.contains("evaluate_gates")) { "performance profile runner must evaluate gates" }
-        require(runnerText.contains("/native-capabilities")) { "performance profile runner must capture native capabilities" }
-        require(runnerText.contains("--start-echo-backend")) { "performance profile runner must support managed echo backend" }
-        require(runnerText.contains("start_echo_backend")) { "performance profile runner must start echo backend" }
-        val files = profileFiles.files.sortedBy { it.name }
-        require(files.size >= 4) { "expected performance profiles and result template" }
-        val parser = JsonSlurper()
-        val profileIds = mutableSetOf<String>()
-        for (file in files) {
-            val parsed = parser.parse(file) as Map<*, *>
-            if (file.name == "profile-result-template.json") {
-                require(parsed.containsKey("gateResults")) { "profile result template missing gateResults" }
-                require(parsed.containsKey("observations")) { "profile result template missing observations" }
-                val observations = parsed["observations"] as? Map<*, *>
-                require(observations?.containsKey("nativeRuntimeJson") == true) { "profile result template missing nativeRuntimeJson" }
-                require(parsed.containsKey("setup")) { "profile result template missing setup" }
-                val setup = parsed["setup"] as? Map<*, *>
-                require((setup?.get("echoBackend") as? Map<*, *>)?.containsKey("ready") == true) { "profile result template missing echoBackend readiness" }
-                continue
-            }
-            val id = parsed["id"] as? String
-            require(!id.isNullOrBlank()) { "profile ${file.name} missing id" }
-            require(profileIds.add(id)) { "duplicate performance profile id: $id" }
-            require(parsed["java"] == "25") { "profile $id must target Java 25" }
-            require(parsed.containsKey("commands")) { "profile $id missing commands" }
-            require(parsed.containsKey("gates")) { "profile $id missing gates" }
-            val gates = parsed["gates"] as? Map<*, *> ?: emptyMap<Any, Any>()
-            val commands = parsed["commands"] as? List<*> ?: emptyList<Any>()
-            if (gates.containsKey("maxP99ProxyForwardingLatencyMillis")) {
-                require(commands.any { command ->
-                    val commandMap = command as? Map<*, *> ?: return@any false
-                    val args = commandMap["args"] as? List<*> ?: return@any false
-                    args.contains("--measure-echo-latency")
-                }) { "profile $id has p99 latency gate but no --measure-echo-latency command" }
-            }
-        }
-        require(profileIds.contains("smoke")) { "missing smoke performance profile" }
-        require(profileIds.contains("acceptance-linux-native-java25")) { "missing Linux native Java 25 acceptance profile" }
-        require(profileIds.contains("compression-rewrite-linux-native-java25")) { "missing compression rewrite performance profile" }
     }
 }

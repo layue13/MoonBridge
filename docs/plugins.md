@@ -1,16 +1,16 @@
-# Plugins and In-Game Commands
+# 插件和游戏内命令
 
-StrataProxy loads proxy plugins from the `plugins/` directory next to the active config file. Plugin jars are optional; the proxy starts normally when the directory is missing.
+StrataProxy 会从当前配置文件旁边的 `plugins/` 目录加载代理插件。插件 jar 是可选的；目录不存在时代理照常启动。
 
-The public plugin surface is the `dev.strataproxy:proxy-plugin-api` artifact. Plugin projects should depend on that API only; `proxy-network`, `proxy-app`, and other runtime modules are internal implementation details.
+公开插件接口是 `dev.strataproxy:proxy-plugin-api` artifact。插件项目只应该依赖这个 API；`proxy-core`、`proxy-app` 和其他运行时模块都是内部实现细节。
 
-For local development from this repository:
+在本仓库本地开发时，先发布 API 到本机 Maven：
 
 ```powershell
 .\gradlew.bat :proxy-plugin-api:publishToMavenLocal
 ```
 
-Then a plugin project can use:
+插件项目使用：
 
 ```kotlin
 repositories {
@@ -23,9 +23,9 @@ dependencies {
 }
 ```
 
-## Built-in Player Commands
+## 内置玩家命令
 
-These commands are intercepted by the proxy and are not forwarded to the backend server:
+这些命令由代理拦截，不会继续转发到后端服务器：
 
 ```text
 /server <server>
@@ -35,11 +35,11 @@ These commands are intercepted by the proxy and are not forwarded to the backend
 /glist
 ```
 
-`/server`, `/hub`, and `/lobby` use the same Bungee-like backend re-login transfer path as `strataproxy-admin players transfer` and supported BungeeCord `Connect` plugin messages.
+`/server`、`/hub` 和 `/lobby` 使用与受支持 BungeeCord `Connect` plugin message 相同的类 Bungee 后端重登录转服流程。
 
-## Plugin Entry Point
+## 插件入口
 
-A plugin jar can expose a `dev.strataproxy.plugin.ProxyPlugin` implementation with `strataproxy-plugin.properties` in the jar root:
+插件 jar 可以在 jar 根目录放置 `strataproxy-plugin.properties`：
 
 ```properties
 id=example
@@ -48,15 +48,15 @@ version=1.0.0
 main=com.example.ExamplePlugin
 ```
 
-It can also use a standard Java `ServiceLoader` provider for `dev.strataproxy.plugin.ProxyPlugin`.
+也可以使用标准 Java `ServiceLoader`，提供 `dev.strataproxy.plugin.ProxyPlugin` provider。
 
-Plugins can register commands, subscribe to events, query players and servers, register dynamic backends, schedule async work, and request player transfers through the plugin context. Plugin code should not block Netty event-loop threads.
+插件可以通过 `PluginContext` 注册命令、订阅事件、查询玩家和服务器、注册动态后端、调度异步任务、发起玩家转服。插件代码不要阻塞 Netty event loop。
 
-## Dynamic Backend Registration
+## 动态后端注册
 
-Plugins can call `context.servers().register(...)` to publish runtime backends for service discovery, room servers, instance servers, or external orchestrator sync. Registrations default to `ServerPersistence.EPHEMERAL`, which affects only the running proxy. Use `ServerPersistence.PERSISTENT` when the backend should survive a proxy restart.
+插件可通过 `context.servers().register(...)` 注册运行期后端，用于服务发现、房间服、副本服或外部编排系统同步。默认注册是 `ServerPersistence.EPHEMERAL`，只影响当前运行中的 proxy；需要重启后保留时，显式使用 `ServerPersistence.PERSISTENT`。
 
-Plugin-registered servers are stamped with owner metadata. By default, a plugin may only replace, remove, or drain servers it registered itself; it cannot silently overwrite YAML static servers or servers owned by another plugin.
+插件注册的 server 会自动写入 owner metadata。默认情况下，插件只能替换、删除或切换 drain 自己注册的 server，不能覆盖 YAML 静态 server 或其他插件注册的 server。
 
 ```java
 var registration = new ServerRegistration(
@@ -79,9 +79,9 @@ context.servers().register(registration).thenAccept(result -> {
 });
 ```
 
-Capability names follow the same semantics as config values. Matching is case-insensitive and normalizes `-` to `_`, so `modern-forwarding` maps to `MODERN_FORWARDING`.
+能力名使用和配置文件一致的语义，大小写不敏感，`-` 会按 `_` 规范化，例如 `modern-forwarding` 会映射到 `MODERN_FORWARDING`。
 
-## Minimal Plugin
+## 最小插件
 
 ```java
 public final class HelloPlugin implements ProxyPlugin {
@@ -98,11 +98,11 @@ public final class HelloPlugin implements ProxyPlugin {
 }
 ```
 
-The repository includes a standalone example under `examples/hello-plugin`. Build it after publishing the API locally:
+仓库里提供了独立示例 `examples/hello-plugin`。本地发布 API 后可以构建：
 
 ```powershell
 .\gradlew.bat :proxy-plugin-api:publishToMavenLocal
 .\gradlew.bat -p examples/hello-plugin build
 ```
 
-Copy the resulting plugin jar into the `plugins/` directory next to the active StrataProxy config file, then restart the proxy.
+把生成的插件 jar 放到当前 StrataProxy 配置文件旁边的 `plugins/` 目录，然后重启代理。

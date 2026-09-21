@@ -1,111 +1,23 @@
-# Quick Start
+# 快速开始
 
-This guide gets one StrataProxy process running in front of one Minecraft backend. It is intentionally short; use the linked reference pages after the first successful run.
+StrataProxy 是面向 Minecraft 的静态后端代理：监听客户端连接、按路由选择后端，并处理认证、转发协议、压缩和 Forge/Bungee 兼容所需的协议帧。
 
-## 1. Requirements
-
-- JDK 25.
-- One backend Minecraft server, for example `127.0.0.1:25565`.
-- A free proxy listener port, default `25577`.
-- PowerShell examples below assume Windows. On Linux, use `./gradlew` and the shell scripts under `bin/`.
-
-Set Java 25 if it is not already first on `PATH`:
+## 构建与校验
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Zulu\zulu-25'
-$env:Path="$env:JAVA_HOME\bin;$env:Path"
-java -version
+.\gradlew.bat --no-daemon check :proxy-app:installDist
 ```
 
-## 2. Build
+代理程序在 `proxy-app\build\install\strataproxy\`。
+
+## 配置并启动
 
 ```powershell
-.\gradlew.bat --no-daemon :proxy-app:installDist :proxy-admin-cli:installDist :proxy-query:installDist
+Copy-Item proxy-app\src\main\resources\config\strataproxy.yml .\strataproxy.yml
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\strataproxy.yml --validate-config
+.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --config .\strataproxy.yml
 ```
 
-The runnable proxy is now under:
+至少配置一个 `servers` 后端。修改 YAML 后重启代理生效；没有 HTTP 管理端口、管理令牌或动态后端 API。
 
-```text
-proxy-app\build\install\strataproxy\
-```
-
-## 3. Create A Config
-
-Copy the packaged example to a working file:
-
-```powershell
-Copy-Item .\proxy-app\src\main\resources\config\strataproxy.yml .\strataproxy.yml
-```
-
-For the first run, edit only these fields:
-
-```yaml
-network:
-  bind: "0.0.0.0:25577"
-
-admin:
-  enabled: true
-  bind: "127.0.0.1:8080"
-  bearerToken: ""
-
-servers:
-  - name: "lobby-1"
-    address: "127.0.0.1:25565"
-    tags: ["lobby"]
-    capabilities: ["modern-forwarding"]
-    protocolRange: "any"
-    weight: 100
-    softCapacity: 500
-    hardCapacity: 600
-    drainMode: false
-    metadata:
-      group: "lobby"
-      host: "localhost"
-```
-
-Keep the Admin API on `127.0.0.1` if `bearerToken` is empty.
-
-## 4. Validate
-
-```powershell
-.\proxy-app\build\install\strataproxy\bin\strataproxy.bat --validate-config .\strataproxy.yml
-```
-
-Fix any reported error before starting the proxy.
-
-## 5. Start
-
-```powershell
-.\proxy-app\build\install\strataproxy\bin\strataproxy.bat .\strataproxy.yml
-```
-
-Players connect to the proxy port, not directly to the backend:
-
-```text
-127.0.0.1:25577
-```
-
-## 6. Check It
-
-In another terminal:
-
-```powershell
-$admin='.\proxy-admin-cli\build\install\strataproxy-admin\bin\strataproxy-admin.bat'
-& $admin --base-url http://127.0.0.1:8080 health
-& $admin --base-url http://127.0.0.1:8080 ready
-& $admin --base-url http://127.0.0.1:8080 overview
-& $admin --base-url http://127.0.0.1:8080 servers list
-```
-
-Run a Minecraft status ping through the proxy:
-
-```powershell
-.\proxy-query\build\install\strataproxy-query\bin\strataproxy-query.bat --host 127.0.0.1 --port 25577 status --virtual-host localhost
-```
-
-## 7. Next Steps
-
-- To add servers without restart, use [Command Reference: Backend Servers](commands.md#backend-servers).
-- To understand YAML fields, read [Configuration Guide](configuration.md).
-- To deploy on Linux or containers, read [Deployment Notes](../deployment/README.md).
-- To tune Zstd for modded traffic, read [Zstd Compression Tuning](compression-zstd.md).
+详见[配置说明](configuration.md)和[运维说明](operations-manual.md)。
