@@ -127,16 +127,6 @@ gradle.projectsEvaluated {
         )
         into(releaseStaging)
         from("README.md")
-        from("docs") {
-            into("docs")
-            exclude("history/**")
-        }
-        from("deployment") {
-            into("deployment")
-        }
-        from("examples") {
-            into("examples")
-        }
         from("proxy-core/src/main/resources/config") {
             into("config")
         }
@@ -178,7 +168,7 @@ gradle.projectsEvaluated {
         metadataFile.set(releaseMetadata)
         sbomFile.set(releaseSbom)
         checksumFile.set(releaseChecksum)
-        chineseReadme.set(layout.projectDirectory.file("docs/README.md"))
+        chineseReadme.set(layout.projectDirectory.file("README.md"))
         runtimeArtifacts.from(app.configurations.getByName("runtimeClasspath"))
     }
 
@@ -480,8 +470,8 @@ abstract class ReleaseAuditTask : DefaultTask() {
         val sbom = sbomFile.get().asFile.readText()
         val checksums = checksumFile.get().asFile.readText()
         val chineseDocs = chineseReadme.get().asFile.readText()
-        listOf("StrataProxy 文档", "快速开始", "运维说明", "架构").forEach { token ->
-            require(chineseDocs.contains(token)) { "Chinese documentation index missing $token" }
+        listOf("StrataProxy", "构建与启动", "动态后端：Bukkit 服务端", "代理插件").forEach { token ->
+            require(chineseDocs.contains(token)) { "Chinese documentation missing $token" }
         }
         listOf(
             "\"name\": \"strataproxy-",
