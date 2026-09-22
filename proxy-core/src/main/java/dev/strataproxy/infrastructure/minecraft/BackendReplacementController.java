@@ -1,6 +1,5 @@
 package dev.strataproxy.infrastructure.minecraft;
 
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.event.PlayerTransferEvent;

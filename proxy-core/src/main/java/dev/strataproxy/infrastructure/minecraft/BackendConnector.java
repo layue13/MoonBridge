@@ -1,7 +1,6 @@
 package dev.strataproxy.infrastructure.minecraft;
 
 import dev.strataproxy.domain.server.RegisteredServer;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.Channel;

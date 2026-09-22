@@ -1,8 +1,7 @@
 package dev.strataproxy.infrastructure.minecraft;
 
 import dev.strataproxy.domain.server.RegisteredServer;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics.CompressionDirection;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics.CompressionDirection;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import io.netty.buffer.ByteBuf;

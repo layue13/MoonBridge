@@ -1,6 +1,5 @@
 package dev.strataproxy.infrastructure.minecraft;
 
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 

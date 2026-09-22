@@ -4,7 +4,7 @@ import dev.strataproxy.domain.server.ProtocolRange;
 import dev.strataproxy.domain.server.ServerCapability;
 import dev.strataproxy.domain.server.ServerDescriptor;
 import dev.strataproxy.domain.server.ServerLoad;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics;
 import dev.strataproxy.infrastructure.registry.memory.InMemoryServerRegistry;
 import org.junit.jupiter.api.Test;
 

@@ -24,7 +24,7 @@ import dev.strataproxy.infrastructure.nativefeature.runtime.NativeCapabilityDete
 import dev.strataproxy.infrastructure.nativefeature.runtime.NativeFeature;
 import dev.strataproxy.infrastructure.nativefeature.runtime.NativeRuntimeDecision;
 import dev.strataproxy.infrastructure.nativefeature.runtime.NativeRuntimeOptions;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics;
 import dev.strataproxy.plugin.event.ProxyStartedEvent;
 import dev.strataproxy.plugin.event.ProxyStoppingEvent;
 import dev.strataproxy.infrastructure.plugin.loader.PluginManager;

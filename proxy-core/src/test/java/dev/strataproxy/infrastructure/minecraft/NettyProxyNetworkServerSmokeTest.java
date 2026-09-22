@@ -10,7 +10,6 @@ import dev.strataproxy.domain.compression.CompressionStrategies;
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftVarInts;
 import dev.strataproxy.infrastructure.plugin.command.DefaultCommandRegistry;
 import dev.strataproxy.infrastructure.plugin.command.SimpleEventBus;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import dev.strataproxy.plugin.command.CommandResult;
 import dev.strataproxy.plugin.command.CommandSpec;
 import io.netty.buffer.Unpooled;

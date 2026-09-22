@@ -2,7 +2,6 @@ package dev.strataproxy.infrastructure.minecraft;
 
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftCompressionCodec;
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftVarInts;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;

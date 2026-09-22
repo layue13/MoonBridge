@@ -2,8 +2,7 @@ package dev.strataproxy.infrastructure.minecraft;
 
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftCompressionCodec;
 import dev.strataproxy.domain.compression.CompressionAction;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics.CompressionDirection;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics.CompressionDirection;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;

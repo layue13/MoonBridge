@@ -4,7 +4,6 @@ import dev.strataproxy.domain.compression.CompressionAction;
 import dev.strataproxy.domain.compression.CompressionContext;
 import dev.strataproxy.domain.compression.CompressionStrategies;
 import dev.strataproxy.domain.compression.CompressionStrategy;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import dev.strataproxy.domain.protocol.PacketDirection;
 import dev.strataproxy.domain.protocol.PacketView;
 import dev.strataproxy.domain.protocol.ProtocolState;

@@ -9,7 +9,7 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import java.util.List;
 
 final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
-    private final dev.strataproxy.infrastructure.observability.ProxyMetrics metrics;
+    private final dev.strataproxy.infrastructure.minecraft.ProxyMetrics metrics;
     private final String serverName;
     private final int maxFrameBytes;
     private final MinecraftCompressionAuditState compressionAudit;
@@ -22,7 +22,7 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
     private boolean closed;
 
     BackendSwitchLoginHandler(
-            dev.strataproxy.infrastructure.observability.ProxyMetrics metrics,
+            dev.strataproxy.infrastructure.minecraft.ProxyMetrics metrics,
             String serverName,
             int maxFrameBytes,
             MinecraftCompressionAuditState compressionAudit,
@@ -43,7 +43,7 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
     }
 
     BackendSwitchLoginHandler(
-            dev.strataproxy.infrastructure.observability.ProxyMetrics metrics,
+            dev.strataproxy.infrastructure.minecraft.ProxyMetrics metrics,
             String serverName,
             int maxFrameBytes,
             MinecraftCompressionAuditState compressionAudit,
@@ -64,7 +64,7 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
     }
 
     BackendSwitchLoginHandler(
-            dev.strataproxy.infrastructure.observability.ProxyMetrics metrics,
+            dev.strataproxy.infrastructure.minecraft.ProxyMetrics metrics,
             String serverName,
             int maxFrameBytes,
             MinecraftCompressionAuditState compressionAudit,

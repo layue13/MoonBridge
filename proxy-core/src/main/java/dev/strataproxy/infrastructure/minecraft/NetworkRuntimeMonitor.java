@@ -1,6 +1,5 @@
 package dev.strataproxy.infrastructure.minecraft;
 
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.EventLoopGroup;
 

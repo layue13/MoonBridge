@@ -2,7 +2,7 @@ package dev.strataproxy.bootstrap;
 
 import dev.strataproxy.domain.server.ServerLoad;
 import dev.strataproxy.domain.server.ServerRegistry;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics;
 
 import java.time.Duration;
 import java.util.HashMap;

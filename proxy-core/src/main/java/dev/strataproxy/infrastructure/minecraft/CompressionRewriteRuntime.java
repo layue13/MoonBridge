@@ -4,7 +4,6 @@ import dev.strataproxy.infrastructure.minecraft.codec.MinecraftCodecException;
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftCompressedFrameRewriter;
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftVarInts;
 import dev.strataproxy.domain.compression.CompressionAction;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;

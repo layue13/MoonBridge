@@ -1,4 +1,4 @@
-package dev.strataproxy.infrastructure.observability;
+package dev.strataproxy.infrastructure.minecraft;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

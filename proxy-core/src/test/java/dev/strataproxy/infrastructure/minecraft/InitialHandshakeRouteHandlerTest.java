@@ -5,7 +5,6 @@ import dev.strataproxy.domain.server.RegisteredServer;
 import dev.strataproxy.domain.server.ServerDescriptor;
 import dev.strataproxy.domain.server.ServerHealth;
 import dev.strataproxy.domain.server.ServerLoad;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;

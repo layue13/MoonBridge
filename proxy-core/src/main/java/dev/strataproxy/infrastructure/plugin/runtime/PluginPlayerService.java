@@ -1,7 +1,7 @@
 package dev.strataproxy.infrastructure.plugin.runtime;
 
 import dev.strataproxy.infrastructure.minecraft.NettyProxyNetworkServer;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics;
 import dev.strataproxy.plugin.service.PlayerIdentity;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.PlayerTransfer;

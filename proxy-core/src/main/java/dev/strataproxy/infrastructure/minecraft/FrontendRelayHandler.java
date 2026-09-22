@@ -2,8 +2,7 @@ package dev.strataproxy.infrastructure.minecraft;
 
 import dev.strataproxy.domain.compression.CompressionAction;
 import dev.strataproxy.infrastructure.minecraft.codec.MinecraftCompressionCodec;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics;
-import dev.strataproxy.infrastructure.observability.ProxyMetrics.CompressionDirection;
+import dev.strataproxy.infrastructure.minecraft.ProxyMetrics.CompressionDirection;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.command.CommandSource;
 import dev.strataproxy.plugin.event.EventBus;
