@@ -18,11 +18,33 @@ public interface PlayerService {
     CompletionStage<PlayerTransfer> transfer(String playerName, String targetServer);
 
     /**
+     * Requests a transfer for one exact proxy connection.
+     *
+     * <p>Use an identity obtained from {@link PlayerView#identity()} when an
+     * asynchronous caller must not act on a later connection that reused the
+     * same player name.</p>
+     *
+     * @param player exact player connection identity
+     * @param targetServer target backend name
+     * @return asynchronous transfer result
+     */
+    default CompletionStage<PlayerTransfer> transfer(PlayerIdentity player, String targetServer) {
+        return java.util.concurrent.CompletableFuture.completedFuture(new PlayerTransfer(
+                false, "identity_transfer_unsupported", player, "", "", targetServer,
+                PlayerTransfer.TransferStage.REJECTED, false, ""));
+    }
+
+    /**
      * Sends an opaque plugin-message payload to the player's current backend.
      * Completion means Netty accepted the packet for writing, not that Bukkit processed it.
      */
     default CompletionStage<PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
         return java.util.concurrent.CompletableFuture.completedFuture(PluginMessageResult.failure("unsupported"));
+    }
+
+    /** Sends a plugin message to one exact proxy connection. */
+    default CompletionStage<PluginMessageResult> sendPluginMessage(PlayerIdentity player, String channel, byte[] payload) {
+        return java.util.concurrent.CompletableFuture.completedFuture(PluginMessageResult.failure("identity_message_unsupported"));
     }
 
     /**
@@ -32,6 +54,14 @@ public interface PlayerService {
      * @return player view when the player is currently online
      */
     Optional<PlayerView> find(String playerName);
+
+    /** Finds an online player by the UUID and connection identity returned by a prior view. */
+    default Optional<PlayerView> find(PlayerIdentity player) {
+        if (player == null || player.connectionId().isBlank()) {
+            return Optional.empty();
+        }
+        return onlinePlayers().stream().filter(view -> view.identity().equals(player)).findFirst();
+    }
 
     /**
  * Provides online players.

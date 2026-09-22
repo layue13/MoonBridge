@@ -18,6 +18,8 @@ import dev.strataproxy.network.MinecraftForwardingRuntime;
 import dev.strataproxy.network.MinecraftAuthRuntime;
 import dev.strataproxy.network.MinecraftStatusRuntime;
 import dev.strataproxy.network.NettyProxyNetworkServer;
+import dev.strataproxy.network.NettyProxyRuntime;
+import dev.strataproxy.network.NettyProxyServerConfig;
 import dev.strataproxy.network.NetworkTuning;
 import dev.strataproxy.network.RoutingBackendResolver;
 import dev.strataproxy.nativefeature.NativeCapabilityDetector;
@@ -256,7 +258,7 @@ public final class StrataProxyLauncher {
                         + " heartbeatTimeout=" + config.backendAgent().heartbeatTimeout());
             }
 
-            var server = new NettyProxyNetworkServer(
+            var server = new NettyProxyNetworkServer(new NettyProxyServerConfig(
                     config.resolvedWorkerThreads(),
                     resolver,
                     metrics,
@@ -272,18 +274,18 @@ public final class StrataProxyLauncher {
                             config.network().initialHandshakeTimeoutMillis(),
                             config.network().proxyProtocol()),
                     config.nativeTransport() && nativeDecision.preferNativeTransport(),
-                    compressionStrategy,
-                    config.compression().minThreshold(),
-                    config.compression().maxThreshold(),
-                    config.compression().cpuGuard(),
-                    null,
-                    authRuntime(config.auth()),
-                    forwardingRuntime(config.forwarding()),
-                    statusRuntime(config.status(), metrics),
-                    config.compression().rewriteEnabled(),
-                    config.compression().rewriteMaxEventLoopDelayMillis(),
-                    commandRegistry,
-                    eventBus);
+                    new NettyProxyRuntime(
+                            compressionStrategy,
+                            config.compression().minThreshold(),
+                            config.compression().maxThreshold(),
+                            config.compression().cpuGuard(),
+                            authRuntime(config.auth()),
+                            forwardingRuntime(config.forwarding()),
+                            statusRuntime(config.status(), metrics),
+                            config.compression().rewriteEnabled(),
+                            config.compression().rewriteMaxEventLoopDelayMillis(),
+                            commandRegistry,
+                            eventBus)));
             serverReference.set(server);
             started.add(server);
             if (nativeDecision.requireNativeTransport() && !server.nativeTransport()) {
@@ -436,7 +438,7 @@ public final class StrataProxyLauncher {
                 status.samplePlayers().stream()
                         .map(player -> new MinecraftStatusRuntime.SamplePlayer(player.name(), player.id()))
                         .toList(),
-                () -> metrics.snapshot().playerSessions().size());
+                metrics::onlinePlayerCount);
     }
 
     private static Set<NativeFeature> nativeFeatures(Set<String> values) {

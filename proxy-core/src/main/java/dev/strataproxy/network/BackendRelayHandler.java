@@ -927,6 +927,9 @@ final class BackendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private RelayCompressionObserver.Observation observeCompressionFrames(ByteBuf buffer) {
+        if (!compressionRewriteRuntime.enabled()) {
+            return RelayCompressionObserver.Observation.allow();
+        }
         return RelayCompressionObserver.observe(
                 compressionAudit, buffer, true, compressionRuntime, metrics);
     }

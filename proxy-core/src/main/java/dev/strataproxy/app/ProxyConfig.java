@@ -107,7 +107,6 @@ public record ProxyConfig(
             InetSocketAddress bindAddress,
             String sharedSecret,
             Duration heartbeatTimeout,
-            java.util.Map<String, String> agentSecrets,
             int maxConnections,
             int maxQueuedConnections,
             int maxNonces) {
@@ -115,19 +114,13 @@ public record ProxyConfig(
             bindAddress = bindAddress == null ? new InetSocketAddress("127.0.0.1", 25578) : bindAddress;
             sharedSecret = sharedSecret == null ? "" : sharedSecret;
             heartbeatTimeout = heartbeatTimeout == null ? Duration.ofSeconds(30) : heartbeatTimeout;
-            agentSecrets = agentSecrets == null ? java.util.Map.of() : java.util.Map.copyOf(agentSecrets);
             maxConnections = Math.max(1, maxConnections);
             maxQueuedConnections = Math.max(0, maxQueuedConnections);
             maxNonces = Math.max(1, maxNonces);
         }
 
-        /** Compatibility constructor. New deployments must configure agentSecrets. */
-        public BackendAgentConfig(boolean enabled, InetSocketAddress bindAddress, String sharedSecret, Duration heartbeatTimeout) {
-            this(enabled, bindAddress, sharedSecret, heartbeatTimeout, java.util.Map.of(), 32, 64, 4_096);
-        }
-
         public static BackendAgentConfig defaults() {
-            return new BackendAgentConfig(false, new InetSocketAddress("127.0.0.1", 25578), "", Duration.ofSeconds(30), java.util.Map.of(), 32, 64, 4_096);
+            return new BackendAgentConfig(false, new InetSocketAddress("127.0.0.1", 25578), "", Duration.ofSeconds(30), 32, 64, 4_096);
         }
     }
 

@@ -15,10 +15,15 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
-import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BackendAgentServerTest {
@@ -27,7 +32,7 @@ class BackendAgentServerTest {
     @Test
     void invalidSignaturesDoNotConsumeBoundedNonceCapacity() throws Exception {
         var config = new ProxyConfig.BackendAgentConfig(true, new InetSocketAddress("127.0.0.1", 0), SECRET,
-                java.time.Duration.ofSeconds(30), Map.of(), 1, 1, 1);
+                java.time.Duration.ofSeconds(30), 1, 1, 1);
         try (var server = new BackendAgentServer(config, new AcceptingServers())) {
             server.start();
             var port = ((InetSocketAddress) server.localAddress()).getPort();
@@ -40,7 +45,7 @@ class BackendAgentServerTest {
     @Test
     void oversizedRequestIsRejectedBeforeJsonParsing() throws Exception {
         var config = new ProxyConfig.BackendAgentConfig(true, new InetSocketAddress("127.0.0.1", 0), SECRET,
-                java.time.Duration.ofSeconds(30), Map.of(), 1, 0, 4);
+                java.time.Duration.ofSeconds(30), 1, 0, 4);
         try (var server = new BackendAgentServer(config, new AcceptingServers())) {
             server.start();
             var port = ((InetSocketAddress) server.localAddress()).getPort();
@@ -51,6 +56,37 @@ class BackendAgentServerTest {
                 assertTrue(in.readLine().contains("request is missing or too large"));
             }
         }
+    }
+
+    @Test
+    void expiredInstanceCannotUnregisterAReplacementThatIsStillRegistering() throws Exception {
+        var config = new ProxyConfig.BackendAgentConfig(true, new InetSocketAddress("127.0.0.1", 0), SECRET,
+                java.time.Duration.ofMillis(1), 4, 4, 32);
+        var servers = new BlockingUnregisterServers();
+        try (var server = new BackendAgentServer(config, servers)) {
+            server.start();
+            var port = ((InetSocketAddress) server.localAddress()).getPort();
+            assertTrue(call(port, envelope("old-registration", SECRET, "instance-old")).contains("\"success\":true"));
+            Thread.sleep(10);
+
+            var sweeper = new Thread(server::expireLeases);
+            sweeper.start();
+            assertTrue(servers.unregisterStarted.await(1, TimeUnit.SECONDS));
+
+            var requests = Executors.newSingleThreadExecutor();
+            try {
+                var replacement = requests.submit(() -> call(port, envelope("new-registration", SECRET, "instance-new")));
+                Thread.sleep(50);
+                assertFalse(replacement.isDone());
+
+                servers.allowUnregister.complete(ServerMutationResult.success("unregistered", null));
+                sweeper.join(1_000);
+                assertTrue(replacement.get(1, TimeUnit.SECONDS).contains("\"success\":true"));
+            } finally {
+                requests.shutdownNow();
+            }
+        }
+        assertEquals(java.util.List.of("register", "unregister", "register"), servers.operations);
     }
 
     private static String call(int port, String value) throws Exception {
@@ -73,7 +109,7 @@ class BackendAgentServerTest {
         return "{\"agentId\":\"survival-1\",\"timestamp\":" + timestamp + ",\"nonce\":\"" + nonce + "\",\"payload\":\"" + payload + "\",\"signature\":\"" + signature + "\"}";
     }
 
-    private static final class AcceptingServers implements ServerService {
+    private static class AcceptingServers implements ServerService {
         @Override public CompletionStage<ServerMutationResult> register(ServerRegistration registration) {
             return CompletableFuture.completedFuture(ServerMutationResult.success("registered", null));
         }
@@ -83,5 +119,22 @@ class BackendAgentServerTest {
         @Override public java.util.Optional<dev.strataproxy.plugin.service.ServerView> find(String name) { return java.util.Optional.empty(); }
         @Override public java.util.Optional<dev.strataproxy.plugin.service.ServerView> firstWithTag(String tag) { return java.util.Optional.empty(); }
         @Override public java.util.Collection<dev.strataproxy.plugin.service.ServerView> servers() { return java.util.List.of(); }
+    }
+
+    private static final class BlockingUnregisterServers extends AcceptingServers {
+        private final CopyOnWriteArrayList<String> operations = new CopyOnWriteArrayList<>();
+        private final CountDownLatch unregisterStarted = new CountDownLatch(1);
+        private final CompletableFuture<ServerMutationResult> allowUnregister = new CompletableFuture<>();
+
+        @Override public CompletionStage<ServerMutationResult> register(ServerRegistration registration) {
+            operations.add("register");
+            return CompletableFuture.completedFuture(ServerMutationResult.success("registered", null));
+        }
+
+        @Override public CompletionStage<ServerMutationResult> unregister(String name, ServerRemoval removal) {
+            operations.add("unregister");
+            unregisterStarted.countDown();
+            return allowUnregister;
+        }
     }
 }

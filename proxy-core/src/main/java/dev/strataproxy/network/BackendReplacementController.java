@@ -500,7 +500,7 @@ final class BackendReplacementController {
         session.closeClientStateTracker();
         session.closePluginChannelRegistry();
         sessions.unregister(session);
-        metrics.playerSessionClosed(playerName);
+        metrics.playerSessionClosed(playerName, session.identity().connectionId());
     }
 
     void observeServerboundPluginChannels(io.netty.buffer.ByteBuf buffer, MinecraftProtocolProfile profile) {
@@ -591,6 +591,7 @@ final class BackendReplacementController {
                 transfer.success(),
                 transfer.outcome(),
                 transfer.player(),
+                session.identity().connectionId(),
                 transfer.sourceServer(),
                 transfer.targetServer(),
                 session.identity().remoteAddress());

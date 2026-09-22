@@ -1,6 +1,10 @@
 package dev.strataproxy.network;
 
 import java.util.Map;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
@@ -21,7 +25,8 @@ public final class ProxyMetrics {
     private final Map<String, LongAdder> backendReplacements = new ConcurrentHashMap<>();
     private final Map<String, MutableServerTraffic> serverTraffic = new ConcurrentHashMap<>();
     private final Map<String, MutableServerConnections> serverConnections = new ConcurrentHashMap<>();
-    private final Map<String, PlayerSession> playerSessions = new ConcurrentHashMap<>();
+    private final Map<String, PlayerSession> playerSessionsByConnection = new ConcurrentHashMap<>();
+    private final Map<String, String> currentConnectionByPlayer = new ConcurrentHashMap<>();
 
     public void acceptedConnection() { acceptedConnections.increment(); activeConnections.incrementAndGet(); }
     public void closedConnection() { activeConnections.updateAndGet(value -> Math.max(0, value - 1)); }
@@ -57,28 +62,108 @@ public final class ProxyMetrics {
         playerSessionStarted(player, null, "", server, remoteAddress);
     }
     public void playerSessionStarted(String player, java.util.UUID playerId, String connectionId, String server, String remoteAddress) {
-        if (player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), playerId, connectionId == null ? "" : connectionId, normalize(server), normalize(remoteAddress)));
+        if (player == null || player.isBlank()) {
+            return;
+        }
+        var name = player.trim();
+        var key = connectionKey(name, connectionId);
+        playerSessionsByConnection.put(key, new PlayerSession(name, playerId, key, normalize(server), normalize(remoteAddress)));
+        currentConnectionByPlayer.put(playerKey(name), key);
     }
     public void playerSessionClosed(String player) {
-        if (player != null && !player.isBlank()) playerSessions.remove(player.trim());
+        if (player == null || player.isBlank()) {
+            return;
+        }
+        var name = player.trim();
+        var key = currentConnectionByPlayer.remove(playerKey(name));
+        if (key != null) {
+            playerSessionsByConnection.remove(key);
+        }
+    }
+    public void playerSessionClosed(String player, String connectionId) {
+        if (player == null || player.isBlank()) {
+            return;
+        }
+        var name = player.trim();
+        var key = connectionKey(name, connectionId);
+        playerSessionsByConnection.remove(key);
+        currentConnectionByPlayer.remove(playerKey(name), key);
     }
     public void playerTransfer(boolean success, String outcome, String player, String sourceServer, String targetServer, String remoteAddress) {
-        if (success && player != null && !player.isBlank()) playerSessions.put(player.trim(), new PlayerSession(player.trim(), null, "", normalize(targetServer), normalize(remoteAddress)));
+        if (success && player != null && !player.isBlank()) {
+            var key = currentConnectionByPlayer.get(playerKey(player));
+            updatePlayerServer(key, targetServer, remoteAddress);
+        }
+    }
+    public void playerTransfer(
+            boolean success,
+            String outcome,
+            String player,
+            String connectionId,
+            String sourceServer,
+            String targetServer,
+            String remoteAddress) {
+        if (success && player != null && !player.isBlank()) {
+            updatePlayerServer(connectionKey(player.trim(), connectionId), targetServer, remoteAddress);
+        }
     }
     public long currentEventLoopDelayNanos() { return eventLoopDelayNanos.get(); }
     public void eventLoopDelayNanos(long nanos) { eventLoopDelayNanos.set(Math.max(0, nanos)); }
+    public Optional<PlayerSession> findPlayerSession(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(currentConnectionByPlayer.get(playerKey(playerName)))
+                .map(playerSessionsByConnection::get);
+    }
+    public Optional<PlayerSession> findPlayerSession(dev.strataproxy.plugin.service.PlayerIdentity identity) {
+        if (identity == null || identity.connectionId().isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(playerSessionsByConnection.get(identity.connectionId()))
+                .filter(session -> identity.uuid() == null || identity.uuid().equals(session.playerId()));
+    }
+    public Collection<PlayerSession> onlinePlayerSessions() {
+        return List.copyOf(playerSessionsByConnection.values());
+    }
+    public int onlinePlayerCount() {
+        return playerSessionsByConnection.size();
+    }
     public Snapshot snapshot() {
         return new Snapshot(acceptedConnections.sum(), activeConnections.get(), rejectedConnections.sum(), immutableLongs(rejectedByReason),
                 handshakeTimeouts.sum(), routedConnections.sum(), failedRoutes.sum(), backendConnectFailures.sum(), immutableLongs(backendReplacements),
                 frontendToBackendBytes.sum(), backendToFrontendBytes.sum(), eventLoopDelayNanos.get(),
                 serverTraffic.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().snapshot())),
                 serverConnections.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().snapshot())),
-                Map.copyOf(playerSessions));
+                currentPlayerSessions());
     }
 
     private MutableServerTraffic serverTraffic(String server) { return serverTraffic.computeIfAbsent(normalize(server), ignored -> new MutableServerTraffic()); }
     private static Map<String, Long> immutableLongs(Map<String, LongAdder> values) {
         return values.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> entry.getValue().sum()));
+    }
+    private void updatePlayerServer(String connectionKey, String targetServer, String remoteAddress) {
+        if (connectionKey == null) {
+            return;
+        }
+        playerSessionsByConnection.computeIfPresent(connectionKey, (ignored, session) -> new PlayerSession(
+                session.player(), session.playerId(), session.connectionId(), normalize(targetServer), normalize(remoteAddress)));
+    }
+    private Map<String, PlayerSession> currentPlayerSessions() {
+        var sessions = new java.util.HashMap<String, PlayerSession>();
+        currentConnectionByPlayer.forEach((player, connectionId) -> {
+            var session = playerSessionsByConnection.get(connectionId);
+            if (session != null) {
+                sessions.put(session.player(), session);
+            }
+        });
+        return Map.copyOf(sessions);
+    }
+    private static String connectionKey(String player, String connectionId) {
+        return connectionId == null || connectionId.isBlank() ? "legacy:" + playerKey(player) : connectionId;
+    }
+    private static String playerKey(String player) {
+        return player.trim().toLowerCase(Locale.ROOT);
     }
     private static String normalize(String value) { return value == null || value.isBlank() ? "unknown" : value.trim(); }
 

@@ -11,7 +11,6 @@ import dev.strataproxy.plugin.service.ServerService;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -32,6 +31,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Narrow authenticated endpoint for backend agents. It deliberately exposes only
@@ -40,13 +40,14 @@ import java.util.concurrent.TimeUnit;
 public final class BackendAgentServer implements AutoCloseable {
     private static final int MAX_LINE_LENGTH = 64 * 1024;
     private static final long MAX_CLOCK_SKEW_MILLIS = 60_000L;
+    private static final int LEASE_LOCK_STRIPES = 64;
 
     private final ProxyConfig.BackendAgentConfig config;
     private final ServerService servers;
     private final ObjectMapper mapper = new ObjectMapper();
     private final Map<String, Long> nonces = new ConcurrentHashMap<>();
     private final Map<String, Lease> leases = new ConcurrentHashMap<>();
-    private final Object leaseLock = new Object();
+    private final ReentrantLock[] leaseLocks = new ReentrantLock[LEASE_LOCK_STRIPES];
     private final ExecutorService connections;
     private final ScheduledExecutorService maintenance = Executors.newSingleThreadScheduledExecutor(runnable -> new Thread(runnable, "strataproxy-backend-agent-lease"));
     private volatile ServerSocket socket;
@@ -55,6 +56,9 @@ public final class BackendAgentServer implements AutoCloseable {
     public BackendAgentServer(ProxyConfig.BackendAgentConfig config, ServerService servers) {
         this.config = config;
         this.servers = servers;
+        for (var index = 0; index < leaseLocks.length; index++) {
+            leaseLocks[index] = new ReentrantLock();
+        }
         this.connections = new ThreadPoolExecutor(
                 config.maxConnections(), config.maxConnections(), 0L, TimeUnit.MILLISECONDS,
                 config.maxQueuedConnections() == 0 ? new SynchronousQueue<>() : new ArrayBlockingQueue<>(config.maxQueuedConnections()),
@@ -104,7 +108,6 @@ public final class BackendAgentServer implements AutoCloseable {
 
     private void handle(Socket connection) {
         try (connection;
-             var reader = new BufferedReader(new java.io.InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
              var writer = new BufferedWriter(new java.io.OutputStreamWriter(connection.getOutputStream(), StandardCharsets.UTF_8))) {
             connection.setSoTimeout(5_000);
             var line = readBoundedLine(connection.getInputStream());
@@ -183,47 +186,78 @@ public final class BackendAgentServer implements AutoCloseable {
                 command.drainMode,
                 command.metadata == null ? Map.of() : Map.copyOf(command.metadata),
                 persistence);
-        synchronized (leaseLock) {
+        var name = command.name.trim();
+        var lock = leaseLock(name);
+        lock.lock();
+        try {
             var result = servers.register(registration).toCompletableFuture().get(5, TimeUnit.SECONDS);
-            if (result.success()) leases.put(command.name.trim(), new Lease(agentId, command.instanceId, System.currentTimeMillis(), persistence));
+            if (result.success()) leases.put(name, new Lease(agentId, command.instanceId, System.currentTimeMillis(), persistence));
             return response(result);
+        } finally {
+            lock.unlock();
         }
     }
 
     private Response heartbeat(String agentId, Command command) {
-        synchronized (leaseLock) {
-            var lease = leases.get(command.name.trim());
+        var name = command.name.trim();
+        var lock = leaseLock(name);
+        lock.lock();
+        try {
+            var lease = leases.get(name);
             if (lease == null || !lease.ownedBy(agentId, command.instanceId)) {
                 return Response.failure("not_registered", "backend must register this instance before sending heartbeats");
             }
-            leases.put(command.name.trim(), new Lease(agentId, command.instanceId, System.currentTimeMillis(), lease.persistence));
+            leases.put(name, new Lease(agentId, command.instanceId, System.currentTimeMillis(), lease.persistence));
             return Response.success("heartbeat", "");
+        } finally {
+            lock.unlock();
         }
     }
 
     private Response unregister(String agentId, Command command) throws Exception {
-        synchronized (leaseLock) {
-            var lease = leases.get(command.name.trim());
+        var name = command.name.trim();
+        var lock = leaseLock(name);
+        lock.lock();
+        try {
+            var lease = leases.get(name);
             if (lease == null || !lease.ownedBy(agentId, command.instanceId)) return Response.failure("not_registered", "backend instance is not registered");
             var result = servers.unregister(command.name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
-            if (result.success()) leases.remove(command.name.trim(), lease);
+            if (result.success()) leases.remove(name, lease);
             return response(result);
+        } finally {
+            lock.unlock();
         }
     }
 
-    private void expireLeases() {
+    void expireLeases() {
         var cutoff = System.currentTimeMillis() - config.heartbeatTimeout().toMillis();
-        synchronized (leaseLock) {
-            leases.forEach((name, lease) -> {
-                if (lease.lastSeen < cutoff && leases.remove(name, lease)) {
-                    try {
-                        servers.unregister(name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
-                                .toCompletableFuture().get(5, TimeUnit.SECONDS);
-                    } catch (Exception ignored) { }
+        leases.forEach((name, observedLease) -> {
+            if (observedLease.lastSeen >= cutoff) {
+                return;
+            }
+            var lock = leaseLock(name);
+            lock.lock();
+            try {
+                var lease = leases.get(name);
+                if (lease == null || lease != observedLease || lease.lastSeen >= cutoff) {
+                    return;
                 }
-            });
-        }
+                var result = servers.unregister(name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
+                        .toCompletableFuture().get(5, TimeUnit.SECONDS);
+                if (result.success() || "not_found".equals(result.outcome())) {
+                    leases.remove(name, lease);
+                }
+            } catch (Exception ignored) {
+                // Keep the lease so a later sweep can retry a transient server-service failure.
+            } finally {
+                lock.unlock();
+            }
+        });
+    }
+
+    private ReentrantLock leaseLock(String name) {
+        return leaseLocks[Math.floorMod(name.hashCode(), leaseLocks.length)];
     }
 
     private String hmac(String secret, String value) throws Exception {

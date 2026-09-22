@@ -92,4 +92,25 @@ final class ConnectionAdmissionControlTest {
         assertEquals("global_rate_limit", second.rejectionReason());
         assertEquals(0, control.activeConnections());
     }
+
+    @Test
+    void incrementallyEvictsIdleRateBucketsWithoutScanningTheWholeMap() {
+        var now = new AtomicLong(1_000);
+        var control = new ConnectionAdmissionControl(1, 1, 0, 2_048, now::get);
+        for (var index = 0; index < 1_024; index++) {
+            var admission = control.acquire(new InetSocketAddress("192.0.2." + (index + 1), 50_000));
+            assertTrue(admission.accepted());
+            control.release(admission);
+        }
+        assertEquals(1_024, control.trackedRateAddresses());
+
+        now.addAndGet(3_000_000_000L);
+        for (var index = 0; index < 1_024; index++) {
+            var admission = control.acquire(new InetSocketAddress("198.51.100.1", 50_000));
+            assertTrue(admission.accepted());
+            control.release(admission);
+        }
+
+        assertEquals(961, control.trackedRateAddresses());
+    }
 }

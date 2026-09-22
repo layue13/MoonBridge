@@ -32,6 +32,10 @@ final class CompressionRewriteRuntime implements AutoCloseable {
         this.maxEventLoopDelayNanos = Math.max(0L, maxEventLoopDelayMillis) * 1_000_000L;
     }
 
+    boolean enabled() {
+        return enabled;
+    }
+
     RewriteAttempt rewrite(
             ByteBufAllocator allocator,
             ProxyMetrics metrics,

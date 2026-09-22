@@ -12,6 +12,8 @@ import dev.strataproxy.command.DefaultCommandRegistry;
 import dev.strataproxy.command.SimpleEventBus;
 import dev.strataproxy.plugin.command.CommandResult;
 import dev.strataproxy.plugin.command.CommandSpec;
+import dev.strataproxy.plugin.command.CommandRegistry;
+import dev.strataproxy.plugin.event.EventBus;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
@@ -42,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class NettyProxyNetworkServerSmokeTest {
     @Test
     void cleansUpEventLoopsWhenBindFails() throws Exception {
-        try (var first = new NettyProxyNetworkServer(
+        try (var first = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.empty(),
                 new ProxyMetrics(),
@@ -51,7 +53,7 @@ final class NettyProxyNetworkServerSmokeTest {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
 
-            var contender = new NettyProxyNetworkServer(
+            var contender = proxy(
                     1,
                     (request, remoteAddress) -> java.util.Optional.empty(),
                     new ProxyMetrics(),
@@ -69,7 +71,7 @@ final class NettyProxyNetworkServerSmokeTest {
     void rejectsPerAddressConnectionStormOverRealTcp() throws Exception {
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(1024, 1_000, 128, 1024, 100, 2, 10_000);
-        try (var proxy = new NettyProxyNetworkServer(
+        try (var proxy = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.empty(),
                 metrics,
@@ -129,7 +131,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var selected = server("survival-1", backendPort);
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(1024, 1_000, 128, 1024, 100, 100, 5_000);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     (request, remoteAddress) -> java.util.Optional.of(selected),
                     metrics,
@@ -218,7 +220,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
             var resolver = new ReplacementBackendResolver(first, second);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     resolver,
                     metrics,
@@ -285,7 +287,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(4096, 250, 128, 1024, 100, 100, 5_000);
             var resolver = new ReplacementBackendResolver(first, unavailableReplacement);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     resolver,
                     metrics,
@@ -360,7 +362,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
             var resolver = new ReplacementBackendResolver(first, second);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     resolver,
                     metrics,
@@ -446,7 +448,7 @@ final class NettyProxyNetworkServerSmokeTest {
                             .thenApply(result -> result.success()
                                     ? CommandResult.ok()
                                     : CommandResult.failure(result.outcome()))));
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     resolver,
                     metrics,
@@ -527,7 +529,7 @@ final class NettyProxyNetworkServerSmokeTest {
                             .thenApply(result -> result.success()
                                     ? CommandResult.ok()
                                     : CommandResult.failure(result.outcome()))));
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     resolver,
                     metrics,
@@ -609,7 +611,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var commands = new DefaultCommandRegistry();
             commands.register(new CommandSpec("servers", List.of(), "", "", context ->
                     java.util.concurrent.CompletableFuture.completedFuture(CommandResult.ok("Servers: survival-1"))));
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     (request, remoteAddress) -> java.util.Optional.of(selected),
                     metrics,
@@ -643,7 +645,7 @@ final class NettyProxyNetworkServerSmokeTest {
     void externalPlayerTransferReportsMissingPlayer() throws Exception {
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
-        try (var proxy = new NettyProxyNetworkServer(
+        try (var proxy = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.empty(),
                 metrics,
@@ -681,7 +683,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var selected = server("survival-1", backendPort);
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(1024, 1_000, 128, 1024, 100, 100, 5_000, true);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     (request, remoteAddress) -> {
                         resolverAddress.set(remoteAddress);
@@ -699,9 +701,9 @@ final class NettyProxyNetworkServerSmokeTest {
                     client.getOutputStream().write("PROXY TCP4 203.0.113.7 198.51.100.10 41000 25577\r\n".getBytes(StandardCharsets.US_ASCII));
                     client.getOutputStream().write(handshake);
                     client.getOutputStream().flush();
+                    assertArrayEquals(handshake, backendRead.get(5, TimeUnit.SECONDS));
                 }
 
-                assertArrayEquals(handshake, backendRead.get(5, TimeUnit.SECONDS));
                 assertEquals("203.0.113.7", ((InetSocketAddress) resolverAddress.get()).getHostString());
                 assertEquals(41000, ((InetSocketAddress) resolverAddress.get()).getPort());
             }
@@ -734,7 +736,7 @@ final class NettyProxyNetworkServerSmokeTest {
             var selected = server("survival-1", backendPort);
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(2048, 1_000, 128, 1024, 100, 100, 5_000);
-            try (var proxy = new NettyProxyNetworkServer(
+            try (var proxy = proxy(
                     1,
                     (request, remoteAddress) -> java.util.Optional.of(selected),
                     metrics,
@@ -744,7 +746,6 @@ final class NettyProxyNetworkServerSmokeTest {
                     256,
                     8192,
                     0.75d,
-                    null,
                     MinecraftAuthRuntime.offline(),
                     new MinecraftForwardingRuntime("bungee-legacy", ""),
                     false,
@@ -784,7 +785,7 @@ final class NettyProxyNetworkServerSmokeTest {
         var selected = server("survival-1", closedBackendPort);
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(2048, 500, 128, 1024, 100, 100, 5_000);
-        try (var proxy = new NettyProxyNetworkServer(
+        try (var proxy = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.of(selected),
                 metrics,
@@ -810,7 +811,7 @@ final class NettyProxyNetworkServerSmokeTest {
     void sendsLoginDisconnectWhenNoRouteExistsOverRealTcp() throws Exception {
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(2048, 500, 128, 1024, 100, 100, 5_000);
-        try (var proxy = new NettyProxyNetworkServer(
+        try (var proxy = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.empty(),
                 metrics,
@@ -838,7 +839,7 @@ final class NettyProxyNetworkServerSmokeTest {
         var selected = server("survival-1", freePort());
         var metrics = new ProxyMetrics();
         var tuning = new NetworkTuning(64, 500, 128, 1024, 100, 100, 5_000);
-        try (var proxy = new NettyProxyNetworkServer(
+        try (var proxy = proxy(
                 1,
                 (request, remoteAddress) -> java.util.Optional.of(selected),
                 metrics,
@@ -858,6 +859,58 @@ final class NettyProxyNetworkServerSmokeTest {
 
             assertEquals(1, metrics.snapshot().failedRoutes());
         }
+    }
+
+    private static NettyProxyNetworkServer proxy(
+            int workerThreads,
+            BackendResolver resolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning) {
+        return proxy(workerThreads, resolver, metrics, tuning, false, NettyProxyRuntime.defaults());
+    }
+
+    private static NettyProxyNetworkServer proxy(
+            int workerThreads,
+            BackendResolver resolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            CommandRegistry commands,
+            EventBus events) {
+        return proxy(workerThreads, resolver, metrics, tuning, false, new NettyProxyRuntime(
+                CompressionStrategies.from("adaptive"), 256, 8_192, 0.75d,
+                MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(),
+                false, 25, commands, events));
+    }
+
+    private static NettyProxyNetworkServer proxy(
+            int workerThreads,
+            BackendResolver resolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            boolean nativeTransport,
+            dev.strataproxy.compression.CompressionStrategy compressionStrategy,
+            int compressionMinThreshold,
+            int compressionMaxThreshold,
+            double compressionCpuGuard,
+            MinecraftAuthRuntime auth,
+            MinecraftForwardingRuntime forwarding,
+            boolean rewriteEnabled,
+            int rewriteMaxEventLoopDelayMillis) {
+        return proxy(workerThreads, resolver, metrics, tuning, nativeTransport, new NettyProxyRuntime(
+                compressionStrategy, compressionMinThreshold, compressionMaxThreshold, compressionCpuGuard,
+                auth, forwarding, MinecraftStatusRuntime.disabled(), rewriteEnabled, rewriteMaxEventLoopDelayMillis,
+                null, null));
+    }
+
+    private static NettyProxyNetworkServer proxy(
+            int workerThreads,
+            BackendResolver resolver,
+            ProxyMetrics metrics,
+            NetworkTuning tuning,
+            boolean nativeTransport,
+            NettyProxyRuntime runtime) {
+        return new NettyProxyNetworkServer(new NettyProxyServerConfig(
+                workerThreads, resolver, metrics, tuning, nativeTransport, runtime));
     }
 
     private static void awaitMetrics(ProxyMetrics metrics, int frontendBytes, int backendBytes) throws InterruptedException {

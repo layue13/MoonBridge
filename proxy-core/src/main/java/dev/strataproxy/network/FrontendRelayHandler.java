@@ -279,7 +279,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
         if (closePlayerSession) {
             if (replacementController == null) {
-                metrics.playerSessionClosed(playerName);
+                metrics.playerSessionClosed(playerName, identity.connectionId());
             } else {
                 replacementController.closePlayerSession(playerName);
             }
@@ -596,6 +596,9 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
     }
 
     private RelayCompressionObserver.Observation observeCompressionFrames(ByteBuf buffer) {
+        if (!compressionRewriteRuntime.enabled()) {
+            return RelayCompressionObserver.Observation.allow();
+        }
         return RelayCompressionObserver.observe(
                 compressionAudit, buffer, false, compressionRuntime, metrics);
     }

@@ -1,6 +1,5 @@
 package dev.strataproxy.network;
 
-import dev.strataproxy.compression.CompressionStrategy;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import io.netty.bootstrap.ServerBootstrap;
@@ -42,514 +41,23 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
     private final AtomicBoolean closed = new AtomicBoolean();
     private Channel channel;
 
-    /**
-     * Creates a server with default metrics, tuning, compression, and Java NIO transport.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     */
-    public NettyProxyNetworkServer(int workerThreads, BackendResolver backendResolver) {
-        this(workerThreads, backendResolver, new ProxyMetrics(), NetworkTuning.defaults(), false);
-    }
-
-    /**
-     * Creates a server with a custom maximum frame length and otherwise default tuning.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param maxFrameLength maximum inbound Minecraft frame length
-     */
-    public NettyProxyNetworkServer(int workerThreads, BackendResolver backendResolver, ProxyMetrics metrics, int maxFrameLength) {
-        this(workerThreads, backendResolver, metrics, new NetworkTuning(
-                maxFrameLength,
-                NetworkTuning.defaults().connectTimeoutMillis(),
-                NetworkTuning.defaults().writeBufferLowBytes(),
-                NetworkTuning.defaults().writeBufferHighBytes(),
-                NetworkTuning.defaults().maxConnections(),
-                NetworkTuning.defaults().maxConnectionsPerAddress(),
-                NetworkTuning.defaults().maxNewConnectionsPerSecond(),
-                NetworkTuning.defaults().maxNewConnectionsPerAddressPerSecond(),
-                NetworkTuning.defaults().initialHandshakeTimeoutMillis(),
-                NetworkTuning.defaults().proxyProtocol()),
-                false);
-    }
-
-    /**
-     * Creates a server with custom metrics and network tuning using Java NIO transport.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     */
-    public NettyProxyNetworkServer(int workerThreads, BackendResolver backendResolver, ProxyMetrics metrics, NetworkTuning tuning) {
-        this(workerThreads, backendResolver, metrics, tuning, false);
-    }
-
-    /**
-     * Creates a server with custom metrics, network tuning, and transport preference.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     */
-    public NettyProxyNetworkServer(int workerThreads, BackendResolver backendResolver, ProxyMetrics metrics, NetworkTuning tuning, boolean nativeTransport) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, CompressionRuntime.defaults());
-    }
-
-    /**
-     * Creates a server with command and event services using default compression and offline authentication.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param commands command registry used by in-game command interception
-     * @param events event bus used for player and proxy events
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            CommandRegistry commands,
-            EventBus events) {
-        this(workerThreads, backendResolver, metrics, tuning, false, CompressionRuntime.defaults(), null, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(), false, 25, commands, events);
-    }
-
-    /**
-     * Creates a server with custom compression strategy and default custom-payload policy.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                null);
-    }
-
-    /**
-     * Creates a server with custom compression and custom-payload inspection policy.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                customPayloadPolicy,
-                false);
-    }
-
-    /**
-     * Creates a server with optional compressed-frame rewriting.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            boolean compressionRewriteEnabled) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                customPayloadPolicy,
-                MinecraftAuthRuntime.offline(),
-                compressionRewriteEnabled,
-                25);
-    }
-
-    /**
-     * Creates a server with optional compressed-frame rewriting and explicit rewrite latency guard.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     * @param compressionRewriteMaxEventLoopDelayMillis maximum event-loop delay allowed before rewrite suppression
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                customPayloadPolicy,
-                MinecraftAuthRuntime.offline(),
-                compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis);
-    }
-
-    /**
-     * Creates a server with custom authentication runtime.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param authRuntime login authentication runtime
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     * @param compressionRewriteMaxEventLoopDelayMillis maximum event-loop delay allowed before rewrite suppression
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            MinecraftAuthRuntime authRuntime,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                customPayloadPolicy,
-                authRuntime,
-                MinecraftForwardingRuntime.none(),
-                MinecraftStatusRuntime.disabled(),
-                compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis);
-    }
-
-    /**
-     * Creates a server with custom authentication and backend forwarding runtime.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param authRuntime login authentication runtime
-     * @param forwardingRuntime backend forwarding runtime
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     * @param compressionRewriteMaxEventLoopDelayMillis maximum event-loop delay allowed before rewrite suppression
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            MinecraftAuthRuntime authRuntime,
-            MinecraftForwardingRuntime forwardingRuntime,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
-        this(
-                workerThreads,
-                backendResolver,
-                metrics,
-                tuning,
-                nativeTransport,
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard,
-                customPayloadPolicy,
-                authRuntime,
-                forwardingRuntime,
-                MinecraftStatusRuntime.disabled(),
-                compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis);
-    }
-
-    /**
-     * Creates a server with custom authentication, forwarding, and status response runtime.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param authRuntime login authentication runtime
-     * @param forwardingRuntime backend forwarding runtime
-     * @param statusRuntime Minecraft status response runtime
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     * @param compressionRewriteMaxEventLoopDelayMillis maximum event-loop delay allowed before rewrite suppression
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            MinecraftAuthRuntime authRuntime,
-            MinecraftForwardingRuntime forwardingRuntime,
-            MinecraftStatusRuntime statusRuntime,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, new CompressionRuntime(
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard),
-                customPayloadPolicy,
-                authRuntime,
-                forwardingRuntime,
-                statusRuntime,
-                compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis,
-                null,
-                null);
-    }
-
-    /**
-     * Creates a server with the full public runtime surface, including command and event services.
-     *
-     * @param workerThreads requested worker thread count; zero lets Netty choose
-     * @param backendResolver resolver used to select backend servers
-     * @param metrics metrics accumulator
-     * @param tuning network limits and timeouts
-     * @param nativeTransport whether native Netty transport should be preferred
-     * @param compressionStrategy compression strategy
-     * @param compressionMinThreshold minimum compression threshold
-     * @param compressionMaxThreshold maximum compression threshold
-     * @param compressionCpuGuard CPU guard threshold for adaptive compression
-     * @param customPayloadPolicy custom payload anomaly policy
-     * @param authRuntime login authentication runtime
-     * @param forwardingRuntime backend forwarding runtime
-     * @param statusRuntime Minecraft status response runtime
-     * @param compressionRewriteEnabled whether compressed-frame rewrite is enabled
-     * @param compressionRewriteMaxEventLoopDelayMillis maximum event-loop delay allowed before rewrite suppression
-     * @param commands command registry used by in-game command interception
-     * @param events event bus used for player and proxy events
-     */
-    public NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionStrategy compressionStrategy,
-            int compressionMinThreshold,
-            int compressionMaxThreshold,
-            double compressionCpuGuard,
-            Object customPayloadPolicy,
-            MinecraftAuthRuntime authRuntime,
-            MinecraftForwardingRuntime forwardingRuntime,
-            MinecraftStatusRuntime statusRuntime,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis,
-            CommandRegistry commands,
-            EventBus events) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, new CompressionRuntime(
-                compressionStrategy,
-                compressionMinThreshold,
-                compressionMaxThreshold,
-                compressionCpuGuard),
-                customPayloadPolicy,
-                authRuntime,
-                forwardingRuntime,
-                statusRuntime,
-                compressionRewriteEnabled,
-                compressionRewriteMaxEventLoopDelayMillis,
-                commands,
-                events);
-    }
-
-    private NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionRuntime compressionRuntime) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, null);
-    }
-
-    private NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionRuntime compressionRuntime,
-            Object customPayloadPolicy) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(), false, 25, null, null);
-    }
-
-    private NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionRuntime compressionRuntime,
-            Object customPayloadPolicy,
-            boolean compressionRewriteEnabled) {
-        this(workerThreads, backendResolver, metrics, tuning, nativeTransport, compressionRuntime, customPayloadPolicy, MinecraftAuthRuntime.offline(), MinecraftForwardingRuntime.none(), MinecraftStatusRuntime.disabled(), compressionRewriteEnabled, 25, null, null);
-    }
-
-    private NettyProxyNetworkServer(
-            int workerThreads,
-            BackendResolver backendResolver,
-            ProxyMetrics metrics,
-            NetworkTuning tuning,
-            boolean nativeTransport,
-            CompressionRuntime compressionRuntime,
-            Object customPayloadPolicy,
-            MinecraftAuthRuntime authRuntime,
-            MinecraftForwardingRuntime forwardingRuntime,
-            MinecraftStatusRuntime statusRuntime,
-            boolean compressionRewriteEnabled,
-            int compressionRewriteMaxEventLoopDelayMillis,
-            CommandRegistry commands,
-            EventBus events) {
-        this.transport = NettyTransport.select(nativeTransport, workerThreads);
+    /** Creates a listener from its complete, named configuration. */
+    public NettyProxyNetworkServer(NettyProxyServerConfig config) {
+        this.transport = NettyTransport.select(config.nativeTransport(), config.workerThreads());
         this.bossGroup = transport.bossGroup();
         this.workerGroup = transport.workerGroup();
-        this.backendResolver = backendResolver;
-        this.metrics = metrics;
-        this.tuning = tuning;
-        this.compressionRuntime = compressionRuntime;
-        this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;
-        this.forwardingRuntime = forwardingRuntime == null ? MinecraftForwardingRuntime.none() : forwardingRuntime;
-        this.statusRuntime = statusRuntime == null ? MinecraftStatusRuntime.disabled() : statusRuntime;
+        this.backendResolver = config.backendResolver();
+        this.metrics = config.metrics();
+        this.tuning = config.tuning();
+        this.compressionRuntime = config.runtime().compressionRuntime();
+        this.authRuntime = config.runtime().auth();
+        this.forwardingRuntime = config.runtime().forwarding();
+        this.statusRuntime = config.runtime().status();
         this.relaySessions = new RelaySessionRegistry();
-        this.commands = commands;
-        this.events = events;
-        this.compressionRewriteEnabled = compressionRewriteEnabled;
-        this.compressionRewriteMaxEventLoopDelayMillis = compressionRewriteMaxEventLoopDelayMillis;
+        this.commands = config.runtime().commands();
+        this.events = config.runtime().events();
+        this.compressionRewriteEnabled = config.runtime().compressionRewriteEnabled();
+        this.compressionRewriteMaxEventLoopDelayMillis = config.runtime().compressionRewriteMaxEventLoopDelayMillis();
         this.runtimeMonitor = new NetworkRuntimeMonitor(workerGroup, metrics, Duration.ofSeconds(1));
         this.admissionControl = new ConnectionAdmissionControl(
                 tuning.maxConnections(),
@@ -557,6 +65,7 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
                 tuning.maxNewConnectionsPerSecond(),
                 tuning.maxNewConnectionsPerAddressPerSecond());
     }
+
 
     @Override
     /** Provides bind. */
@@ -663,10 +172,30 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         return relaySessions.transferPlayer(playerName, targetServerName);
     }
 
+    /** Requests a transfer for one exact relay connection. */
+    public CompletionStage<PlayerTransferResult> transferPlayer(
+            dev.strataproxy.plugin.service.PlayerIdentity player,
+            String targetServerName) {
+        if (closed.get()) {
+            return CompletableFuture.completedFuture(PlayerTransferResult.failure(
+                    "server_closed", "", "", targetServerName));
+        }
+        return relaySessions.transferPlayer(player, targetServerName);
+    }
+
     /** Sends a plugin message to the current backend selected for one player. */
     public CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
         if (closed.get()) return CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("server_closed"));
         return relaySessions.sendPluginMessage(playerName, channel, payload);
+    }
+
+    /** Sends a plugin message to one exact relay connection. */
+    public CompletionStage<dev.strataproxy.plugin.service.PluginMessageResult> sendPluginMessage(
+            dev.strataproxy.plugin.service.PlayerIdentity player,
+            String channel,
+            byte[] payload) {
+        if (closed.get()) return CompletableFuture.completedFuture(dev.strataproxy.plugin.service.PluginMessageResult.failure("server_closed"));
+        return relaySessions.sendPluginMessage(player, channel, payload);
     }
 
     @Override

@@ -3,6 +3,7 @@ package dev.strataproxy.network;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
@@ -12,6 +13,7 @@ import java.util.function.LongSupplier;
 public final class ConnectionAdmissionControl {
     private static final long RATE_WINDOW_NANOS = 1_000_000_000L;
     private static final int RATE_CLEANUP_INTERVAL = 1024;
+    private static final int RATE_CLEANUP_BATCH = 64;
 
     private final int maxConnections;
     private final int maxConnectionsPerAddress;
@@ -23,6 +25,7 @@ public final class ConnectionAdmissionControl {
     private final AtomicInteger admissionAttempts = new AtomicInteger();
     private final ConcurrentHashMap<String, AtomicInteger> activeByAddress = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RateWindow> rateByAddress = new ConcurrentHashMap<>();
+    private final ConcurrentLinkedQueue<String> rateCleanupQueue = new ConcurrentLinkedQueue<>();
 
     /**
      * Creates admission control with concurrency limits only.
@@ -84,13 +87,16 @@ public final class ConnectionAdmissionControl {
         var now = nanoTime.getAsLong();
         var key = key(remoteAddress);
         if (maxNewConnectionsPerAddressPerSecond > 0) {
-            var addressRate = rateByAddress.computeIfAbsent(key, ignored -> new RateWindow());
+            var addressRate = rateByAddress.computeIfAbsent(key, ignored -> {
+                rateCleanupQueue.offer(key);
+                return new RateWindow();
+            });
             if (!addressRate.tryAcquire(maxNewConnectionsPerAddressPerSecond, now)) {
                 maybeCleanupRateBuckets(now);
                 return Admission.rejected(key, "per_address_rate_limit");
             }
         }
-        if (!globalRate.tryAcquire(maxNewConnectionsPerSecond, now)) {
+        if (maxNewConnectionsPerSecond > 0 && !globalRate.tryAcquire(maxNewConnectionsPerSecond, now)) {
             maybeCleanupRateBuckets(now);
             return Admission.rejected(key, "global_rate_limit");
         }
@@ -147,6 +153,10 @@ public final class ConnectionAdmissionControl {
         return counter == null ? 0 : counter.get();
     }
 
+    int trackedRateAddresses() {
+        return rateByAddress.size();
+    }
+
     private static boolean tryIncrement(AtomicInteger counter, int limit) {
         while (true) {
             var current = counter.get();
@@ -175,9 +185,19 @@ public final class ConnectionAdmissionControl {
             return;
         }
         var staleBefore = now - RATE_WINDOW_NANOS * 2;
-        for (var entry : rateByAddress.entrySet()) {
-            if (activeConnectionsFor(entry.getKey()) == 0 && entry.getValue().lastTouchedNanos() < staleBefore) {
-                rateByAddress.remove(entry.getKey(), entry.getValue());
+        for (var scanned = 0; scanned < RATE_CLEANUP_BATCH; scanned++) {
+            var key = rateCleanupQueue.poll();
+            if (key == null) {
+                return;
+            }
+            var window = rateByAddress.get(key);
+            if (window == null) {
+                continue;
+            }
+            if (activeConnectionsFor(key) == 0 && window.lastTouchedNanos() < staleBefore) {
+                rateByAddress.remove(key, window);
+            } else {
+                rateCleanupQueue.offer(key);
             }
         }
     }
