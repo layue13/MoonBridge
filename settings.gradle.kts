@@ -20,6 +20,7 @@ dependencyResolutionManagement {
 rootProject.name = "strataproxy"
 
 include(
+    "backend-agent-api",
     "proxy-core",
     "proxy-plugin-api",
 )

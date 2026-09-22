@@ -1,6 +1,8 @@
 package dev.strataproxy.bukkit;
 
+import dev.strataproxy.backend.api.BackendAgentApi;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import javax.crypto.Mac;
@@ -21,6 +23,7 @@ import java.util.UUID;
 /** Bukkit-side adapter for the restricted StrataProxy backend-agent protocol. */
 public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
     private BackendAgentClient client;
+    private BukkitBackendMessageApi messaging;
     private int heartbeatTask = -1;
     private boolean unregisterOnDisable;
 
@@ -34,6 +37,8 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
+        messaging = new BukkitBackendMessageApi(this);
+        getServer().getServicesManager().register(BackendAgentApi.class, messaging, this, ServicePriority.Normal);
         unregisterOnDisable = getConfig().getBoolean("unregisterOnDisable", true);
         runAsync("register");
         long heartbeatTicks = Math.max(20L, getConfig().getLong("heartbeatSeconds", 10L) * 20L);
@@ -49,6 +54,10 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
     public void onDisable() {
         if (heartbeatTask >= 0) {
             getServer().getScheduler().cancelTask(heartbeatTask);
+        }
+        if (messaging != null) {
+            getServer().getServicesManager().unregisterAll(this);
+            messaging.close();
         }
         if (client != null && unregisterOnDisable) {
             runAsync("unregister");

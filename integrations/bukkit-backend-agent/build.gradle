@@ -20,6 +20,16 @@ dependencies {
     }
 }
 
+sourceSets {
+    main {
+        java {
+            // Bundle the platform-neutral contract so dependent Bukkit plugins
+            // resolve one shared API class from this agent plugin.
+            srcDir '../../backend-agent-api/src/main/java'
+        }
+    }
+}
+
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8

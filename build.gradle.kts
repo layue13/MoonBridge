@@ -59,13 +59,13 @@ val publishBukkitBackendAgent = tasks.register<Exec>("publishBukkitBackendAgent"
 }
 
 tasks.named("check") {
-    dependsOn(buildBukkitBackendAgent)
+    dependsOn(":backend-agent-api:check", buildBukkitBackendAgent)
 }
 
 tasks.register("publish") {
     group = "publishing"
-    description = "Publishes StrataProxy plugin contracts and official Bukkit integration."
-    dependsOn(":proxy-plugin-api:publish", publishBukkitBackendAgent)
+    description = "Publishes StrataProxy plugin and backend-agent contracts and official Bukkit integration."
+    dependsOn(":proxy-plugin-api:publish", ":backend-agent-api:publish", publishBukkitBackendAgent)
 }
 
 gradle.projectsEvaluated {

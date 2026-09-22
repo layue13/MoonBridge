@@ -103,6 +103,8 @@ unregisterOnDisable: true
 
 所有受信任 backend agent 共用 `sharedSecret`；每个 `backend.name` 仍必须唯一。插件每次启动会生成 instance ID，旧实例的心跳或注销不能影响新实例。端点限制请求长度、并发连接、排队和 replay nonce；建议保持 `bind` 在环回地址，或以防火墙限制到可信 Bukkit 主机。
 
+`backend-agent-api` 是平台无关的业务消息契约：Bukkit agent 会将其作为服务发布，未来 Forge agent 实现同一接口即可。业务插件应仅依赖该 API，并在 Bukkit 的 `plugin.yml` 中声明 `depend: [StrataProxyBackendAgent]`；通过 `ServicesManager` 获取 `BackendAgentApi` 后可调用 `send(...)` 向玩家连接写 plugin message，或调用 `listen(...)` 接收代理发来的消息。API 不引用 Bukkit、Forge 或代理内部实现。
+
 ## 代理插件
 
 代理会从配置文件同级的 `plugins/` 目录加载插件 JAR。插件仅依赖 `dev.strataproxy:proxy-plugin-api`，不要依赖 `proxy-core` 的实现类。
@@ -111,6 +113,12 @@ unregisterOnDisable: true
 
 ```powershell
 .\gradlew.bat :proxy-plugin-api:publishToMavenLocal
+```
+
+后端业务插件的公共契约可同样发布到本机 Maven：
+
+```powershell
+.\gradlew.bat :backend-agent-api:publishToMavenLocal
 ```
 
 插件项目依赖：
