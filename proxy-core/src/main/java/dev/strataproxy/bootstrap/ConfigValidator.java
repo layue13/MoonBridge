@@ -1,6 +1,6 @@
 package dev.strataproxy.bootstrap;
 
-import dev.strataproxy.api.server.ServerDescriptor;
+import dev.strataproxy.domain.server.ServerDescriptor;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;

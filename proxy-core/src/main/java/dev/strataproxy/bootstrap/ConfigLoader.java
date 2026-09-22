@@ -4,9 +4,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import dev.strataproxy.api.server.ProtocolRange;
-import dev.strataproxy.api.server.ServerCapability;
-import dev.strataproxy.api.server.ServerDescriptor;
+import dev.strataproxy.domain.server.ProtocolRange;
+import dev.strataproxy.domain.server.ServerCapability;
+import dev.strataproxy.domain.server.ServerDescriptor;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;

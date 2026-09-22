@@ -1,0 +1,54 @@
+package dev.strataproxy.bootstrap;
+
+import dev.strataproxy.domain.server.ProtocolRange;
+import dev.strataproxy.domain.server.ServerCapability;
+import dev.strataproxy.domain.server.ServerDescriptor;
+import dev.strataproxy.domain.server.ServerLoad;
+import dev.strataproxy.infrastructure.observability.ProxyMetrics;
+import dev.strataproxy.infrastructure.registry.memory.InMemoryServerRegistry;
+import org.junit.jupiter.api.Test;
+
+import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+final class ProxyObservedLoadReporterTest {
+    @Test
+    void flushesObservedTrafficRatesWithoutOverwritingCapacityState() {
+        var registry = new InMemoryServerRegistry();
+        registry.register(new ServerDescriptor(
+                "survival-1",
+                new InetSocketAddress("127.0.0.1", 25565),
+                Set.of("survival"),
+                Set.of(ServerCapability.LARGE_PAYLOAD),
+                new ProtocolRange(0, Integer.MAX_VALUE, "any"),
+                100,
+                200,
+                240,
+                false,
+                Map.of()));
+        registry.updateLoad("survival-1", new ServerLoad(42, 200, 240, 0, 0, 0, 0.0d));
+        var metrics = new ProxyMetrics();
+
+        try (var reporter = new ProxyObservedLoadReporter(registry, metrics, Duration.ofSeconds(2))) {
+            reporter.flushOnce();
+
+            metrics.frontendToBackendBytes("survival-1", 512);
+            metrics.backendToFrontendBytes("survival-1", 1024);
+            metrics.eventLoopDelayNanos(2_500_000);
+            reporter.flushOnce();
+        }
+
+        var load = registry.get("survival-1").orElseThrow().load();
+        assertEquals(42, load.players());
+        assertEquals(200, load.softCapacity());
+        assertEquals(240, load.hardCapacity());
+        assertEquals(256, load.inboundBytesPerSecond());
+        assertEquals(512, load.outboundBytesPerSecond());
+        assertEquals(0, load.packetsPerSecond());
+        assertEquals(2.5d, load.eventLoopDelayMillis());
+    }
+}

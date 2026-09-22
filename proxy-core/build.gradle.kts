@@ -100,7 +100,7 @@ tasks.named("check") {
 }
 
 application {
-    mainClass.set("dev.strataproxy.app.StrataProxyLauncher")
+    mainClass.set("dev.strataproxy.bootstrap.StrataProxyLauncher")
     applicationName = "strataproxy"
 }
 
