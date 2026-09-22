@@ -1,8 +1,6 @@
 package dev.strataproxy.network;
 
 import dev.strataproxy.compression.CompressionAction;
-import dev.strataproxy.network.MinecraftCompressionCodec;
-import dev.strataproxy.network.ProxyMetrics.CompressionDirection;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.command.CommandSource;
 import dev.strataproxy.plugin.event.EventBus;
@@ -13,7 +11,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 
-import java.util.ArrayList;
 import java.util.List;
 
 final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
@@ -204,8 +201,6 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                 var rewrite = compressionRewriteRuntime.rewrite(
                         context.alloc(),
                         metrics,
-                        serverName,
-                        CompressionDirection.FRONTEND_TO_BACKEND,
                         rewriteInput,
                         compressionAudit.threshold(),
                         compressionActions,
@@ -227,7 +222,6 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
             closeBackend();
             return;
         }
-        recordBackpressureIfNeeded(backend, CompressionDirection.FRONTEND_TO_BACKEND);
         backend.writeAndFlush(outbound).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
                 flushQueuedLegacyForgeFramesIfReady(context);
@@ -311,9 +305,7 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
                     : forgeHandshakeTracker.observe(MinecraftForgeHandshakeTracker.Direction.SERVERBOUND, buffer);
             for (var event : events) {
                 markLegacyForgeClientDetected(event);
-                recordForgeHandshakeEvent(context, event);
             }
-            recordForgeHandshakeState();
             markDeferredBackendReplacementReady();
         } catch (RuntimeException ignored) {
             // Handshake observation must not affect transparent forwarding.
@@ -362,12 +354,6 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         if (deferredBackendReplacementReady && replacementController != null && forgeHandshakeTracker.complete()) {
             deferredBackendReplacementReady = false;
             replacementController.runDeferredBackendReplacementIfReady();
-        }
-    }
-
-    private void recordForgeHandshakeState() {
-        if (forgeHandshakeTracker == null) {
-            return;
         }
     }
 
@@ -603,39 +589,15 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         legacyForgeRacePending = null;
     }
 
-    private void recordForgeHandshakeEvent(ChannelHandlerContext context, MinecraftForgeHandshakeTracker.Event event) {
-    }
-
     private void closeBackend() {
         if (backend.isOpen()) {
             backend.close();
         }
     }
 
-    private CompressionObservation observeCompressionFrames(ByteBuf buffer) {
-        if (!compressionAudit.negotiated()) {
-            return CompressionObservation.allow();
-        }
-        try {
-            var samples = compressionAudit.observeFrontend(buffer);
-            if (samples.isEmpty()) {
-                return CompressionObservation.rewriteAllow();
-            }
-            var actions = new ArrayList<CompressionAction>(samples.size());
-            for (var sample : samples) {
-                actions.add(compressionRuntime.recordDecision(
-                        metrics,
-                        serverName,
-                        CompressionDirection.FRONTEND_TO_BACKEND,
-                        sample.rawBytes(),
-                        ratio(sample),
-                        0));
-            }
-            return new CompressionObservation(true, true, actions);
-        } catch (RuntimeException exception) {
-            compressionAudit.closeFrontendSampler();
-            return CompressionObservation.block();
-        }
+    private RelayCompressionObserver.Observation observeCompressionFrames(ByteBuf buffer) {
+        return RelayCompressionObserver.observe(
+                compressionAudit, buffer, false, compressionRuntime, metrics);
     }
 
     private GameCommandFrameInterceptor.Interception observeCommand(ChannelHandlerContext context, ByteBuf buffer) {
@@ -671,10 +633,6 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         } catch (RuntimeException exception) {
             loginStartSampler.close();
         }
-    }
-
-    private void recordBackpressureIfNeeded(Channel target, CompressionDirection direction) {
-        // Netty applies the actual backpressure; no packet-level diagnostic state is retained.
     }
 
     private static String remoteAddress(ChannelHandlerContext context) {
@@ -738,25 +696,4 @@ final class FrontendRelayHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private static double ratio(MinecraftCompressedFrameAuditSampler.CompressionFrameSample sample) {
-        return sample.rawBytes() == 0 ? 1.0d : (double) sample.compressedBytes() / sample.rawBytes();
-    }
-
-    private record CompressionObservation(boolean shouldForward, boolean rewriteEligible, List<CompressionAction> actions) {
-        private static final CompressionObservation ALLOW = new CompressionObservation(true, false, List.of());
-        private static final CompressionObservation REWRITE_ALLOW = new CompressionObservation(true, true, List.of());
-        private static final CompressionObservation BLOCK = new CompressionObservation(false, false, List.of());
-
-        private static CompressionObservation allow() {
-            return ALLOW;
-        }
-
-        private static CompressionObservation rewriteAllow() {
-            return REWRITE_ALLOW;
-        }
-
-        private static CompressionObservation block() {
-            return BLOCK;
-        }
-    }
 }

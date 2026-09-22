@@ -540,7 +540,6 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         this.workerGroup = transport.workerGroup();
         this.backendResolver = backendResolver;
         this.metrics = metrics;
-        this.metrics.networkTransport(transport.name(), transport.nativeTransport());
         this.tuning = tuning;
         this.compressionRuntime = compressionRuntime;
         this.authRuntime = authRuntime == null ? MinecraftAuthRuntime.offline() : authRuntime;

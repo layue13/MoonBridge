@@ -143,7 +143,6 @@ final class BackendSwitchLoginHandler extends ByteToMessageDecoder {
                 if (profile.compressionNegotiationSupported()) {
                     var threshold = MinecraftProtocolCodec.readVarInt(packet);
                     compressionAudit.negotiate(threshold);
-                    metrics.compressionNegotiated(serverName, threshold);
                     return FrameAction.WAIT;
                 }
             }

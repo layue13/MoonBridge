@@ -1,6 +1,5 @@
 package dev.strataproxy.network;
 
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.EventLoopGroup;
 
 import java.time.Duration;
@@ -31,7 +30,6 @@ final class NetworkRuntimeMonitor implements AutoCloseable {
     }
 
     void sample() {
-        metrics.pooledDirectMemoryBytes(PooledByteBufAllocator.DEFAULT.metric().usedDirectMemory());
         for (var eventExecutor : workerGroup) {
             var submittedAt = System.nanoTime();
             eventExecutor.execute(() -> metrics.eventLoopDelayNanos(System.nanoTime() - submittedAt));

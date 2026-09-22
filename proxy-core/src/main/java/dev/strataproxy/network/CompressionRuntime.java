@@ -35,31 +35,27 @@ final class CompressionRuntime {
     }
 
     CompressionAction recordDecision(
-            ProxyMetrics metrics,
-            String serverName,
-            ProxyMetrics.CompressionDirection direction,
+            RelayDirection direction,
             long rawBytes,
             double historicalCompressionRatio,
             long eventLoopDelayNanos) {
         if (rawBytes > Integer.MAX_VALUE) {
             var bypass = new CompressionAction.Bypass("packet too large for compression context");
-            metrics.compressionDecision(serverName, direction, actionName(bypass), actionThreshold(bypass));
             return bypass;
         }
         var action = choose(direction, rawBytes, historicalCompressionRatio, eventLoopDelayNanos);
-        metrics.compressionDecision(serverName, direction, actionName(action), actionThreshold(action));
         return action;
     }
 
     CompressionAction choose(
-            ProxyMetrics.CompressionDirection direction,
+            RelayDirection direction,
             long rawBytes,
             double historicalCompressionRatio,
             long eventLoopDelayNanos) {
         if (rawBytes > Integer.MAX_VALUE) {
             return new CompressionAction.Bypass("packet too large for compression context");
         }
-        var packetDirection = direction == ProxyMetrics.CompressionDirection.BACKEND_TO_FRONTEND
+        var packetDirection = direction == RelayDirection.BACKEND_TO_FRONTEND
                 ? PacketDirection.CLIENTBOUND
                 : PacketDirection.SERVERBOUND;
         var eventLoopDelayMillis = Math.max(0L, eventLoopDelayNanos / 1_000_000L);
@@ -77,14 +73,6 @@ final class CompressionRuntime {
 
     int targetThreshold(CompressionAction action) {
         return actionThreshold(action);
-    }
-
-    private static String actionName(CompressionAction action) {
-        return switch (action) {
-            case CompressionAction.Bypass ignored -> "bypass";
-            case CompressionAction.Threshold ignored -> "threshold";
-            case CompressionAction.Force ignored -> "force";
-        };
     }
 
     private static int actionThreshold(CompressionAction action) {

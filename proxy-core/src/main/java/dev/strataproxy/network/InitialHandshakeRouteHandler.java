@@ -1,7 +1,6 @@
 package dev.strataproxy.network;
 
 import dev.strataproxy.api.server.RegisteredServer;
-import dev.strataproxy.network.ProxyMetrics.CompressionDirection;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import io.netty.buffer.ByteBuf;

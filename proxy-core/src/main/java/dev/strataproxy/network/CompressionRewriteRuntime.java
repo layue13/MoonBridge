@@ -11,13 +11,6 @@ import io.netty.buffer.Unpooled;
 import java.util.List;
 
 final class CompressionRewriteRuntime implements AutoCloseable {
-    private static final String OUTCOME_BYPASS = "bypass";
-    private static final String OUTCOME_REWRITTEN = "rewritten";
-    private static final String OUTCOME_UNCHANGED = "unchanged";
-    private static final String OUTCOME_MIXED_POLICY = "mixed_policy";
-    private static final String OUTCOME_EVENT_LOOP_GUARD = "event_loop_guard";
-    private static final String OUTCOME_UNSAFE_FRAME = "unsafe_frame";
-    private static final String OUTCOME_FAILED = "failed";
     private static final int MAX_REWRITE_BATCH_FRAMES = 64;
 
     private final boolean enabled;
@@ -42,8 +35,6 @@ final class CompressionRewriteRuntime implements AutoCloseable {
     RewriteAttempt rewrite(
             ByteBufAllocator allocator,
             ProxyMetrics metrics,
-            String serverName,
-            ProxyMetrics.CompressionDirection direction,
             ByteBuf frame,
             int sourceThreshold,
             List<CompressionAction> actions,
@@ -52,7 +43,6 @@ final class CompressionRewriteRuntime implements AutoCloseable {
             return RewriteAttempt.unchanged(frame);
         }
         if (maxEventLoopDelayNanos > 0 && metrics.currentEventLoopDelayNanos() > maxEventLoopDelayNanos) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_EVENT_LOOP_GUARD);
             return RewriteAttempt.unchanged(frame);
         }
         if ((actions == null || actions.isEmpty()) && !hasCompleteFrame(frame, maxUncompressedBytes)) {
@@ -60,22 +50,18 @@ final class CompressionRewriteRuntime implements AutoCloseable {
             return RewriteAttempt.hold();
         }
         if (actions == null || actions.isEmpty()) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_BYPASS);
             return RewriteAttempt.unchanged(frame);
         }
         var targetThreshold = commonTargetThreshold(actions);
         if (targetThreshold < 0) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_BYPASS);
             return RewriteAttempt.unchanged(frame);
         }
         if (targetThreshold == Integer.MIN_VALUE) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_MIXED_POLICY);
             return RewriteAttempt.unchanged(frame);
         }
         try {
             var rewriteInput = rewriteInput(allocator, frame, actions.size(), maxUncompressedBytes);
             try {
-                var startedAt = System.nanoTime();
                 var rewritten = rewriter.rewriteBatch(
                         allocator,
                         rewriteInput.frames(),
@@ -84,20 +70,13 @@ final class CompressionRewriteRuntime implements AutoCloseable {
                         maxUncompressedBytes,
                         MAX_REWRITE_BATCH_FRAMES);
                 var output = rewritten.frames();
-                var outcome = rewritten.rewrittenFrameBytes() == rewritten.originalFrameBytes()
-                        && rewritten.isCompressed() == rewritten.wasCompressed()
-                        ? OUTCOME_UNCHANGED
-                        : OUTCOME_REWRITTEN;
-                metrics.compressionRewrite(serverName, direction, outcome, System.nanoTime() - startedAt);
                 return new RewriteAttempt(output, output != frame, false);
             } finally {
                 rewriteInput.close();
             }
         } catch (MinecraftCodecException exception) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_UNSAFE_FRAME);
             return RewriteAttempt.unchanged(frame);
         } catch (RuntimeException exception) {
-            metrics.compressionRewrite(serverName, direction, OUTCOME_FAILED);
             return RewriteAttempt.unchanged(frame);
         }
     }

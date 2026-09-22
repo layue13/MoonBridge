@@ -67,17 +67,6 @@ public final class ProxyMetrics {
     }
     public long currentEventLoopDelayNanos() { return eventLoopDelayNanos.get(); }
     public void eventLoopDelayNanos(long nanos) { eventLoopDelayNanos.set(Math.max(0, nanos)); }
-    public void pooledDirectMemoryBytes(long bytes) { }
-    public void networkTransport(String name, boolean nativeTransport) { }
-    public void nativeRuntime(boolean enabled, String os, String arch, String detectionSource, String tlsProvider,
-                              String compressionProvider, boolean preferNativeTransport, boolean requireNativeTransport,
-                              Map<String, Boolean> features) { }
-
-    public void compressionNegotiated(String server, int threshold) { }
-    public void compressionDecision(String server, CompressionDirection direction, String action, int threshold) { }
-    public void compressionRewrite(String server, CompressionDirection direction, String outcome) { }
-    public void compressionRewrite(String server, CompressionDirection direction, String outcome, long cpuNanos) { }
-
     public Snapshot snapshot() {
         return new Snapshot(acceptedConnections.sum(), activeConnections.get(), rejectedConnections.sum(), immutableLongs(rejectedByReason),
                 handshakeTimeouts.sum(), routedConnections.sum(), failedRoutes.sum(), backendConnectFailures.sum(), immutableLongs(backendReplacements),
@@ -93,14 +82,6 @@ public final class ProxyMetrics {
     }
     private static String normalize(String value) { return value == null || value.isBlank() ? "unknown" : value.trim(); }
 
-    public enum CompressionDirection {
-        FRONTEND_TO_BACKEND("frontend_to_backend"),
-        BACKEND_TO_FRONTEND("backend_to_frontend");
-
-        private final String label;
-        CompressionDirection(String label) { this.label = label; }
-        public String label() { return label; }
-    }
     public static final class ServerTrafficRecorder {
         private final ProxyMetrics metrics; private final String server;
         private ServerTrafficRecorder(ProxyMetrics metrics, String server) { this.metrics = metrics; this.server = server; }

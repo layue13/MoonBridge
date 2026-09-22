@@ -198,16 +198,6 @@ public final class StrataProxyLauncher {
             out.println("StrataProxy plugins: directory=" + pluginDirectory + " loaded=" + loadedPlugins.size());
             started.add(() -> eventBus.publish(new ProxyStoppingEvent()));
             var nativeDecision = NativeRuntimeDecision.resolve(nativeOptions(config.nativeRuntime()), NativeCapabilityDetector.detect());
-            metrics.nativeRuntime(
-                    nativeDecision.enabled(),
-                    nativeDecision.capabilities().os(),
-                    nativeDecision.capabilities().arch(),
-                    nativeDecision.capabilities().detectionSource(),
-                    nativeDecision.tlsProvider(),
-                    nativeDecision.compressionProvider(),
-                    nativeDecision.preferNativeTransport(),
-                    nativeDecision.requireNativeTransport(),
-                    nativeDecision.capabilities().featureMap(nativeDecision.enabledFeatures()));
             var compressionStrategy = CompressionStrategies.from(config.compression().mode());
             out.println("StrataProxy config: " + configPath.toAbsolutePath());
             out.println("StrataProxy servers: " + registry.snapshot().size());
