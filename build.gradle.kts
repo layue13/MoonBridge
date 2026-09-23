@@ -22,8 +22,8 @@ plugins {
 }
 
 allprojects {
-    group = "dev.strataproxy"
-    version = "0.2.0-SNAPSHOT"
+    group = "uk.potatolab"
+    version = System.getenv("GITHUB_SHA")?.take(7) ?: "0.2.0-SNAPSHOT"
 }
 
 tasks.register("check") {
@@ -188,6 +188,12 @@ gradle.projectsEvaluated {
 
     tasks.named("check") {
         dependsOn(releaseAuditSmokeTest)
+    }
+
+    tasks.register("build") {
+        group = "build"
+        description = "Builds, verifies, and stages all StrataProxy outputs."
+        dependsOn("check", "release")
     }
 }
 

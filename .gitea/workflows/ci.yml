@@ -12,7 +12,11 @@ jobs:
     uses: https://git.nest.potatolab.uk:8443/TDLM/ci-templates/.gitea/workflows/build-publish.yml@main
     with:
       java-version: '25'
-      gradle-tasks: 'check release'
+      package-artifact-id: proxy-plugin-api
+      artifact-paths: |
+        **/build/libs/*.jar
+        **/build/distributions/*.zip
+        build/release/*
     secrets:
       MAVEN_USER: ${{ secrets.MAVEN_USER }}
       MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
