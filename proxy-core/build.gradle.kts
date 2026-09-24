@@ -95,6 +95,9 @@ distributions {
             from(project(":dns-discovery").tasks.named("jar")) {
                 into("plugins")
             }
+            from(project(":agent-discovery").tasks.named("jar")) {
+                into("plugins")
+            }
         }
     }
 }

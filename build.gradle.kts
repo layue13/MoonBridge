@@ -10,7 +10,7 @@ allprojects {
 
 tasks.register("check") {
     group = "verification"
-    dependsOn(":proxy-plugin-api:check", ":proxy-core:check", ":dns-discovery:check")
+    dependsOn(":proxy-plugin-api:check", ":proxy-core:check", ":dns-discovery:check", ":agent-discovery:check")
 }
 
 tasks.register("publish") {
