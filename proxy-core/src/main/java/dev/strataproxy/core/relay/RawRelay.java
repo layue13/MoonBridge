@@ -58,6 +58,22 @@ public final class RawRelay {
             maybeStartReads();
         }
 
+        /** Stops forwarding and waits for writes already accepted by the old peer. */
+        public CompletionStage<Void> pause() {
+            return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.pause(), fromBackend.pause()));
+        }
+
+        /** Resumes the same pair after a replacement attempt fails. */
+        public CompletionStage<Void> resume() {
+            return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.resume(), fromBackend.resume()));
+        }
+
+        /** Removes both paused handlers without closing either channel. */
+        public CompletionStage<Void> detach() {
+            return pause().thenCompose(ignored ->
+                    CompletableFuture.allOf(fromClient.detach(), fromBackend.detach()));
+        }
+
         private void maybeStartReads() {
             if (pending.get() == 0 && started.get() && readsStarted.compareAndSet(false, true)) {
                 fromClient.requestRead();
@@ -94,6 +110,9 @@ public final class RawRelay {
         private Side opposite;
         private int writesInFlight;
         private boolean closed;
+        private boolean paused;
+        private boolean detached;
+        private CompletableFuture<Void> pauseComplete;
 
         private Side(Channel peer) {
             this.peer = peer;
@@ -111,13 +130,73 @@ public final class RawRelay {
                 ctx.executor().execute(this::requestRead);
                 return;
             }
-            if (!closed && writesInFlight == 0 && ctx.channel().isActive() && peer.isActive() && peer.isWritable()) {
+            if (!closed && !paused && !detached && writesInFlight == 0
+                    && ctx.channel().isActive() && peer.isActive() && peer.isWritable()) {
                 ctx.read();
             }
         }
 
+        private CompletableFuture<Void> pause() {
+            CompletableFuture<Void> result = new CompletableFuture<>();
+            context.executor().execute(() -> {
+                if (closed || detached || !context.channel().isActive()) {
+                    result.completeExceptionally(new IllegalStateException("relay is closed"));
+                    return;
+                }
+                if (paused && pauseComplete != null) {
+                    pauseComplete.whenComplete((ignored, failure) -> {
+                        if (failure == null) result.complete(null);
+                        else result.completeExceptionally(failure);
+                    });
+                    return;
+                }
+                paused = true;
+                context.channel().config().setAutoRead(false);
+                if (writesInFlight == 0) result.complete(null);
+                else pauseComplete = result;
+            });
+            return result;
+        }
+
+        private CompletableFuture<Void> resume() {
+            CompletableFuture<Void> result = new CompletableFuture<>();
+            context.executor().execute(() -> {
+                if (closed || detached || writesInFlight != 0 || !context.channel().isActive()) {
+                    result.completeExceptionally(new IllegalStateException("relay is not ready to resume"));
+                    return;
+                }
+                paused = false;
+                pauseComplete = null;
+                requestRead();
+                result.complete(null);
+            });
+            return result;
+        }
+
+        private CompletableFuture<Void> detach() {
+            CompletableFuture<Void> result = new CompletableFuture<>();
+            context.executor().execute(() -> {
+                if (!paused || writesInFlight != 0 || detached) {
+                    result.completeExceptionally(new IllegalStateException("relay is not paused"));
+                    return;
+                }
+                detached = true;
+                try {
+                    context.pipeline().remove(this);
+                    result.complete(null);
+                } catch (RuntimeException failure) {
+                    result.completeExceptionally(failure);
+                }
+            });
+            return result;
+        }
+
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object message) {
+            if (paused || detached) {
+                ReferenceCountUtil.release(message);
+                return;
+            }
             if (!(message instanceof ByteBuf) || closed || !peer.isActive()) {
                 ReferenceCountUtil.release(message);
                 closePair(ctx);
@@ -128,6 +207,11 @@ public final class RawRelay {
                 peer.writeAndFlush(message).addListener((ChannelFutureListener) future ->
                         ctx.executor().execute(() -> {
                             writesInFlight--;
+                            if (paused && writesInFlight == 0 && pauseComplete != null) {
+                                if (future.isSuccess()) pauseComplete.complete(null);
+                                else pauseComplete.completeExceptionally(future.cause());
+                                pauseComplete = null;
+                            }
                             if (future.isSuccess()) requestRead();
                             else closePair(ctx);
                         }));
@@ -146,7 +230,7 @@ public final class RawRelay {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
-            closePair(ctx);
+            if (!detached) closePair(ctx);
             ctx.fireChannelInactive();
         }
 
@@ -158,6 +242,10 @@ public final class RawRelay {
         private void closePair(ChannelHandlerContext ctx) {
             if (closed) return;
             closed = true;
+            if (pauseComplete != null) {
+                pauseComplete.completeExceptionally(new IllegalStateException("relay closed while pausing"));
+                pauseComplete = null;
+            }
             ctx.channel().close();
             peer.close();
         }
