@@ -36,8 +36,8 @@ public final class StagedBackendResolver implements BackendResolver, ServerTarge
             PlayerIdentity identity,
             String playerName) {
         var host = RegistryBackendResolver.normalizeRouteHost(handshake.requestedHost());
-        var context = new RouteContext(RouteStage.INITIAL, host, host, handshake.protocolVersion(),
-                String.valueOf(remoteAddress), identity, playerName, "");
+        var context = new RouteContext(RouteStage.INITIAL, host, handshake.protocolVersion(),
+                identity, playerName, "");
         return routes.evaluate(context).thenApply(decision -> select(decision, handshake, remoteAddress));
     }
 

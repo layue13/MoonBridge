@@ -27,10 +27,10 @@ final class StagedBackendResolverTest {
         var registry = new InMemoryServerRegistry();
         registry.register(server("a-spawn"));
         registry.register(server("b-personal-spawn"));
-        try (var routes = new StageRouteEngine(Duration.ofSeconds(1))) {
+        try (var routes = new StageRouteEngine()) {
             var observedName = new AtomicReference<String>();
-            routes.forPlugin("spawn").register(RouteStage.INITIAL, 100, context -> {
-                assertEquals("play.example.net", context.requestedHost());
+            routes.forPlugin("spawn").registerInitial(Duration.ofSeconds(1), context -> {
+                assertEquals("play.example.net", context.routeKey());
                 assertEquals(5, context.protocolVersion());
                 observedName.set(context.playerName());
                 return CompletableFuture.completedFuture(RouteDecision.select("b-personal-spawn"));
@@ -54,8 +54,8 @@ final class StagedBackendResolverTest {
         registry.register(server("a-spawn"));
         registry.register(server("b-island"));
         registry.updateDrainMode("b-island", true);
-        try (var routes = new StageRouteEngine(Duration.ofSeconds(1))) {
-            var registration = routes.forPlugin("islands").register(RouteStage.INITIAL, 10,
+        try (var routes = new StageRouteEngine()) {
+            var registration = routes.forPlugin("islands").registerInitial(Duration.ofSeconds(1),
                     context -> CompletableFuture.completedFuture(RouteDecision.select("b-island")));
             var resolver = new StagedBackendResolver(registry, routes);
             var handshake = new MinecraftHandshake(5, "play.example.net", 25565, 2);
@@ -65,7 +65,7 @@ final class StagedBackendResolverTest {
             assertTrue(resolver.resolveInitial(handshake, remote, player, "Steve")
                     .toCompletableFuture().get(2, TimeUnit.SECONDS).isEmpty());
             registration.close();
-            routes.forPlugin("islands").register(RouteStage.INITIAL, 10,
+            routes.forPlugin("islands").registerInitial(Duration.ofSeconds(1),
                     context -> CompletableFuture.completedFuture(RouteDecision.reject("maintenance")));
             assertTrue(resolver.resolveInitial(handshake, remote, player, "Steve")
                     .toCompletableFuture().get(2, TimeUnit.SECONDS).isEmpty());

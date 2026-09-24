@@ -420,18 +420,12 @@ final class NettyProxyNetworkServerSmokeTest {
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
             var resolver = new ReplacementBackendResolver(first, second);
-            try (var routes = new StageRouteEngine(Duration.ofSeconds(1));
+            try (var routes = new StageRouteEngine();
                  var proxy = proxy(
                     1,
                      resolver,
                      metrics,
                      tuning)) {
-                routes.forPlugin("island-routing").register(RouteStage.TRANSFER, 0, context -> {
-                    assertEquals("island", context.routeKey());
-                    assertEquals("survival-1", context.currentServer());
-                    assertEquals(763, context.protocolVersion());
-                    return CompletableFuture.completedFuture(RouteDecision.select("survival-2"));
-                });
                 proxy.bind(new InetSocketAddress("127.0.0.1", 0))
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
@@ -445,7 +439,17 @@ final class NettyProxyNetworkServerSmokeTest {
                     awaitPlayerSession(metrics, "Steve", "survival-1");
                     var session = metrics.findPlayerSession("Steve").orElseThrow();
                     var identity = new PlayerIdentity(session.playerId(), session.connectionId());
-                    var players = new PluginPlayerService(new AtomicReference<>(proxy), metrics, routes, List::of);
+                    var players = new PluginPlayerService(new AtomicReference<>(proxy), metrics, routes);
+                    var unhandled = players.route(identity, "island").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals("no_route", unhandled.outcome());
+                    routes.forPlugin("island-routing").registerTransfer("island", Duration.ofSeconds(1), context -> {
+                        assertEquals(RouteStage.TRANSFER, context.stage());
+                        assertEquals("island", context.routeKey());
+                        assertEquals("survival-1", context.currentServer());
+                        assertEquals(763, context.protocolVersion());
+                        return CompletableFuture.completedFuture(RouteDecision.select("survival-2"));
+                    });
                     var transfer = players.route(identity, "island")
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);

@@ -9,8 +9,7 @@ import java.util.concurrent.CompletionStage;
  * complete their returned stage with {@link RouteDecision#pass()},
  * {@link RouteDecision#select(String)}, or {@link RouteDecision#reject(String)}.
  * The proxy invokes policies away from Netty event-loop threads. Implementors
- * must not block while deciding a route; the proxy applies its configured
- * timeout to each decision stage.</p>
+ * must not block while deciding a route; the timeout comes from registration.</p>
  *
  * <p>A {@code null} return value or exceptional completion is a policy failure
  * and is handled by the route pipeline as a failure, not as {@code PASS}.</p>

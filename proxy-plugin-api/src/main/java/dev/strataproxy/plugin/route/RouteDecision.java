@@ -3,13 +3,13 @@ package dev.strataproxy.plugin.route;
 import java.util.Objects;
 
 /**
- * Result from a route policy: continue evaluation, select a backend, or stop
- * routing with a rejection.
+ * Result from the route owner: use the initial default, select a backend, or
+ * reject the request. Passing at transfer time means no route was selected.
  */
 public record RouteDecision(Kind kind, String serverName, String reason) {
     /** The three distinct outcomes understood by the route pipeline. */
     public enum Kind {
-        /** This policy has no decision; evaluate the next policy. */
+        /** Use the initial default, or leave an explicit transfer unselected. */
         PASS,
         /** This policy selected the named backend. */
         SELECT,

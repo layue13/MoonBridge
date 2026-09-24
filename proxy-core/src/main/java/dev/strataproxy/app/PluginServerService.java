@@ -203,9 +203,8 @@ final class PluginServerService implements dev.strataproxy.plugin.service.Server
                 descriptor.weight(), descriptor.metadata(),
                 new ServerHealthView(ServerHealthView.Status.valueOf(health.status().name()),
                         health.backendPingMillis(), health.recentFailureRate(), health.reason(), health.updatedAt()),
-                new ServerLoadView(load.players(), load.softCapacity(), load.hardCapacity(),
-                        load.inboundBytesPerSecond(), load.outboundBytesPerSecond(),
-                        load.packetsPerSecond(), load.eventLoopDelayMillis()));
+                new ServerLoadView(load.players(), load.inboundBytesPerSecond(),
+                        load.outboundBytesPerSecond()));
     }
 
     private static String rootMessage(Throwable throwable) {

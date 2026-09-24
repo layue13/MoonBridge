@@ -130,12 +130,12 @@ final class PluginManagerTest {
             output.closeEntry();
         }
         var scheduler = new DefaultScheduler();
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1));
+        try (var engine = new StageRouteEngine();
              var manager = new PluginManager(new DefaultCommandRegistry(), new SimpleEventBus(),
                      emptyPlayers(), ignored -> emptyChannels(), ignored -> emptyServers(),
                      metadata -> engine.forPlugin(metadata.id()), scheduler, LoggerFactory.getLogger("test"))) {
             assertThrows(IOException.class, () -> manager.loadJar(pluginJar));
-            var context = new RouteContext(RouteStage.INITIAL, "", "", 0, "", null, "", "");
+            var context = new RouteContext(RouteStage.INITIAL, "", 0, null, "", "");
             assertEquals(RouteDecision.Kind.PASS, engine.evaluate(context).toCompletableFuture().join().kind());
         } finally {
             scheduler.close();
@@ -220,7 +220,7 @@ final class PluginManagerTest {
     public static final class FailingRoutePlugin implements ProxyPlugin {
         @Override
         public void onLoad(PluginContext context) {
-            context.routes().register(RouteStage.INITIAL, 0,
+            context.routes().registerInitial(Duration.ofSeconds(1),
                     ignored -> CompletableFuture.completedFuture(RouteDecision.reject("stale")));
         }
 

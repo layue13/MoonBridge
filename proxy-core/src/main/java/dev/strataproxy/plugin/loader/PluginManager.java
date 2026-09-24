@@ -34,6 +34,19 @@ import org.slf4j.LoggerFactory;
  */
 public final class PluginManager implements AutoCloseable {
     private static final String DESCRIPTOR = "strataproxy-plugin.properties";
+    private static final RouteService NO_ROUTES = new RouteService() {
+        @Override
+        public AutoCloseable registerInitial(java.time.Duration timeout,
+                dev.strataproxy.plugin.route.RoutePolicy policy) {
+            return () -> { };
+        }
+
+        @Override
+        public AutoCloseable registerTransfer(String routeKey, java.time.Duration timeout,
+                dev.strataproxy.plugin.route.RoutePolicy policy) {
+            return () -> { };
+        }
+    };
 
     private final CommandRegistry commands;
     private final EventBus events;
@@ -65,7 +78,7 @@ public final class PluginManager implements AutoCloseable {
             Scheduler scheduler,
             Logger logger) {
         this(commands, events, players, ignored -> channels, ignored -> servers,
-                ignored -> (stage, priority, policy) -> () -> { }, scheduler, logger);
+                ignored -> NO_ROUTES, scheduler, logger);
     }
 
     /**
@@ -87,7 +100,7 @@ public final class PluginManager implements AutoCloseable {
             Scheduler scheduler,
             Logger logger) {
         this(commands, events, players, channels, servers,
-                ignored -> (stage, priority, policy) -> () -> { }, scheduler, logger);
+                ignored -> NO_ROUTES, scheduler, logger);
     }
 
     public PluginManager(
@@ -226,14 +239,24 @@ public final class PluginManager implements AutoCloseable {
         }
 
         @Override
-        public synchronized AutoCloseable register(
-                dev.strataproxy.plugin.route.RouteStage stage,
-                int priority,
-                dev.strataproxy.plugin.route.RoutePolicy policy) {
+        public synchronized AutoCloseable registerInitial(
+                java.time.Duration timeout, dev.strataproxy.plugin.route.RoutePolicy policy) {
             if (closed) {
                 throw new IllegalStateException("Plugin routes are closed");
             }
-            var registration = delegate.register(stage, priority, policy);
+            return track(delegate.registerInitial(timeout, policy));
+        }
+
+        @Override
+        public synchronized AutoCloseable registerTransfer(String routeKey,
+                java.time.Duration timeout, dev.strataproxy.plugin.route.RoutePolicy policy) {
+            if (closed) {
+                throw new IllegalStateException("Plugin routes are closed");
+            }
+            return track(delegate.registerTransfer(routeKey, timeout, policy));
+        }
+
+        private AutoCloseable track(AutoCloseable registration) {
             registrations.add(registration);
             return () -> {
                 synchronized (ScopedRoutes.this) {

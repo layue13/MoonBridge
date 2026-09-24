@@ -1,28 +1,21 @@
 package dev.strataproxy.plugin.route;
 
 /**
- * Registers plugin route policies for invocation at defined routing stages.
- *
- * <p>For a stage, policies are evaluated from highest priority to lowest
- * priority. Policies with the same priority are evaluated in registration
- * order. A {@link RouteDecision#pass()} continues to the next policy;
- * {@code SELECT} and {@code REJECT} end evaluation for that routing attempt.
- * If all policies pass, the proxy applies its stage-specific fallback.</p>
- *
- * <p>The proxy invokes registered policies away from Netty event-loop threads,
- * supports their asynchronous {@link java.util.concurrent.CompletionStage}
- * results, and applies a proxy-defined timeout. Closing the returned registration
- * removes that policy from future routing attempts.</p>
+ * Registers one initial route policy and one policy per transfer route key.
+ * The proxy invokes policies away from Netty event-loop threads and waits for
+ * their asynchronous result until the supplied timeout. Closing a registration
+ * removes it; another plugin may then register that route.
  */
 public interface RouteService {
     /**
-     * Registers a policy for one routing stage.
-     *
-     * @param stage stage at which to invoke the policy
-     * @param priority evaluation priority; larger values run first
-     * @param policy policy callback
-     * @return registration handle whose close method unregisters the policy
-     * @throws IllegalArgumentException if {@code stage} or {@code policy} is null
+     * Handles first-backend selection. Only one plugin may own this handler.
+     * Passing leaves selection to the proxy's minimal default.
      */
-    AutoCloseable register(RouteStage stage, int priority, RoutePolicy policy);
+    AutoCloseable registerInitial(java.time.Duration timeout, RoutePolicy policy);
+
+    /**
+     * Handles an explicit {@code players().route(player, routeKey)} request.
+     * Only one plugin may own a key. Passing means no route was selected.
+     */
+    AutoCloseable registerTransfer(String routeKey, java.time.Duration timeout, RoutePolicy policy);
 }

@@ -169,19 +169,19 @@ public final class ExamplePlugin implements ProxyPlugin {
 
 ### 分阶段路由
 
-插件通过 `context.routes().register(stage, priority, policy)` 注册策略。`INITIAL` 在代理获得玩家身份后、连接第一个后端前执行：离线模式读取 LoginStart 后触发，在线模式完成会话验证后触发。`TRANSFER` 在已连接玩家调用 `context.players().route(playerIdentity, routeKey)` 时触发；它不会因为负载变化自动迁移玩家。直接指定目标的 `transfer(...)` 仍可用，不经过路由策略。
+插件通过 `context.routes().registerInitial(timeout, policy)` 注册唯一的入服处理器，通过 `registerTransfer(routeKey, timeout, policy)` 为每种转服意图注册一个处理器；同一意图只能由一个插件负责。入服处理器在代理获得玩家身份后、连接第一个后端前执行：离线模式读取 LoginStart 后触发，在线模式完成会话验证后触发。转服处理器在已连接玩家调用 `context.players().route(playerIdentity, routeKey)` 时触发；它不会因为负载变化自动迁移玩家。直接指定目标的 `transfer(...)` 仍可用，不经过路由处理器。
 
-策略返回 `CompletionStage<RouteDecision>`，可以异步查询数据库或远端服务。`pass()` 继续执行下一个策略；`select(serverName)` 选定后端；`reject(reason)` 拒绝本次路由。优先级高的策略先执行，同优先级按注册顺序执行。全部 `pass()` 时，`INITIAL` 使用上面的最小默认入服选择，`TRANSFER` 按 `routeKey` 匹配后端名称、标签或 `metadata.route`。代理会在建立连接前再次检查目标后端的健康、排空、硬容量与协议兼容性。
+处理器返回 `CompletionStage<RouteDecision>`，可以异步查询数据库、唤醒服务器并等待玩法插件确认就绪。`select(serverName)` 选定后端；`reject(reason)` 拒绝本次路由；`pass()` 在入服时使用最小默认选择，在转服时表示没有选出目标。每个处理器在注册时声明等待超时。代理会在建立连接前再次检查目标后端的健康、排空、硬容量与协议兼容性。
 
 ```java
-context.routes().register(RouteStage.INITIAL, 100, route ->
+context.routes().registerInitial(Duration.ofSeconds(3), route ->
         playerSettings.findSpawn(route.playerIdentity(), route.playerName())
                 .thenApply(spawn -> spawn == null
                         ? RouteDecision.pass()
                         : RouteDecision.select(spawn)));
 ```
 
-路由回调在 Netty 事件循环之外运行；每个策略有 3 秒超时，异常或超时会拒绝本次路由。`RouteContext` 只描述此次路由请求。插件可随时通过 `PluginContext.servers().find(name)`、`firstWithTag(tag)` 或 `servers()` 获取 `ServerView`，自行按玩法、玩家配置或负载选服。`ServerView` 包含健康状态、排空状态、容量、协议范围、标签、元数据和负载；每次查询返回当前快照，不会随状态更新而改变。负载中的玩家数取自代理当前连接，流量是代理侧采样值；它不代表后端 CPU、TPS 或业务队列。插件卸载或加载失败时，代理会注销其路由策略。
+路由回调在 Netty 事件循环之外运行；异常或超时会拒绝本次路由。`RouteContext` 只描述此次路由请求。插件可随时通过 `PluginContext.servers().find(name)`、`firstWithTag(tag)` 或 `servers()` 获取 `ServerView`，自行按玩法、玩家配置或负载选服。`ServerView` 包含健康状态、排空状态、容量、协议范围、标签、元数据和负载；每次查询返回当前快照，不会随状态更新而改变。负载中的玩家数取自代理当前连接，流量是代理侧采样值；它不代表后端 CPU、TPS 或业务队列。插件卸载或加载失败时，代理会注销其路由处理器。
 
 ## 发布
 

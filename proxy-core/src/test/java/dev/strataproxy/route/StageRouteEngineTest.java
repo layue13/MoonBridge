@@ -6,8 +6,6 @@ import dev.strataproxy.plugin.route.RouteStage;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -15,116 +13,101 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class StageRouteEngineTest {
     @Test
-    void evaluatesByDescendingPriorityAndKeepsRegistrationOrderForTies() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1))) {
-            var routes = engine.forPlugin("test");
-            List<String> calls = new ArrayList<>();
-            routes.register(RouteStage.INITIAL, 10, context -> {
-                calls.add("first-high");
-                return CompletableFuture.completedFuture(RouteDecision.pass());
-            });
-            routes.register(RouteStage.INITIAL, 10, context -> {
-                calls.add("second-high");
-                return CompletableFuture.completedFuture(RouteDecision.pass());
-            });
-            routes.register(RouteStage.INITIAL, 0, context -> {
-                calls.add("low");
-                return CompletableFuture.completedFuture(RouteDecision.select("spawn-a"));
-            });
-
-            RouteDecision decision = engine.evaluate(context(RouteStage.INITIAL))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
-
-            assertEquals(RouteDecision.Kind.SELECT, decision.kind());
-            assertEquals("spawn-a", decision.serverName());
-            assertEquals(List.of("first-high", "second-high", "low"), calls);
+    void onePluginOwnsInitialRouteUntilItsRegistrationCloses() throws Exception {
+        try (var engine = new StageRouteEngine()) {
+            var first = engine.forPlugin("spawn").registerInitial(Duration.ofSeconds(1),
+                    ignored -> CompletableFuture.completedFuture(RouteDecision.select("spawn-1")));
+            assertThrows(IllegalStateException.class, () -> engine.forPlugin("other")
+                    .registerInitial(Duration.ofSeconds(1),
+                            ignored -> CompletableFuture.completedFuture(RouteDecision.select("other"))));
+            assertEquals("spawn-1", engine.evaluate(context(RouteStage.INITIAL, "play.example.net"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).serverName());
+            first.close();
+            assertEquals(RouteDecision.Kind.PASS, engine.evaluate(context(RouteStage.INITIAL, "play.example.net"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).kind());
+            engine.forPlugin("other").registerInitial(Duration.ofSeconds(1),
+                    ignored -> CompletableFuture.completedFuture(RouteDecision.select("other")));
+            assertEquals("other", engine.evaluate(context(RouteStage.INITIAL, "play.example.net"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).serverName());
         }
     }
 
     @Test
-    void invokesPolicyOffCallingThreadAndSupportsAsynchronousCompletion() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1))) {
-            var calledOn = new AtomicReference<String>();
-            var completion = new CompletableFuture<RouteDecision>();
-            engine.forPlugin("test").register(RouteStage.TRANSFER, 0, context -> {
-                calledOn.set(Thread.currentThread().getName());
-                return completion;
-            });
+    void transferRouteDispatchesOnlyToTheOwnerOfItsKey() throws Exception {
+        try (var engine = new StageRouteEngine()) {
+            engine.forPlugin("islands").registerTransfer("island", Duration.ofSeconds(1),
+                    ignored -> CompletableFuture.completedFuture(RouteDecision.select("island-2")));
+            engine.forPlugin("instances").registerTransfer("instance", Duration.ofSeconds(1),
+                    ignored -> CompletableFuture.completedFuture(RouteDecision.select("instance-3")));
+            assertThrows(IllegalStateException.class, () -> engine.forPlugin("other")
+                    .registerTransfer("ISLAND", Duration.ofSeconds(1),
+                            ignored -> CompletableFuture.completedFuture(RouteDecision.pass())));
+            assertEquals("island-2", engine.evaluate(context(RouteStage.TRANSFER, "ISLAND"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).serverName());
+            assertEquals("instance-3", engine.evaluate(context(RouteStage.TRANSFER, "instance"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).serverName());
+            assertEquals(RouteDecision.Kind.PASS, engine.evaluate(context(RouteStage.TRANSFER, "unknown"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).kind());
+        }
+    }
 
-            var result = engine.evaluate(context(RouteStage.TRANSFER)).toCompletableFuture();
+    @Test
+    void invokesPolicyOffCallingThreadAndWaitsForAsynchronousReadiness() throws Exception {
+        try (var engine = new StageRouteEngine()) {
+            var calledOn = new AtomicReference<String>();
+            var ready = new CompletableFuture<RouteDecision>();
+            engine.forPlugin("islands").registerTransfer("island", Duration.ofSeconds(2), context -> {
+                calledOn.set(Thread.currentThread().getName());
+                return ready;
+            });
+            var result = engine.evaluate(context(RouteStage.TRANSFER, "island")).toCompletableFuture();
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
             while (calledOn.get() == null && System.nanoTime() < deadline) {
                 Thread.onSpinWait();
             }
             assertNotEquals(Thread.currentThread().getName(), calledOn.get());
             assertTrue(calledOn.get().startsWith("strataproxy-route-worker-"));
-
-            completion.complete(RouteDecision.select("island-2"));
+            assertTrue(!result.isDone());
+            ready.complete(RouteDecision.select("island-2"));
             assertEquals("island-2", result.get(2, TimeUnit.SECONDS).serverName());
         }
     }
 
     @Test
-    void returnsPassWithoutPoliciesAndUnregistersClosedPolicy() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1))) {
-            assertEquals(RouteDecision.Kind.PASS,
-                    engine.evaluate(context(RouteStage.INITIAL)).toCompletableFuture().get(1, TimeUnit.SECONDS).kind());
-
-            var registration = engine.forPlugin("test").register(RouteStage.INITIAL, 0,
-                    ignored -> CompletableFuture.completedFuture(RouteDecision.reject("blocked")));
-            registration.close();
-
-            assertEquals(RouteDecision.Kind.PASS,
-                    engine.evaluate(context(RouteStage.INITIAL)).toCompletableFuture().get(1, TimeUnit.SECONDS).kind());
+    void rejectsNullResultsExceptionsAndTimeouts() throws Exception {
+        try (var engine = new StageRouteEngine()) {
+            engine.forPlugin("null-result").registerInitial(Duration.ofSeconds(1), ignored -> null);
+            assertEquals(RouteDecision.Kind.REJECT, engine.evaluate(context(RouteStage.INITIAL, ""))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).kind());
         }
-    }
-
-    @Test
-    void rejectsNullResultsAndPolicyFailures() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1))) {
-            engine.forPlugin("null-result").register(RouteStage.INITIAL, 2, ignored -> null);
-            RouteDecision result = engine.evaluate(context(RouteStage.INITIAL)).toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
-            assertEquals(RouteDecision.Kind.REJECT, result.kind());
-            assertTrue(result.reason().contains("null-result"));
-        }
-
-        try (var engine = new StageRouteEngine(Duration.ofSeconds(1))) {
-            engine.forPlugin("exception").register(RouteStage.INITIAL, 2, ignored -> {
+        try (var engine = new StageRouteEngine()) {
+            engine.forPlugin("exception").registerInitial(Duration.ofSeconds(1), ignored -> {
                 throw new IllegalStateException("sensitive implementation detail");
             });
-            RouteDecision result = engine.evaluate(context(RouteStage.INITIAL)).toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
+            var result = engine.evaluate(context(RouteStage.INITIAL, ""))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
             assertEquals(RouteDecision.Kind.REJECT, result.kind());
-            assertTrue(result.reason().contains("exception"));
             assertTrue(!result.reason().contains("sensitive implementation detail"));
         }
-    }
-
-    @Test
-    void timesOutPolicyAndFailsClosed() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofMillis(40))) {
-            engine.forPlugin("slow").register(RouteStage.TRANSFER, 0,
+        try (var engine = new StageRouteEngine()) {
+            engine.forPlugin("slow").registerTransfer("island", Duration.ofMillis(40),
                     ignored -> new CompletableFuture<>());
-
-            RouteDecision result = engine.evaluate(context(RouteStage.TRANSFER)).toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
-
-            assertEquals(RouteDecision.Kind.REJECT, result.kind());
-            assertTrue(result.reason().contains("slow"));
+            assertEquals(RouteDecision.Kind.REJECT, engine.evaluate(context(RouteStage.TRANSFER, "island"))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS).kind());
         }
     }
 
     @Test
-    void timesOutEvenWhenPolicyBlocksBeforeReturningAStage() throws Exception {
-        try (var engine = new StageRouteEngine(Duration.ofMillis(100))) {
+    void timesOutEvenWhenCallbackBlocksBeforeReturningItsStage() throws Exception {
+        try (var engine = new StageRouteEngine()) {
             var entered = new CountDownLatch(1);
             var release = new CountDownLatch(1);
-            engine.forPlugin("blocking").register(RouteStage.INITIAL, 0, ignored -> {
+            engine.forPlugin("blocking").registerInitial(Duration.ofMillis(100), ignored -> {
                 entered.countDown();
                 try {
                     release.await();
@@ -134,7 +117,7 @@ final class StageRouteEngineTest {
                 return CompletableFuture.completedFuture(RouteDecision.select("too-late"));
             });
             try {
-                var result = engine.evaluate(context(RouteStage.INITIAL)).toCompletableFuture();
+                var result = engine.evaluate(context(RouteStage.INITIAL, "")).toCompletableFuture();
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
                 assertEquals(RouteDecision.Kind.REJECT, result.get(2, TimeUnit.SECONDS).kind());
             } finally {
@@ -143,7 +126,7 @@ final class StageRouteEngineTest {
         }
     }
 
-    private static RouteContext context(RouteStage stage) {
-        return new RouteContext(stage, "", "", 0, "", null, "", "");
+    private static RouteContext context(RouteStage stage, String key) {
+        return new RouteContext(stage, key, 0, null, "", "");
     }
 }

@@ -46,7 +46,7 @@ public record ServerView(
                 ? new ServerHealthView(ServerHealthView.Status.UNKNOWN, -1, 0, "", Instant.EPOCH)
                 : health;
         load = load == null
-                ? new ServerLoadView(0, softCapacity, hardCapacity, 0, 0, 0, 0)
+                ? new ServerLoadView(0, 0, 0)
                 : load;
     }
 
@@ -59,6 +59,7 @@ public record ServerView(
 
     /** Whether this snapshot permits another connection, before protocol-specific checks. */
     public boolean availableForNewConnections() {
-        return !drainMode && health.canReceiveNewConnections() && !load.isHardFull();
+        return !drainMode && health.canReceiveNewConnections()
+                && (hardCapacity <= 0 || load.players() < hardCapacity);
     }
 }

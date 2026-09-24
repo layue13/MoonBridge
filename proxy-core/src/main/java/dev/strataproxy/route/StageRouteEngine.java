@@ -7,124 +7,88 @@ import dev.strataproxy.plugin.route.RouteService;
 import dev.strataproxy.plugin.route.RouteStage;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * Evaluates registered routing policies in stage and priority order.
- *
- * <p>Policy callbacks are dispatched to a bounded worker pool, so they are
- * never invoked on a Netty event loop. Their returned stages are composed
- * asynchronously; a worker is not held while a policy waits for I/O. If all
- * policies pass, the engine returns {@code PASS} and the caller applies its
- * stage-specific fallback.</p>
- */
+/** Dispatches each route request to its single owning plugin. */
 public final class StageRouteEngine implements AutoCloseable {
-    private static final int MAX_WORKERS = 8;
-    private static final int QUEUE_CAPACITY = 1024;
-
-    private final long perPolicyTimeoutNanos;
-    private final ThreadPoolExecutor workers;
-    private final ScheduledThreadPoolExecutor timer;
-    private final AtomicLong sequence = new AtomicLong();
-    private final ConcurrentHashMap<RouteStage, CopyOnWriteArrayList<RegisteredPolicy>> policies =
-            new ConcurrentHashMap<>();
+    private final AtomicReference<Registration> initial = new AtomicReference<>();
+    private final ConcurrentHashMap<String, Registration> transfers = new ConcurrentHashMap<>();
     private final Set<CompletableFuture<RouteDecision>> inFlight = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final ThreadPoolExecutor workers;
+    private final ScheduledThreadPoolExecutor timer;
 
-    /**
-     * Creates an engine with bounded worker capacity and the timeout applied to
-     * each policy invocation.
-     *
-     * @param perPolicyTimeout maximum duration for one policy to produce a
-     *                         decision; must be positive
-     * @throws IllegalArgumentException if the timeout is zero or negative
-     */
-    public StageRouteEngine(Duration perPolicyTimeout) {
-        Objects.requireNonNull(perPolicyTimeout, "perPolicyTimeout");
-        if (perPolicyTimeout.isZero() || perPolicyTimeout.isNegative()) {
-            throw new IllegalArgumentException("perPolicyTimeout must be positive");
-        }
-        try {
-            this.perPolicyTimeoutNanos = perPolicyTimeout.toNanos();
-        } catch (ArithmeticException tooLarge) {
-            throw new IllegalArgumentException("perPolicyTimeout is too large", tooLarge);
-        }
-
-        int workerCount = Math.max(2, Math.min(MAX_WORKERS, Runtime.getRuntime().availableProcessors()));
-        this.workers = new ThreadPoolExecutor(
-                workerCount,
-                workerCount,
-                0L,
-                TimeUnit.MILLISECONDS,
-                new java.util.concurrent.ArrayBlockingQueue<>(QUEUE_CAPACITY),
-                namedDaemonFactory("strataproxy-route-worker"),
+    public StageRouteEngine() {
+        int count = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
+        workers = new ThreadPoolExecutor(count, count, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1024), daemonFactory("strataproxy-route-worker"),
                 new ThreadPoolExecutor.AbortPolicy());
-        this.timer = new ScheduledThreadPoolExecutor(1, namedDaemonFactory("strataproxy-route-timeout"));
-        this.timer.setRemoveOnCancelPolicy(true);
-        this.timer.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        timer = new ScheduledThreadPoolExecutor(1, daemonFactory("strataproxy-route-timeout"));
+        timer.setRemoveOnCancelPolicy(true);
+        timer.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
     }
 
-    /**
-     * Returns the registration facade owned by one plugin.
-     *
-     * @param pluginId stable plugin identifier used for diagnostics
-     * @return a route service whose registrations are attributed to the plugin
-     */
     public RouteService forPlugin(String pluginId) {
         if (pluginId == null || pluginId.isBlank()) {
             throw new IllegalArgumentException("pluginId must not be blank");
         }
-        String owner = pluginId;
-        return (stage, priority, policy) -> register(owner, stage, priority, policy);
+        return new RouteService() {
+            @Override
+            public AutoCloseable registerInitial(Duration timeout, RoutePolicy policy) {
+                return StageRouteEngine.this.registerInitial(pluginId, timeout, policy);
+            }
+
+            @Override
+            public AutoCloseable registerTransfer(String routeKey, Duration timeout, RoutePolicy policy) {
+                return StageRouteEngine.this.registerTransfer(pluginId, routeKey, timeout, policy);
+            }
+        };
     }
 
-    /**
-     * Evaluates policies registered for the context stage.
-     *
-     * @param context immutable route input
-     * @return asynchronous terminal decision, or {@code PASS} when no policy
-     *         makes a decision
-     */
     public CompletionStage<RouteDecision> evaluate(RouteContext context) {
         Objects.requireNonNull(context, "context");
         if (closed.get()) {
             return CompletableFuture.completedFuture(RouteDecision.reject("Route engine is shutting down."));
         }
+        Registration registration = context.stage() == RouteStage.INITIAL
+                ? initial.get() : transfers.get(key(context.routeKey()));
+        if (registration == null || !registration.active.get()) {
+            return CompletableFuture.completedFuture(RouteDecision.pass());
+        }
 
-        CompletableFuture<RouteDecision> result = new CompletableFuture<>();
+        var result = new CompletableFuture<RouteDecision>();
         inFlight.add(result);
-        result.whenComplete((ignored, failure) -> inFlight.remove(result));
         if (closed.get()) {
             result.complete(RouteDecision.reject("Route engine is shutting down."));
+            inFlight.remove(result);
             return result;
         }
-
-        CopyOnWriteArrayList<RegisteredPolicy> registered = policies.get(context.stage());
-        List<RegisteredPolicy> snapshot = registered == null ? new ArrayList<>() : new ArrayList<>(registered);
-        snapshot.removeIf(registration -> !registration.active.get());
-        snapshot.sort(Comparator.comparingInt((RegisteredPolicy registration) -> registration.priority).reversed()
-                .thenComparingLong(registration -> registration.sequence));
-        if (snapshot.isEmpty()) {
-            result.complete(RouteDecision.pass());
-            return result;
+        try {
+            var timeout = timer.schedule(() -> result.complete(failure(registration)),
+                    registration.timeoutNanos, TimeUnit.NANOSECONDS);
+            result.whenComplete((ignored, error) -> {
+                timeout.cancel(false);
+                inFlight.remove(result);
+            });
+            workers.execute(() -> invoke(registration, context, result));
+        } catch (RejectedExecutionException rejected) {
+            result.complete(RouteDecision.reject("Route policy capacity is exhausted."));
+            inFlight.remove(result);
         }
-        evaluatePolicy(snapshot, 0, context, result);
         return result;
     }
 
@@ -133,23 +97,19 @@ public final class StageRouteEngine implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        policies.values().forEach(List::clear);
-        RouteDecision shutdown = RouteDecision.reject("Route engine is shutting down.");
-        inFlight.forEach(future -> future.complete(shutdown));
+        initial.set(null);
+        transfers.clear();
+        inFlight.forEach(future -> future.complete(RouteDecision.reject("Route engine is shutting down.")));
         workers.shutdownNow();
         timer.shutdownNow();
     }
 
-    private AutoCloseable register(String pluginId, RouteStage stage, int priority, RoutePolicy policy) {
-        if (closed.get()) {
-            throw new IllegalStateException("Route engine is closed");
+    private AutoCloseable registerInitial(String owner, Duration timeout, RoutePolicy policy) {
+        var registration = new Registration(owner, "", timeout, policy);
+        ensureOpen();
+        if (!initial.compareAndSet(null, registration)) {
+            throw new IllegalStateException("Initial route already has a handler");
         }
-        if (stage == null || policy == null) {
-            throw new IllegalArgumentException("stage and policy must not be null");
-        }
-        RegisteredPolicy registration = new RegisteredPolicy(
-                pluginId, stage, priority, sequence.getAndIncrement(), policy);
-        policies.computeIfAbsent(stage, ignored -> new CopyOnWriteArrayList<>()).add(registration);
         if (closed.get()) {
             registration.close();
             throw new IllegalStateException("Route engine is closed");
@@ -157,126 +117,94 @@ public final class StageRouteEngine implements AutoCloseable {
         return registration::close;
     }
 
-    private void evaluatePolicy(List<RegisteredPolicy> snapshot,
-                                int index,
-                                RouteContext context,
-                                CompletableFuture<RouteDecision> result) {
-        if (result.isDone()) {
-            return;
+    private AutoCloseable registerTransfer(String owner, String routeKey, Duration timeout, RoutePolicy policy) {
+        var normalized = key(routeKey);
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("routeKey must not be blank");
         }
-        if (index >= snapshot.size()) {
-            result.complete(RouteDecision.pass());
-            return;
+        var registration = new Registration(owner, normalized, timeout, policy);
+        ensureOpen();
+        if (transfers.putIfAbsent(normalized, registration) != null) {
+            throw new IllegalStateException("Transfer route already has a handler: " + routeKey);
         }
+        if (closed.get()) {
+            registration.close();
+            throw new IllegalStateException("Route engine is closed");
+        }
+        return registration::close;
+    }
 
-        RegisteredPolicy registration = snapshot.get(index);
-        if (!registration.active.get()) {
-            dispatch(() -> evaluatePolicy(snapshot, index + 1, context, result), result);
-            return;
-        }
-        var timedDecision = new CompletableFuture<RouteDecision>();
-        final ScheduledFuture<?> timeoutTask;
-        try {
-            timeoutTask = timer.schedule(
-                    () -> timedDecision.completeExceptionally(new java.util.concurrent.TimeoutException()),
-                    perPolicyTimeoutNanos, TimeUnit.NANOSECONDS);
-        } catch (RejectedExecutionException rejected) {
-            result.complete(RouteDecision.reject("Route engine is shutting down."));
-            return;
-        }
-        timedDecision.whenComplete((decision, failure) -> {
-            timeoutTask.cancel(false);
-            if (result.isDone()) {
-                return;
-            }
-            if (failure != null) {
-                result.complete(policyFailure(registration));
-            } else if (decision.kind() == RouteDecision.Kind.PASS) {
-                dispatch(() -> evaluatePolicy(snapshot, index + 1, context, result), result);
-            } else {
-                result.complete(decision);
-            }
-        });
-        try {
-            workers.execute(() -> invokePolicy(registration, context, timedDecision));
-        } catch (RejectedExecutionException rejected) {
-            timedDecision.completeExceptionally(rejected);
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("Route engine is closed");
         }
     }
 
-    private static void invokePolicy(RegisteredPolicy registration,
-                                     RouteContext context,
-                                     CompletableFuture<RouteDecision> timedDecision) {
-        if (timedDecision.isDone()) {
+    private static void invoke(Registration registration, RouteContext context,
+                               CompletableFuture<RouteDecision> result) {
+        if (result.isDone()) {
             return;
         }
         try {
-            CompletionStage<RouteDecision> policyStage = registration.policy.route(context);
-            if (policyStage == null) {
-                throw new NullPointerException("Route policy returned null");
-            }
-            policyStage.whenComplete((decision, failure) -> {
-                if (failure != null) {
-                    timedDecision.completeExceptionally(failure);
-                } else if (decision == null) {
-                    timedDecision.completeExceptionally(new NullPointerException("Route policy returned null"));
+            CompletionStage<RouteDecision> stage = Objects.requireNonNull(
+                    registration.policy.route(context), "Route policy returned null");
+            stage.whenComplete((decision, error) -> {
+                if (error != null || decision == null) {
+                    result.complete(failure(registration));
                 } else {
-                    timedDecision.complete(decision);
+                    result.complete(decision);
                 }
             });
-        } catch (Throwable failure) {
-            timedDecision.completeExceptionally(failure);
+        } catch (Throwable error) {
+            result.complete(failure(registration));
         }
     }
 
-    private void dispatch(Runnable continuation, CompletableFuture<RouteDecision> result) {
-        if (result.isDone()) {
-            return;
-        }
-        try {
-            workers.execute(continuation);
-        } catch (RejectedExecutionException rejected) {
-            result.complete(RouteDecision.reject("Route policy capacity is exhausted."));
-        }
+    private static RouteDecision failure(Registration registration) {
+        return RouteDecision.reject("Route policy from plugin '" + registration.owner + "' failed or timed out.");
     }
 
-    private static RouteDecision policyFailure(RegisteredPolicy registration) {
-        return RouteDecision.reject("Route policy from plugin '" + registration.pluginId + "' failed or timed out.");
+    private static String key(String routeKey) {
+        return routeKey == null ? "" : routeKey.trim().toLowerCase(Locale.ROOT);
     }
 
-    private static ThreadFactory namedDaemonFactory(String prefix) {
-        AtomicLong threadId = new AtomicLong();
+    private static ThreadFactory daemonFactory(String prefix) {
+        var sequence = new AtomicLong();
         return runnable -> {
-            Thread thread = new Thread(runnable, prefix + "-" + threadId.incrementAndGet());
+            var thread = new Thread(runnable, prefix + "-" + sequence.incrementAndGet());
             thread.setDaemon(true);
             return thread;
         };
     }
 
-    private final class RegisteredPolicy {
-        private final String pluginId;
-        private final RouteStage stage;
-        private final int priority;
-        private final long sequence;
+    private final class Registration {
+        private final String owner;
+        private final String routeKey;
+        private final long timeoutNanos;
         private final RoutePolicy policy;
         private final AtomicBoolean active = new AtomicBoolean(true);
 
-        private RegisteredPolicy(String pluginId, RouteStage stage, int priority, long sequence, RoutePolicy policy) {
-            this.pluginId = pluginId;
-            this.stage = stage;
-            this.priority = priority;
-            this.sequence = sequence;
-            this.policy = policy;
+        private Registration(String owner, String routeKey, Duration timeout, RoutePolicy policy) {
+            this.owner = owner;
+            this.routeKey = routeKey;
+            this.policy = Objects.requireNonNull(policy, "policy");
+            Objects.requireNonNull(timeout, "timeout");
+            if (timeout.isZero() || timeout.isNegative()) {
+                throw new IllegalArgumentException("timeout must be positive");
+            }
+            try {
+                timeoutNanos = timeout.toNanos();
+            } catch (ArithmeticException tooLarge) {
+                throw new IllegalArgumentException("timeout is too large", tooLarge);
+            }
         }
 
         private void close() {
             if (active.compareAndSet(true, false)) {
-                CopyOnWriteArrayList<RegisteredPolicy> stagePolicies = policies.get(stage);
-                if (stagePolicies != null) {
-                    stagePolicies.remove(this);
-                    if (stagePolicies.isEmpty()) {
-                        policies.remove(stage, stagePolicies);
-                    }
+                if (routeKey.isEmpty()) {
+                    initial.compareAndSet(this, null);
+                } else {
+                    transfers.remove(routeKey, this);
                 }
             }
         }

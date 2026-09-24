@@ -182,14 +182,14 @@ public final class StrataProxyLauncher {
             var eventBus = new SimpleEventBus();
             var scheduler = new DefaultScheduler();
             started.add(scheduler);
-            var routeEngine = new StageRouteEngine(java.time.Duration.ofSeconds(3));
+            var routeEngine = new StageRouteEngine();
             started.add(routeEngine);
             var serverReference = new AtomicReference<NettyProxyNetworkServer>();
             var messageBroker = new BackendMessageBroker();
             started.add(messageBroker);
             var pluginServers = new PluginServerService(registry, registryPersistence, scheduler, "strataproxy");
             var resolver = new StagedBackendResolver(registry, routeEngine);
-            var pluginPlayers = new PluginPlayerService(serverReference, metrics, routeEngine, pluginServers::servers);
+            var pluginPlayers = new PluginPlayerService(serverReference, metrics, routeEngine);
             BuiltInProxyCommands.register(commandRegistry, pluginPlayers, pluginServers);
             var pluginManager = new PluginManager(
                     commandRegistry,
