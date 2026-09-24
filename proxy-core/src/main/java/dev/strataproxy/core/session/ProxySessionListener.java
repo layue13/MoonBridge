@@ -132,8 +132,11 @@ public final class ProxySessionListener implements Players {
     @Override public CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(backendName, "backendName");
-        if (!online.containsKey(identity)) return CompletableFuture.completedFuture(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
-        return CompletableFuture.completedFuture(TransferResult.failed("backend transfer is not implemented"));
+        Session session = sessions.get(identity);
+        if (session == null) {
+            return CompletableFuture.completedFuture(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
+        }
+        return session.transferTo(backendName);
     }
 
     public synchronized CompletionStage<Void> close() {

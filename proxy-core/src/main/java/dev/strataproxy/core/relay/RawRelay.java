@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /** Relays already negotiated protocol bytes without copying payload buffers. */
 public final class RawRelay {
@@ -20,13 +21,19 @@ public final class RawRelay {
 
     /** Installs paused relay handlers. Call {@link Link#start()} after removing login codecs. */
     public static Link attach(Channel client, Channel backend) {
+        return attach(client, backend, null, null);
+    }
+
+    /** Observers receive borrowed duplicates before each raw buffer is forwarded. */
+    public static Link attach(Channel client, Channel backend, Consumer<ByteBuf> clientObserver,
+                              Consumer<ByteBuf> backendObserver) {
         Objects.requireNonNull(client, "client");
         Objects.requireNonNull(backend, "backend");
         if (client == backend || !client.isActive() || !backend.isActive()) {
             throw new IllegalArgumentException("two distinct active channels are required");
         }
-        var fromClient = new Side(backend);
-        var fromBackend = new Side(client);
+        var fromClient = new Side(backend, clientObserver);
+        var fromBackend = new Side(client, backendObserver);
         fromClient.opposite = fromBackend;
         fromBackend.opposite = fromClient;
         var link = new Link(fromClient, fromBackend);
@@ -74,6 +81,14 @@ public final class RawRelay {
                     CompletableFuture.allOf(fromClient.detach(), fromBackend.detach()));
         }
 
+        /** Removes temporary protocol observers; the ordinary relay path then forwards without inspecting buffers. */
+        public void stopObserving() {
+            ready.thenRun(() -> {
+                fromClient.stopObserving();
+                fromBackend.stopObserving();
+            });
+        }
+
         private void maybeStartReads() {
             if (pending.get() == 0 && started.get() && readsStarted.compareAndSet(false, true)) {
                 fromClient.requestRead();
@@ -106,6 +121,7 @@ public final class RawRelay {
 
     private static final class Side extends ChannelInboundHandlerAdapter {
         private final Channel peer;
+        private Consumer<ByteBuf> observer;
         private ChannelHandlerContext context;
         private Side opposite;
         private int writesInFlight;
@@ -114,8 +130,9 @@ public final class RawRelay {
         private boolean detached;
         private CompletableFuture<Void> pauseComplete;
 
-        private Side(Channel peer) {
+        private Side(Channel peer, Consumer<ByteBuf> observer) {
             this.peer = peer;
+            this.observer = observer;
         }
 
         @Override
@@ -134,6 +151,10 @@ public final class RawRelay {
                     && ctx.channel().isActive() && peer.isActive() && peer.isWritable()) {
                 ctx.read();
             }
+        }
+
+        private void stopObserving() {
+            context.executor().execute(() -> observer = null);
         }
 
         private CompletableFuture<Void> pause() {
@@ -204,6 +225,8 @@ public final class RawRelay {
             }
             writesInFlight++;
             try {
+                Consumer<ByteBuf> activeObserver = observer;
+                if (activeObserver != null) activeObserver.accept(((ByteBuf) message).duplicate());
                 peer.writeAndFlush(message).addListener((ChannelFutureListener) future ->
                         ctx.executor().execute(() -> {
                             writesInFlight--;

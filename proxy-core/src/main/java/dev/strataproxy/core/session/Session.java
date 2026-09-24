@@ -3,6 +3,8 @@ package dev.strataproxy.core.session;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
+import dev.strataproxy.api.TransferResult;
+import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.auth.AuthenticatedEncryption;
 import dev.strataproxy.core.auth.MinecraftCipherDecoder;
 import dev.strataproxy.core.auth.MinecraftCipherEncoder;
@@ -11,12 +13,16 @@ import dev.strataproxy.core.auth.MinecraftEncryptionResponse;
 import dev.strataproxy.core.auth.OnlineModeCrypto;
 import dev.strataproxy.core.auth.VerifiedProfile;
 import dev.strataproxy.core.backend.BackendView;
+import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.forwarding.BungeeLegacyForwarding;
 import dev.strataproxy.core.protocol.LoginStart;
+import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
+import dev.strataproxy.core.protocol.MinecraftLoginSuccess;
 import dev.strataproxy.core.protocol.MinecraftHandshake;
 import dev.strataproxy.core.protocol.ProtocolProfile;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
+import dev.strataproxy.core.relay.RawRelay;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
@@ -36,6 +42,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledFuture;
@@ -66,6 +73,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private ScheduledFuture<?> initialLoginDeadline;
+    private PlayObservation playObservation;
+    private RawRelay.Link relay;
+    private PendingTransfer pendingTransfer;
+    private TransferAttempt transfer;
 
     Session(ProxySessionListener owner, Channel frontend) {
         this.owner = owner;
@@ -298,20 +309,14 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
-        String backendUuid = readString(input, 36);
-        String backendName = readString(input, 16);
-        if (input.isReadable() || !backendName.equals(view.username())) {
+        MinecraftLoginSuccess success = MinecraftLoginSuccess.decode(packet);
+        if (!success.username().equals(view.username())) {
             closePair();
             return;
         }
         UUID expected = owner.onlineMode() ? verifiedProfile.uuid()
-                : UUID.nameUUIDFromBytes(("OfflinePlayer:" + backendName).getBytes(StandardCharsets.UTF_8));
-        try {
-            if (!expected.equals(UUID.fromString(backendUuid))) {
-                closePair();
-                return;
-            }
-        } catch (IllegalArgumentException malformedUuid) {
+                : UUID.nameUUIDFromBytes(("OfflinePlayer:" + success.username()).getBytes(StandardCharsets.UTF_8));
+        if (!expected.equals(success.playerId())) {
             closePair();
             return;
         }
@@ -320,6 +325,9 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         published = true;
+        playObservation = new PlayObservation();
+        playObservation.ready().whenComplete((ignored, failure) ->
+                frontend.eventLoop().execute(this::tryStartPendingTransfer));
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
         owner.onlineMap().put(identity, new PlayerView(identity, view.username(), selected.handle().id().value()));
         owner.sessions().put(identity, this);
@@ -330,15 +338,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (!write.isSuccess()) { closePair(); return; }
             frontend.eventLoop().execute(this::startRelay);
         });
-    }
-
-    private static String readString(ByteBuf input, int maxChars) {
-        int length = ProtocolVarInt.read(input);
-        if (length < 0 || length > maxChars * 4 || input.readableBytes() < length) throw new IllegalArgumentException("invalid login string");
-        String value = input.toString(input.readerIndex(), length, StandardCharsets.UTF_8);
-        input.skipBytes(length);
-        if (value.length() > maxChars) throw new IllegalArgumentException("login string too long");
-        return value;
     }
 
     private void startRelay() {
@@ -359,14 +358,22 @@ final class Session extends ChannelInboundHandlerAdapter {
         Channel target = backend;
         if (closed.get() || target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
         try {
-            var link = dev.strataproxy.core.relay.RawRelay.attach(frontend, target);
+            var observation = playObservation;
+            var link = RawRelay.attach(frontend, target,
+                    bytes -> observation.observeStream(false, bytes),
+                    bytes -> observation.observeStream(true, bytes));
+            observation.ready().whenComplete((ignored, failure) -> link.stopObserving());
             link.ready().whenComplete((ignored, failure) -> {
                 if (failure != null) { closePair(); return; }
                 CompletableFuture<Void> frontRemoved = removeHandshakeCodecs(frontend);
                 CompletableFuture<Void> backRemoved = removeHandshakeCodecs(target);
                 CompletableFuture.allOf(frontRemoved, backRemoved).whenComplete((removed, removeFailure) -> {
                     if (removeFailure != null) closePair();
-                    else link.start();
+                    else {
+                        relay = link;
+                        link.start();
+                        tryStartPendingTransfer();
+                    }
                 });
             });
         } catch (RuntimeException failure) {
@@ -390,6 +397,14 @@ final class Session extends ChannelInboundHandlerAdapter {
         PendingFrame pending;
         while ((pending = transitionBuffer.pollFirst()) != null) {
             transitionBufferBytes -= pending.payload.readableBytes();
+            try {
+                if (playObservation != null) {
+                    playObservation.observePacket(!pending.fromFrontend, pending.payload);
+                }
+            } catch (RuntimeException malformed) {
+                pending.payload.release();
+                return CompletableFuture.failedFuture(malformed);
+            }
             Channel target = pending.fromFrontend ? backend : frontend;
             if (target == null || !target.isActive()) {
                 pending.payload.release();
@@ -411,17 +426,18 @@ final class Session extends ChannelInboundHandlerAdapter {
             try {
                 ChannelPipeline pipeline = channel.pipeline();
                 if (pipeline.get("initial-session") != null) pipeline.remove("initial-session");
+                if (pipeline.get("transfer-candidate") != null) pipeline.remove("transfer-candidate");
                 if (pipeline.get("minecraft-frame-decoder") != null) pipeline.remove("minecraft-frame-decoder");
                 if (pipeline.get("encrypted-frame-decoder") != null) pipeline.remove("encrypted-frame-decoder");
                 if (pipeline.get("minecraft-frame-encoder") != null) pipeline.remove("minecraft-frame-encoder");
-                pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
+                if (pipeline.get("session-lifecycle") == null) pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
                     @Override public void channelInactive(ChannelHandlerContext ctx) {
-                        closePair();
+                        if (ctx.channel() == frontend || ctx.channel() == backend) closePair();
                         ctx.fireChannelInactive();
                     }
 
                     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-                        closePair();
+                        if (ctx.channel() == frontend || ctx.channel() == backend) closePair();
                     }
                 });
                 removed.complete(null);
@@ -432,6 +448,267 @@ final class Session extends ChannelInboundHandlerAdapter {
         return removed;
     }
 
+    CompletionStage<TransferResult> transferTo(String backendName) {
+        CompletableFuture<TransferResult> result = new CompletableFuture<>();
+        Runnable command = () -> beginTransfer(backendName, result);
+        if (frontend.eventLoop().inEventLoop()) command.run();
+        else frontend.eventLoop().execute(command);
+        return result;
+    }
+
+    private void beginTransfer(String backendName, CompletableFuture<TransferResult> result) {
+        if (closed.get() || !published) {
+            result.complete(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
+            return;
+        }
+        if (transfer != null || pendingTransfer != null) {
+            result.complete(TransferResult.failed("a backend transfer is already in progress"));
+            return;
+        }
+        if (selected.handle().id().value().equals(backendName)) {
+            result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
+            return;
+        }
+        if (playObservation.ready().isCompletedExceptionally()) {
+            result.complete(TransferResult.failed("backend login or Forge negotiation failed"));
+            return;
+        }
+        if (relay == null || !playObservation.ready().isDone()) {
+            PendingTransfer waiting = new PendingTransfer(backendName, result);
+            pendingTransfer = waiting;
+            waiting.deadline = frontend.eventLoop().schedule(() -> {
+                if (pendingTransfer == waiting) {
+                    pendingTransfer = null;
+                    result.complete(TransferResult.failed("backend login or Forge negotiation timed out"));
+                }
+            }, 15, TimeUnit.SECONDS);
+            return;
+        }
+        BackendView target;
+        try {
+            target = owner.catalog().find(new BackendId(backendName)).orElse(null);
+        } catch (IllegalArgumentException invalidName) {
+            target = null;
+        }
+        if (target == null || !"tcp".equalsIgnoreCase(target.address().getScheme())
+                || target.address().getHost() == null || target.address().getPort() < 1) {
+            result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
+            return;
+        }
+        CapacityReservation claim = owner.catalog().reserve(target.handle(), 1).orElse(null);
+        if (claim == null) {
+            result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
+            return;
+        }
+        TransferAttempt attempt = new TransferAttempt(target, claim, result, relay);
+        transfer = attempt;
+        attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
+            @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
+            @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
+        });
+        try {
+            Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
+                    .option(ChannelOption.TCP_NODELAY, true)
+                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+                    .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
+                        @Override protected void initChannel(SocketChannel channel) {
+                            installCodecs(channel.pipeline());
+                            channel.pipeline().addLast("transfer-candidate", attempt.candidate);
+                        }
+                    });
+            ChannelFuture connect = bootstrap.connect(new InetSocketAddress(target.address().getHost(),
+                    target.address().getPort()));
+            attempt.channel = connect.channel();
+            connect.addListener(future -> {
+                if (attempt.finished || closed.get()) { connect.channel().close(); return; }
+                if (!future.isSuccess()) { failTransfer(attempt, "could not connect to replacement backend"); return; }
+                writeBackendLogin(connect.channel());
+            });
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, "could not start replacement backend connection");
+        }
+    }
+
+    private void tryStartPendingTransfer() {
+        PendingTransfer waiting = pendingTransfer;
+        if (waiting == null || relay == null || !playObservation.ready().isDone()) return;
+        pendingTransfer = null;
+        waiting.deadline.cancel(false);
+        beginTransfer(waiting.backendName, waiting.result);
+    }
+
+    private void writeBackendLogin(Channel channel) {
+        ByteBuf handshakeBody = owner.onlineMode()
+                ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
+                        (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
+                : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+        ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+        channel.write(handshakeBody);
+        channel.writeAndFlush(loginBody).addListener(write -> {
+            if (!write.isSuccess() && transfer != null && transfer.channel == channel) {
+                failTransfer(transfer, "could not write replacement backend login");
+            }
+        });
+    }
+
+    private void candidateReady(TransferAttempt attempt) {
+        if (transfer != attempt || attempt.finished || closed.get()) return;
+        attempt.pauseInProgress = true;
+        attempt.oldRelay.pause().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+            attempt.pauseInProgress = false;
+            if (failure != null) {
+                if (!attempt.finished) failTransfer(attempt, "old backend stopped during transfer");
+                closePair();
+                return;
+            }
+            attempt.paused = true;
+            if (attempt.finished || closed.get()) {
+                resumeAfterFailedTransfer(attempt);
+                return;
+            }
+            if (!attempt.channel.isActive() || !attempt.claim.commit()) {
+                failTransfer(attempt, "replacement backend became unavailable");
+                return;
+            }
+            attempt.oldRelay.detach().whenComplete((removed, detachFailure) ->
+                    frontend.eventLoop().execute(() -> {
+                        if (detachFailure != null || closed.get() || !attempt.channel.isActive()) {
+                            failTransfer(attempt, "could not detach old backend relay");
+                            closePair();
+                            return;
+                        }
+                        attempt.detached = true;
+                        activateCandidate(attempt);
+                    }));
+        }));
+    }
+
+    private void activateCandidate(TransferAttempt attempt) {
+        try {
+            attempt.candidate.handOff();
+        } catch (RuntimeException invalid) {
+            failTransfer(attempt, "replacement backend was not ready");
+            closePair();
+            return;
+        }
+        removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
+                frontend.eventLoop().execute(() -> {
+                    if (failure != null || closed.get() || !attempt.channel.isActive()) {
+                        failTransfer(attempt, "replacement backend pipeline failed");
+                        closePair();
+                        return;
+                    }
+                    installCandidateRelay(attempt);
+                }));
+    }
+
+    private void installCandidateRelay(TransferAttempt attempt) {
+        PlayObservation nextObservation = attempt.candidate.observation();
+        RawRelay.Link next;
+        try {
+            next = RawRelay.attach(frontend, attempt.channel,
+                    bytes -> nextObservation.observeStream(false, bytes),
+                    bytes -> nextObservation.observeStream(true, bytes));
+            RawRelay.Link observedLink = next;
+            nextObservation.ready().whenComplete((ignored, failure) -> observedLink.stopObserving());
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, "could not attach replacement relay");
+            closePair();
+            return;
+        }
+        next.ready().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+            if (failure != null || closed.get()) {
+                failTransfer(attempt, "replacement relay was not ready");
+                closePair();
+                return;
+            }
+            ByteBuf opening;
+            try {
+                opening = transferOpening(attempt);
+            } catch (RuntimeException malformed) {
+                failTransfer(attempt, "could not prepare replacement world transition");
+                closePair();
+                return;
+            }
+            frontend.writeAndFlush(opening).addListener(write -> frontend.eventLoop().execute(() -> {
+                if (!write.isSuccess() || closed.get() || !attempt.channel.isActive()) {
+                    failTransfer(attempt, "could not send replacement world transition");
+                    closePair();
+                    return;
+                }
+                Channel oldBackend = backend;
+                CapacityReservation oldReservation = reservation;
+                PlayObservation oldObservation = playObservation;
+                backend = attempt.channel;
+                reservation = attempt.claim;
+                selected = attempt.target;
+                playObservation = nextObservation;
+                relay = next;
+                owner.onlineMap().put(identity,
+                        new PlayerView(identity, view.username(), selected.handle().id().value()));
+                transfer = null;
+                attempt.finished = true;
+                oldBackend.close();
+                oldReservation.close();
+                oldObservation.close();
+                next.start();
+                attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
+            }));
+        }));
+    }
+
+    private ByteBuf transferOpening(TransferAttempt attempt) {
+        ByteBuf output = frontend.alloc().buffer();
+        List<ByteBuf> queued = attempt.candidate.takeQueuedPackets();
+        try {
+            if (playObservation.forgeSeen() || attempt.candidate.observation().forgeSeen()) {
+                ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
+                try { output.writeBytes(reset); } finally { reset.release(); }
+            }
+            int targetDimension = attempt.candidate.observation().dimension()
+                    .orElse(attempt.candidate.joinGame().dimension());
+            ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
+                    attempt.candidate.joinGame(), playObservation.dimension(), targetDimension);
+            try { output.writeBytes(respawns); } finally { respawns.release(); }
+            for (ByteBuf packet : queued) {
+                ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), packet);
+                try { output.writeBytes(frame); } finally { frame.release(); }
+            }
+            return output;
+        } catch (RuntimeException failure) {
+            output.release();
+            throw failure;
+        } finally {
+            queued.forEach(ByteBuf::release);
+        }
+    }
+
+    private void failTransfer(TransferAttempt attempt, String reason) {
+        if (attempt.finished) return;
+        attempt.finished = true;
+        attempt.failureReason = reason;
+        if (attempt.channel != null) attempt.channel.close();
+        if (attempt.candidate != null) attempt.candidate.close();
+        attempt.claim.close();
+        if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
+    }
+
+    private void resumeAfterFailedTransfer(TransferAttempt attempt) {
+        if (attempt.paused && !attempt.detached && !closed.get()) {
+            attempt.oldRelay.resume().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+                if (failure != null) closePair();
+                completeFailedTransfer(attempt);
+            }));
+        } else {
+            completeFailedTransfer(attempt);
+        }
+    }
+
+    private void completeFailedTransfer(TransferAttempt attempt) {
+        if (transfer == attempt) transfer = null;
+        attempt.result.complete(TransferResult.failed(attempt.failureReason));
+    }
+
     void closePair() {
         if (!closed.compareAndSet(false, true)) return;
         Runnable cleanup = () -> {
@@ -440,6 +717,22 @@ final class Session extends ChannelInboundHandlerAdapter {
             Channel upstream = backend;
             if (upstream != null) upstream.close();
             if (reservation != null) reservation.close();
+            if (playObservation != null) playObservation.close();
+            PendingTransfer waiting = pendingTransfer;
+            if (waiting != null) {
+                pendingTransfer = null;
+                waiting.deadline.cancel(false);
+                waiting.result.complete(TransferResult.failed("player session closed during transfer"));
+            }
+            TransferAttempt activeTransfer = transfer;
+            if (activeTransfer != null) {
+                transfer = null;
+                activeTransfer.finished = true;
+                if (activeTransfer.channel != null) activeTransfer.channel.close();
+                activeTransfer.claim.close();
+                if (activeTransfer.candidate != null) activeTransfer.candidate.close();
+                activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
+            }
             if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
             owner.allSessions().remove(this);
             PendingFrame pending;
@@ -460,6 +753,39 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         closePair();
+    }
+
+    private static final class TransferAttempt {
+        private final BackendView target;
+        private final CapacityReservation claim;
+        private final CompletableFuture<TransferResult> result;
+        private final RawRelay.Link oldRelay;
+        private TransferCandidate candidate;
+        private Channel channel;
+        private boolean pauseInProgress;
+        private boolean paused;
+        private boolean detached;
+        private boolean finished;
+        private String failureReason;
+
+        private TransferAttempt(BackendView target, CapacityReservation claim,
+                                CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {
+            this.target = target;
+            this.claim = claim;
+            this.result = result;
+            this.oldRelay = oldRelay;
+        }
+    }
+
+    private static final class PendingTransfer {
+        private final String backendName;
+        private final CompletableFuture<TransferResult> result;
+        private ScheduledFuture<?> deadline;
+
+        private PendingTransfer(String backendName, CompletableFuture<TransferResult> result) {
+            this.backendName = backendName;
+            this.result = result;
+        }
     }
 
     private record PendingFrame(boolean fromFrontend, ByteBuf payload) { }
