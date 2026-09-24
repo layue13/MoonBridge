@@ -3,6 +3,7 @@ package dev.strataproxy.plugin;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.service.PlayerService;
+import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerService;
 import org.slf4j.Logger;
@@ -38,6 +39,9 @@ public interface PluginContext {
      * @return player lookup and transfer service
      */
     PlayerService players();
+
+    /** Returns the independent backend-agent channel broker. */
+    ProxyChannelService channels();
 
     /**
  * Provides servers.

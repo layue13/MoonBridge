@@ -1,6 +1,8 @@
 package dev.strataproxy.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.strataproxy.backend.internal.ChannelFrame;
+import dev.strataproxy.backend.internal.ChannelWire;
 import dev.strataproxy.app.ProxyConfig;
 import dev.strataproxy.plugin.service.ServerMutationResult;
 import dev.strataproxy.plugin.service.ServerPersistence;
@@ -32,6 +34,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Narrow authenticated endpoint for backend agents. It deliberately exposes only
@@ -44,18 +48,33 @@ public final class BackendAgentServer implements AutoCloseable {
 
     private final ProxyConfig.BackendAgentConfig config;
     private final ServerService servers;
+    private final BackendMessageBroker broker;
+    private final boolean ownsBroker;
     private final ObjectMapper mapper = new ObjectMapper();
     private final Map<String, Long> nonces = new ConcurrentHashMap<>();
     private final Map<String, Lease> leases = new ConcurrentHashMap<>();
+    private final Set<AgentStream> streams = ConcurrentHashMap.newKeySet();
     private final ReentrantLock[] leaseLocks = new ReentrantLock[LEASE_LOCK_STRIPES];
     private final ExecutorService connections;
+    private final Semaphore streamSlots;
     private final ScheduledExecutorService maintenance = Executors.newSingleThreadScheduledExecutor(runnable -> new Thread(runnable, "strataproxy-backend-agent-lease"));
     private volatile ServerSocket socket;
     private volatile boolean closed;
 
     public BackendAgentServer(ProxyConfig.BackendAgentConfig config, ServerService servers) {
+        this(config, servers, new BackendMessageBroker(), true);
+    }
+
+    public BackendAgentServer(ProxyConfig.BackendAgentConfig config, ServerService servers, BackendMessageBroker broker) {
+        this(config, servers, broker, false);
+    }
+
+    private BackendAgentServer(ProxyConfig.BackendAgentConfig config, ServerService servers, BackendMessageBroker broker, boolean ownsBroker) {
         this.config = config;
         this.servers = servers;
+        this.broker = broker;
+        this.ownsBroker = ownsBroker;
+        this.streamSlots = new Semaphore(config.maxConnections());
         for (var index = 0; index < leaseLocks.length; index++) {
             leaseLocks[index] = new ReentrantLock();
         }
@@ -77,6 +96,7 @@ public final class BackendAgentServer implements AutoCloseable {
         acceptor.start();
         var delay = Math.max(1_000L, config.heartbeatTimeout().toMillis() / 2L);
         maintenance.scheduleWithFixedDelay(this::expireLeases, delay, delay, TimeUnit.MILLISECONDS);
+        maintenance.scheduleWithFixedDelay(broker::retryPending, 5, 5, TimeUnit.SECONDS);
     }
 
     /** Returns the actual listener address after start, including an ephemeral port when requested. */
@@ -107,31 +127,48 @@ public final class BackendAgentServer implements AutoCloseable {
     }
 
     private void handle(Socket connection) {
-        try (connection;
-             var writer = new BufferedWriter(new java.io.OutputStreamWriter(connection.getOutputStream(), StandardCharsets.UTF_8))) {
+        var stream = new StreamHolder();
+        try {
+            var writer = new BufferedWriter(new java.io.OutputStreamWriter(connection.getOutputStream(), StandardCharsets.UTF_8));
             connection.setSoTimeout(5_000);
             var line = readBoundedLine(connection.getInputStream());
             var response = line == null
                     ? Response.failure("invalid_request", "request is missing or too large")
-                    : process(line);
+                    : process(line, connection, stream);
             writer.write(mapper.writeValueAsString(response));
             writer.newLine();
             writer.flush();
+            if (stream.session != null && response.success()) {
+                connection.setSoTimeout(0);
+                stream.session.running.set(true);
+                Thread.ofVirtual().name("strataproxy-agent-stream-" + stream.session.name).start(stream.session::run);
+                return;
+            }
         } catch (IOException ignored) {
             // A disconnected backend agent has no state to clean up here; lease expiry handles it.
+        } finally {
+            if (stream.session != null && !stream.session.running.get()) stream.session.close();
+            if (stream.session == null || !stream.session.running.get()) {
+                try { connection.close(); } catch (IOException ignored) { }
+            }
         }
     }
 
-    private Response process(String line) {
+    private Response process(String line, Socket connection, StreamHolder stream) {
         try {
             var envelope = mapper.readValue(line, Envelope.class);
             if (envelope == null || envelope.agentId == null || envelope.nonce == null || envelope.payload == null || envelope.signature == null) {
                 return Response.failure("invalid_request", "missing authentication fields");
             }
             var agentId = envelope.agentId.trim();
-            if (agentId.isEmpty() || config.sharedSecret().isBlank()) return Response.failure("unauthorized", "backend agent authentication is not configured");
+            if (agentId.isEmpty() || agentId.length() > 128 || envelope.nonce.length() > 128
+                    || envelope.payload.length() > MAX_LINE_LENGTH || envelope.signature.length() > 128
+                    || config.sharedSecret().isBlank()) {
+                return Response.failure("unauthorized", "backend agent authentication is not configured or malformed");
+            }
             var now = System.currentTimeMillis();
-            if (Math.abs(now - envelope.timestamp) > MAX_CLOCK_SKEW_MILLIS) {
+            if (envelope.timestamp < now - MAX_CLOCK_SKEW_MILLIS
+                    || envelope.timestamp > now + MAX_CLOCK_SKEW_MILLIS) {
                 return Response.failure("unauthorized", "request timestamp is outside the allowed clock skew");
             }
             var signed = envelope.agentId + "\n" + envelope.timestamp + "\n" + envelope.nonce + "\n" + envelope.payload;
@@ -149,13 +186,18 @@ public final class BackendAgentServer implements AutoCloseable {
             if (command == null || command.operation == null || command.name == null || command.name.isBlank()) {
                 return Response.failure("invalid_request", "operation and backend name are required");
             }
-            if (!agentId.equals(command.name.trim()) || command.instanceId == null || command.instanceId.isBlank()) {
+            if (!agentId.equals(command.name.trim()) || command.name.length() > 128
+                    || command.instanceId == null || command.instanceId.isBlank() || command.instanceId.length() > 128) {
                 return Response.failure("unauthorized", "agent may only operate its own backend with an instance ID");
+            }
+            if (("backend:" + agentId + ":" + command.instanceId).length() > 256) {
+                return Response.failure("invalid_request", "backend name and instance ID are too long");
             }
             return switch (command.operation) {
                 case "register" -> register(agentId, command);
                 case "heartbeat" -> heartbeat(agentId, command);
                 case "unregister" -> unregister(agentId, command);
+                case "stream" -> openStream(agentId, command, connection, stream);
                 default -> Response.failure("invalid_request", "unsupported operation");
             };
         } catch (IllegalArgumentException exception) {
@@ -191,7 +233,10 @@ public final class BackendAgentServer implements AutoCloseable {
         lock.lock();
         try {
             var result = servers.register(registration).toCompletableFuture().get(5, TimeUnit.SECONDS);
-            if (result.success()) leases.put(name, new Lease(agentId, command.instanceId, System.currentTimeMillis(), persistence));
+            if (result.success()) {
+                var previous = leases.put(name, new Lease(agentId, command.instanceId, System.currentTimeMillis(), persistence));
+                if (previous != null && !previous.instanceId.equals(command.instanceId)) broker.remove(name, previous.instanceId);
+            }
             return response(result);
         } finally {
             lock.unlock();
@@ -223,7 +268,10 @@ public final class BackendAgentServer implements AutoCloseable {
             if (lease == null || !lease.ownedBy(agentId, command.instanceId)) return Response.failure("not_registered", "backend instance is not registered");
             var result = servers.unregister(command.name, new ServerRemoval(true, false, Duration.ZERO, lease.persistence))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
-            if (result.success()) leases.remove(name, lease);
+            if (result.success()) {
+                leases.remove(name, lease);
+                broker.remove(name, lease.instanceId);
+            }
             return response(result);
         } finally {
             lock.unlock();
@@ -247,6 +295,7 @@ public final class BackendAgentServer implements AutoCloseable {
                         .toCompletableFuture().get(5, TimeUnit.SECONDS);
                 if (result.success() || "not_found".equals(result.outcome())) {
                     leases.remove(name, lease);
+                    broker.remove(name, lease.instanceId);
                 }
             } catch (Exception ignored) {
                 // Keep the lease so a later sweep can retry a transient server-service failure.
@@ -258,6 +307,98 @@ public final class BackendAgentServer implements AutoCloseable {
 
     private ReentrantLock leaseLock(String name) {
         return leaseLocks[Math.floorMod(name.hashCode(), leaseLocks.length)];
+    }
+
+    private Response openStream(String agentId, Command command, Socket connection, StreamHolder holder) throws IOException {
+        var name = command.name.trim();
+        var lock = leaseLock(name);
+        lock.lock();
+        try {
+            var lease = leases.get(name);
+            if (lease == null || !lease.ownedBy(agentId, command.instanceId)) {
+                return Response.failure("not_registered", "backend instance must register before opening a stream");
+            }
+            if (!streamSlots.tryAcquire()) return Response.failure("stream_capacity_full", "backend agent stream capacity is full");
+            var session = new AgentStream(name, command.instanceId, connection);
+            if (!broker.attach(name, command.instanceId, session)) {
+                streamSlots.release();
+                return Response.failure("broker_closed", "message broker is closed");
+            }
+            holder.session = session;
+            streams.add(session);
+            return Response.success("stream_connected", "");
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private static final class StreamHolder {
+        private AgentStream session;
+    }
+
+    private final class AgentStream implements BackendMessageBroker.Session {
+        private final String name;
+        private final String instanceId;
+        private final Socket connection;
+        private final ArrayBlockingQueue<ChannelFrame> outgoing = new ArrayBlockingQueue<>(256);
+        private final AtomicBoolean running = new AtomicBoolean();
+        private final AtomicBoolean released = new AtomicBoolean();
+        private volatile boolean stopped;
+
+        private AgentStream(String name, String instanceId, Socket connection) {
+            this.name = name;
+            this.instanceId = instanceId;
+            this.connection = connection;
+        }
+
+        private void run() {
+            if (stopped) return;
+            var writer = new Thread(() -> {
+                try {
+                    while (!stopped) {
+                        var frame = outgoing.take();
+                        ChannelWire.write(connection.getOutputStream(), frame);
+                    }
+                } catch (InterruptedException | IOException ignored) {
+                    close();
+                }
+            }, "strataproxy-agent-stream-write-" + name);
+            writer.setDaemon(true);
+            writer.start();
+            try {
+                ChannelFrame frame;
+                while (!stopped && (frame = ChannelWire.read(connection.getInputStream())) != null) {
+                    switch (frame.type) {
+                        case ChannelFrame.SUBSCRIBE -> broker.subscribe(name, instanceId, this, frame.channel);
+                        case ChannelFrame.UNSUBSCRIBE -> broker.unsubscribe(name, instanceId, this, frame.channel);
+                        case ChannelFrame.ACK -> broker.acknowledge(name, instanceId, this, frame.messageId);
+                        case ChannelFrame.PUBLISH -> {
+                            var result = broker.publishFromBackend(name, instanceId, this, frame);
+                            if (!offer(new ChannelFrame(ChannelFrame.RESULT, frame.requestId, result.messageId(), "", "", "", "",
+                                    result.outcome(), new byte[] {(byte) (result.accepted() ? 1 : 0)}))) {
+                                throw new IOException("agent response queue is full");
+                            }
+                        }
+                        default -> throw new IOException("unsupported agent frame type");
+                    }
+                }
+            } catch (IOException ignored) {
+                // Closing or a malformed frame terminates only this authenticated stream.
+            } finally {
+                broker.detach(name, instanceId, this);
+                streams.remove(this);
+                close();
+                writer.interrupt();
+            }
+        }
+
+        @Override public boolean offer(ChannelFrame frame) { return !stopped && outgoing.offer(frame); }
+        @Override public int remainingCapacity() { return outgoing.remainingCapacity(); }
+        @Override public void close() {
+            stopped = true;
+            try { connection.close(); } catch (IOException ignored) { }
+            if (released.compareAndSet(false, true)) streamSlots.release();
+        }
     }
 
     private String hmac(String secret, String value) throws Exception {
@@ -304,6 +445,9 @@ public final class BackendAgentServer implements AutoCloseable {
         }
         maintenance.shutdownNow();
         connections.shutdownNow();
+        streams.forEach(AgentStream::close);
+        streams.clear();
+        if (ownsBroker) broker.close();
     }
 
     private record Lease(String agentId, String instanceId, long lastSeen, ServerPersistence persistence) {

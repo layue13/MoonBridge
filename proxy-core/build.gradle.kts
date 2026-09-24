@@ -11,6 +11,7 @@ dependencies {
     // The plugin contract is the only stable external boundary. Everything else
     // in this project remains an implementation package of the proxy core.
     api(project(":proxy-plugin-api"))
+    implementation(project(":backend-agent-api"))
     implementation(libs.findLibrary("slf4j-api").get())
     implementation(libs.findLibrary("netty-codec").get())
     implementation(libs.findLibrary("netty-transport").get())

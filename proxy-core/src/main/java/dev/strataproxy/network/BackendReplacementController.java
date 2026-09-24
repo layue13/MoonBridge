@@ -4,7 +4,6 @@ import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.event.PlayerTransferEvent;
 import dev.strataproxy.plugin.service.PlayerIdentity;
-import dev.strataproxy.plugin.service.PluginMessageResult;
 import dev.strataproxy.plugin.service.PlayerTransfer;
 import dev.strataproxy.network.MinecraftCompressionCodec;
 import io.netty.channel.Channel;
@@ -117,10 +116,6 @@ final class BackendReplacementController {
             }
         }
         return result;
-    }
-
-    CompletionStage<PluginMessageResult> sendPluginMessage(String channel, byte[] payload) {
-        return BackendPluginMessageSender.send(session.backend(), profile, tuning.maxFrameBytes(), channel, payload);
     }
 
     private void replaceBackend(

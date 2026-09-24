@@ -1,6 +1,9 @@
 package dev.strataproxy.agent;
 
 import dev.strataproxy.app.ProxyConfig;
+import dev.strataproxy.backend.api.DeliveryMode;
+import dev.strataproxy.backend.internal.ChannelFrame;
+import dev.strataproxy.backend.internal.ChannelWire;
 import dev.strataproxy.plugin.service.ServerMutationResult;
 import dev.strataproxy.plugin.service.ServerRegistration;
 import dev.strataproxy.plugin.service.ServerRemoval;
@@ -89,6 +92,49 @@ class BackendAgentServerTest {
         assertEquals(java.util.List.of("register", "unregister", "register"), servers.operations);
     }
 
+    @Test
+    void streamDoesNotStarveRegistrationWorkersAndCarriesMessagesWithoutPlayers() throws Exception {
+        var config = new ProxyConfig.BackendAgentConfig(true, new InetSocketAddress("127.0.0.1", 0), SECRET,
+                java.time.Duration.ofSeconds(30), 1, 1, 32);
+        try (var broker = new BackendMessageBroker(); var server = new BackendAgentServer(config, new AcceptingServers(), broker)) {
+            server.start();
+            var port = ((InetSocketAddress) server.localAddress()).getPort();
+            assertTrue(call(port, envelope("registration", SECRET, "instance-a")).contains("\"success\":true"));
+            try (var stream = new Socket("127.0.0.1", port)) {
+                stream.setSoTimeout(2_000);
+                stream.getOutputStream().write((envelope("stream", "stream", SECRET, "instance-a") + "\n").getBytes(StandardCharsets.UTF_8));
+                assertTrue(readLine(stream).contains("\"outcome\":\"stream_connected\""));
+                assertTrue(call(port, envelope("heartbeat", "heartbeat", SECRET, "instance-a")).contains("\"success\":true"));
+                ChannelWire.write(stream.getOutputStream(), new ChannelFrame(ChannelFrame.SUBSCRIBE,
+                        "", "", "", "", "test:events", "", "", new byte[0]));
+                dev.strataproxy.plugin.service.ChannelPublishResult sent = null;
+                for (int attempt = 0; attempt < 100; attempt++) {
+                    sent = broker.forPlugin("test").publishTo("survival-1", "test:events", new byte[] {7}, "corr", DeliveryMode.RELIABLE)
+                            .toCompletableFuture().join();
+                    if (sent.accepted()) break;
+                    Thread.sleep(10);
+                }
+                assertTrue(sent.accepted());
+                var frame = ChannelWire.read(stream.getInputStream());
+                assertEquals(ChannelFrame.MESSAGE, frame.type);
+                assertEquals(sent.messageId(), frame.messageId);
+                assertEquals("corr", frame.correlationId);
+                assertEquals(7, frame.payload[0]);
+                ChannelWire.write(stream.getOutputStream(), new ChannelFrame(ChannelFrame.ACK,
+                        "", frame.messageId, "", "", "", "", "", new byte[0]));
+            }
+        }
+    }
+
+    private static String readLine(Socket socket) throws Exception {
+        var bytes = new java.io.ByteArrayOutputStream();
+        for (int value; (value = socket.getInputStream().read()) != '\n';) {
+            if (value < 0 || bytes.size() >= 4096) throw new java.io.IOException("missing stream greeting");
+            bytes.write(value);
+        }
+        return bytes.toString(StandardCharsets.UTF_8);
+    }
+
     private static String call(int port, String value) throws Exception {
         try (var socket = new Socket("127.0.0.1", port);
              var out = new BufferedWriter(new java.io.OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
@@ -99,8 +145,12 @@ class BackendAgentServerTest {
     }
 
     private static String envelope(String nonce, String secret, String instanceId) throws Exception {
+        return envelope("register", nonce, secret, instanceId);
+    }
+
+    private static String envelope(String operation, String nonce, String secret, String instanceId) throws Exception {
         var payload = Base64.getUrlEncoder().withoutPadding().encodeToString(
-                ("{\"operation\":\"register\",\"name\":\"survival-1\",\"instanceId\":\"" + instanceId + "\",\"host\":\"127.0.0.1\",\"port\":25565}").getBytes(StandardCharsets.UTF_8));
+                ("{\"operation\":\"" + operation + "\",\"name\":\"survival-1\",\"instanceId\":\"" + instanceId + "\",\"host\":\"127.0.0.1\",\"port\":25565}").getBytes(StandardCharsets.UTF_8));
         var timestamp = System.currentTimeMillis();
         var signed = "survival-1\n" + timestamp + "\n" + nonce + "\n" + payload;
         var mac = Mac.getInstance("HmacSHA256");

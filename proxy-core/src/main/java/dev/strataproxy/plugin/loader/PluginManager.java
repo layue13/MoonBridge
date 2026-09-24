@@ -5,6 +5,7 @@ import dev.strataproxy.plugin.ProxyPlugin;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.service.PlayerService;
+import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerService;
 
@@ -34,6 +35,7 @@ public final class PluginManager implements AutoCloseable {
     private final CommandRegistry commands;
     private final EventBus events;
     private final PlayerService players;
+    private final Function<PluginMetadata, ProxyChannelService> channels;
     private final Function<PluginMetadata, ServerService> servers;
     private final Scheduler scheduler;
     private final Logger logger;
@@ -53,10 +55,11 @@ public final class PluginManager implements AutoCloseable {
             CommandRegistry commands,
             EventBus events,
             PlayerService players,
+            ProxyChannelService channels,
             ServerService servers,
             Scheduler scheduler,
             Logger logger) {
-        this(commands, events, players, ignored -> servers, scheduler, logger);
+        this(commands, events, players, ignored -> channels, ignored -> servers, scheduler, logger);
     }
 
     /**
@@ -73,12 +76,14 @@ public final class PluginManager implements AutoCloseable {
             CommandRegistry commands,
             EventBus events,
             PlayerService players,
+            Function<PluginMetadata, ProxyChannelService> channels,
             Function<PluginMetadata, ServerService> servers,
             Scheduler scheduler,
             Logger logger) {
         this.commands = commands;
         this.events = events;
         this.players = players;
+        this.channels = channels;
         this.servers = servers == null ? ignored -> null : servers;
         this.scheduler = scheduler;
         this.logger = logger == null ? LoggerFactory.getLogger(PluginManager.class) : logger;
@@ -134,6 +139,7 @@ public final class PluginManager implements AutoCloseable {
                     commands,
                     events,
                     players,
+                    channels.apply(loaded.metadata()),
                     servers.apply(loaded.metadata()),
                     scheduler));
             loaded.instance().onEnable();

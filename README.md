@@ -6,10 +6,11 @@ StrataProxy 是一个 Java 25 的 Minecraft 后端代理。它只做代理该做
 
 ## 工程与产物
 
-工程只有两个 Gradle 模块：
+工程包含三个 Gradle 模块：
 
 - `proxy-core`：可运行的代理、配置、网络转发与插件加载器。
 - `proxy-plugin-api`：第三方代理插件唯一需要依赖的公开 API。
+- `backend-agent-api`：后端服务端插件使用的 Java 8、平台无关通道 API。
 
 `integrations/bukkit-backend-agent` 是独立的 Java 8 Bukkit 插件；它以 Spigot 1.8 API 编译，只使用 Bukkit 1.7.10 已有的基础 API，因此可用于 1.7.10 Bukkit 派生服务端。
 
@@ -103,7 +104,9 @@ unregisterOnDisable: true
 
 所有受信任 backend agent 共用 `sharedSecret`；每个 `backend.name` 仍必须唯一。插件每次启动会生成 instance ID，旧实例的心跳或注销不能影响新实例。端点限制请求长度、并发连接、排队和 replay nonce；建议保持 `bind` 在环回地址，或以防火墙限制到可信 Bukkit 主机。
 
-`backend-agent-api` 是平台无关的业务消息契约：Bukkit agent 会将其作为服务发布，未来 Forge agent 实现同一接口即可。业务插件应仅依赖该 API，并在 Bukkit 的 `plugin.yml` 中声明 `depend: [StrataProxyBackendAgent]`；通过 `ServicesManager` 获取 `BackendAgentApi` 后可调用 `send(...)` 向玩家连接写 plugin message，或调用 `listen(...)` 接收代理发来的消息。API 不引用 Bukkit、Forge 或代理内部实现。
+`backend-agent-api` 是平台无关的业务消息契约：Bukkit agent 会将其作为服务发布，未来 Forge agent 实现同一接口即可。业务插件应仅依赖该 API，并在服务端插件描述中声明依赖。通过 `ServicesManager` 获取 `BackendAgentApi` 后，使用 `publish(channel, payload, correlationId, idempotencyKey, mode)` 发布不透明字节载荷，使用 `listen(channel, listener)` 订阅消息；消息由代理生成唯一 `messageId`，可用 `correlationId` 关联业务请求，可靠消息在处理成功后由 agent 自动 ACK。通道是后端 agent 与代理之间的独立长连接，不经过玩家连接，也不依赖 Bukkit 的 Messenger API。API 不引用 Bukkit、Forge 或代理内部实现。
+
+代理插件使用 `PluginContext.channels()` 访问同一 broker，可发布到所有订阅后端或指定后端，并订阅后端发来的消息。`DeliveryMode.RELIABLE` 只保证代理在有界未确认窗口内持续重试到 agent；它不替业务协议定义事务，调用方应使用稳定的幂等键处理超时重试。`BEST_EFFORT` 适合不需要重放的通知。通道名限制为 ASCII 字母、数字、`_`、`.`、`:`、`-`，载荷上限为 48 KiB。
 
 ## 代理插件
 
@@ -136,7 +139,7 @@ dependencies {
 
 ### 0.2 API 与兼容性验证
 
-`0.2.0-SNAPSHOT` 是破坏性 API 版本：`PlayerView` 与转服事件新增 UUID/连接 ID，转服结果明确为代理网络层 `NETWORK_READY`，不承诺 Bukkit 业务已完成；`PlayerService.sendPluginMessage` 的完成也只表示代理已接受写入。核心与 plugin API 使用 Java 25；Bukkit agent 保持 Java 8 字节码。
+`0.2.0-SNAPSHOT` 是破坏性 API 版本：`PlayerView` 与转服事件新增 UUID/连接 ID，转服结果明确为代理网络层 `NETWORK_READY`，不承诺 Bukkit 业务已完成；旧的 `PlayerService.sendPluginMessage` 玩家转发 API 已移除。核心与 proxy/plugin API 使用 Java 25；backend-agent-api 与 Bukkit agent 保持 Java 8 字节码。
 
 发布前必须在目标 1.7.10 Forge 整合包执行连续转服、目标后端不可用、代理/后端重启恢复和至少 24 小时运行测试，并保存版本、mod 列表、日志和结果。单元测试及配置 smoke test 不能替代该门禁。
 

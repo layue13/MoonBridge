@@ -12,7 +12,7 @@ final class BackendMessageTest {
     @Test
     void copiesPayloadAtBothApiBoundaries() {
         byte[] source = new byte[] {1, 2, 3};
-        BackendMessage message = new BackendMessage(new BackendPlayer(UUID.randomUUID(), "Steve"), "example:sync", source);
+        BackendMessage message = new BackendMessage(UUID.randomUUID().toString(), "", "survival-1", "example:sync", source);
         source[0] = 9;
         byte[] delivered = message.payload();
         delivered[1] = 8;
@@ -21,15 +21,14 @@ final class BackendMessageTest {
     }
 
     @Test
-    void requiresAPlayerReferenceAndChannel() {
-        assertThrows(IllegalArgumentException.class, () -> new BackendPlayer(null, " "));
+    void requiresMessageIdAndChannel() {
         assertThrows(IllegalArgumentException.class, () -> new BackendMessage(
-                new BackendPlayer(null, "Steve"), " ", new byte[0]));
+                UUID.randomUUID().toString(), "", "survival-1", " ", new byte[0]));
     }
 
     @Test
     void reportsStableWriteOutcomes() {
-        assertEquals("accepted_for_write", BackendMessageResult.acceptedForWrite().outcome());
-        assertEquals("player_not_found", BackendMessageResult.failure("player_not_found").outcome());
+        assertEquals("accepted", BackendMessageResult.accepted("message-1").outcome());
+        assertEquals("not_connected", BackendMessageResult.failure("not_connected").outcome());
     }
 }

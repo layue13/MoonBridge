@@ -6,7 +6,6 @@ import dev.strataproxy.plugin.service.PlayerIdentity;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.PlayerTransfer;
 import dev.strataproxy.plugin.service.PlayerView;
-import dev.strataproxy.plugin.service.PluginMessageResult;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -51,22 +50,6 @@ public final class PluginPlayerService implements PlayerService {
                     PlayerTransfer.TransferStage.REJECTED, false, view.serverName()));
         }
         return current.transferPlayer(player, targetServer).thenApply(result -> transfer(result, player, view.name()));
-    }
-
-    @Override
-    public CompletionStage<PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
-        var current = server.get();
-        return current == null
-                ? CompletableFuture.completedFuture(PluginMessageResult.failure("server_not_started"))
-                : current.sendPluginMessage(playerName, channel, payload);
-    }
-
-    @Override
-    public CompletionStage<PluginMessageResult> sendPluginMessage(PlayerIdentity player, String channel, byte[] payload) {
-        var current = server.get();
-        return current == null
-                ? CompletableFuture.completedFuture(PluginMessageResult.failure("server_not_started"))
-                : current.sendPluginMessage(player, channel, payload);
     }
 
     @Override

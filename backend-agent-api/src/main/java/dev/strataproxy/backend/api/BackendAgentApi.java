@@ -9,15 +9,22 @@ import java.util.concurrent.CompletionStage;
  * Business plugins should depend only on this API, never on an adapter class.</p>
  */
 public interface BackendAgentApi {
-    /**
-     * Sends an opaque plugin-message payload through one player's proxy connection.
-     * Completion means the platform adapter accepted the payload for writing; it
-     * does not confirm client or proxy-plugin processing.
-     */
-    CompletionStage<BackendMessageResult> send(BackendPlayer player, String channel, byte[] payload);
+    /** Publishes an opaque payload to the proxy broker using best-effort delivery. */
+    default CompletionStage<BackendMessageResult> publish(String channel, byte[] payload) {
+        return publish(channel, payload, "", DeliveryMode.BEST_EFFORT);
+    }
+
+    /** Publishes an opaque payload with optional correlation and delivery policy. */
+    default CompletionStage<BackendMessageResult> publish(String channel, byte[] payload, String correlationId, DeliveryMode mode) {
+        return publish(channel, payload, correlationId, "", mode);
+    }
+
+    /** Reusing a nonempty idempotency key for the same publication returns its original message ID. */
+    CompletionStage<BackendMessageResult> publish(String channel, byte[] payload, String correlationId,
+                                                  String idempotencyKey, DeliveryMode mode);
 
     /**
-     * Registers a listener for proxy-to-backend plugin messages on one channel.
+     * Subscribes to proxy-broker messages on one channel.
      * Call {@link BackendMessageRegistration#close()} when the listener is no
      * longer needed.
      */

@@ -77,9 +77,12 @@ gradle.projectsEvaluated {
     val releaseMetadata = layout.buildDirectory.file("release/$releaseName.metadata.json")
     val app = project(":proxy-core")
     val pluginApi = project(":proxy-plugin-api")
+    val backendAgentApi = project(":backend-agent-api")
     val appDistZip = app.layout.buildDirectory.file("distributions/strataproxy-${project.version}.zip")
     val pluginApiJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}.jar")
     val pluginApiSourcesJar = pluginApi.layout.buildDirectory.file("libs/proxy-plugin-api-${project.version}-sources.jar")
+    val backendAgentApiJar = backendAgentApi.layout.buildDirectory.file("libs/backend-agent-api-${project.version}.jar")
+    val bukkitAgentJar = layout.projectDirectory.file("integrations/bukkit-backend-agent/build/libs/strataproxy-bukkit-backend-agent-${project.version}.jar")
 
     val writeReleaseManifest = tasks.register<ReleaseManifestTask>("writeReleaseManifest") {
         group = "distribution"
@@ -87,13 +90,17 @@ gradle.projectsEvaluated {
         dependsOn(
             app.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
-            pluginApi.tasks.named("sourcesJar")
+            pluginApi.tasks.named("sourcesJar"),
+            backendAgentApi.tasks.named("jar"),
+            buildBukkitBackendAgent
         )
         outputFile.set(layout.buildDirectory.file("release/RELEASE-MANIFEST.txt"))
         nameValue.set(releaseName)
         versionValue.set(project.version.toString())
         appArchive.set(appDistZip.map { it.asFile.name })
         pluginApiArchive.set(pluginApiJar.map { it.asFile.name })
+        backendAgentApiArchive.set(backendAgentApiJar.map { it.asFile.name })
+        bukkitAgentArchive.set(bukkitAgentJar.asFile.name)
     }
 
     val generateReleaseSbom = tasks.register<GenerateSbomTask>("generateReleaseSbom") {
@@ -111,6 +118,8 @@ gradle.projectsEvaluated {
             app.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
             pluginApi.tasks.named("sourcesJar"),
+            backendAgentApi.tasks.named("jar"),
+            buildBukkitBackendAgent,
             generateReleaseSbom
         )
         outputFile.set(releaseMetadata)
@@ -119,7 +128,7 @@ gradle.projectsEvaluated {
         signingKey.set(providers.gradleProperty("strataproxy.releaseSigningKey")
             .orElse(providers.environmentVariable("STRATAPROXY_RELEASE_SIGNING_KEY"))
             .orElse(""))
-        artifactFiles.from(appDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom)
+        artifactFiles.from(appDistZip, pluginApiJar, pluginApiSourcesJar, backendAgentApiJar, bukkitAgentJar, releaseSbom)
     }
 
     val stageRelease = tasks.register<Sync>("stageRelease") {
@@ -129,6 +138,8 @@ gradle.projectsEvaluated {
             app.tasks.named("distZip"),
             pluginApi.tasks.named("jar"),
             pluginApi.tasks.named("sourcesJar"),
+            backendAgentApi.tasks.named("jar"),
+            buildBukkitBackendAgent,
             writeReleaseManifest,
             generateReleaseSbom,
             writeReleaseMetadata
@@ -150,6 +161,12 @@ gradle.projectsEvaluated {
         from(pluginApiSourcesJar) {
             into("plugin-api")
         }
+        from(backendAgentApiJar) {
+            into("backend-agent-api")
+        }
+        from(bukkitAgentJar) {
+            into("integrations")
+        }
     }
 
     val releaseBundle = tasks.register<Zip>("releaseBundle") {
@@ -165,7 +182,7 @@ gradle.projectsEvaluated {
         group = "distribution"
         description = "Writes SHA-256 checksums for StrataProxy release artifacts."
         dependsOn(releaseBundle)
-        inputFiles.from(releaseZip, appDistZip, pluginApiJar, pluginApiSourcesJar, releaseSbom, releaseMetadata)
+        inputFiles.from(releaseZip, appDistZip, pluginApiJar, pluginApiSourcesJar, backendAgentApiJar, bukkitAgentJar, releaseSbom, releaseMetadata)
         outputFile.set(releaseChecksum)
     }
 
@@ -228,6 +245,12 @@ abstract class ReleaseManifestTask : DefaultTask() {
     @get:Input
     abstract val pluginApiArchive: Property<String>
 
+    @get:Input
+    abstract val backendAgentApiArchive: Property<String>
+
+    @get:Input
+    abstract val bukkitAgentArchive: Property<String>
+
     @TaskAction
     fun writeManifest() {
         val file = outputFile.get().asFile
@@ -239,7 +262,9 @@ abstract class ReleaseManifestTask : DefaultTask() {
             java=25
             appArchive=${appArchive.get()}
             pluginApiArchive=${pluginApiArchive.get()}
-            includes=docs,deployment,configs,native-runtime,plugin-api,examples,checksums
+            backendAgentApiArchive=${backendAgentApiArchive.get()}
+            bukkitAgentArchive=${bukkitAgentArchive.get()}
+            includes=docs,deployment,configs,native-runtime,plugin-api,backend-agent-api,bukkit-agent,examples,checksums
             """.trimIndent() + System.lineSeparator()
         )
     }
@@ -282,6 +307,10 @@ abstract class Sha256FilesTask : DefaultTask() {
             archive.name
         } else if (archive.name.startsWith("proxy-plugin-api-")) {
             "plugin-api/${archive.name}"
+        } else if (archive.name.startsWith("backend-agent-api-")) {
+            "backend-agent-api/${archive.name}"
+        } else if (archive.name.startsWith("strataproxy-bukkit-backend-agent-")) {
+            "integrations/${archive.name}"
         } else {
             "archives/${archive.name}"
         }
@@ -427,6 +456,10 @@ abstract class ReleaseMetadataTask : DefaultTask() {
             artifact.name
         } else if (artifact.name.startsWith("proxy-plugin-api-")) {
             "plugin-api/${artifact.name}"
+        } else if (artifact.name.startsWith("backend-agent-api-")) {
+            "backend-agent-api/${artifact.name}"
+        } else if (artifact.name.startsWith("strataproxy-bukkit-backend-agent-")) {
+            "integrations/${artifact.name}"
         } else {
             "archives/${artifact.name}"
         }
@@ -491,7 +524,9 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "\"name\": \"strataproxy-",
             "\"java\": \"25\"",
             "\"signature\":",
-            "plugin-api/proxy-plugin-api-"
+            "plugin-api/proxy-plugin-api-",
+            "backend-agent-api/backend-agent-api-",
+            "integrations/strataproxy-bukkit-backend-agent-"
         ).forEach { token ->
             require(metadata.contains(token)) { "release metadata missing $token" }
         }
@@ -522,7 +557,9 @@ abstract class ReleaseAuditTask : DefaultTask() {
             "strataproxy-0.2.0-SNAPSHOT.sbom.cdx.json",
             "strataproxy-0.2.0-SNAPSHOT.metadata.json",
             "plugin-api/proxy-plugin-api-0.2.0-SNAPSHOT.jar",
-            "plugin-api/proxy-plugin-api-0.2.0-SNAPSHOT-sources.jar"
+            "plugin-api/proxy-plugin-api-0.2.0-SNAPSHOT-sources.jar",
+            "backend-agent-api/backend-agent-api-0.2.0-SNAPSHOT.jar",
+            "integrations/strataproxy-bukkit-backend-agent-0.2.0-SNAPSHOT.jar"
         ).forEach { token ->
             require(checksums.contains(token)) { "release checksums missing $token" }
         }

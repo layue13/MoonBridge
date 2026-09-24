@@ -32,7 +32,7 @@ publishing {
             artifactId = "backend-agent-api"
             pom {
                 name.set("StrataProxy Backend Agent API")
-                description.set("Platform-independent plugin-message API for StrataProxy backend agents.")
+                description.set("Platform-independent channel API for StrataProxy backend agents.")
             }
         }
     }

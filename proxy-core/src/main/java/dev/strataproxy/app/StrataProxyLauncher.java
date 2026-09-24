@@ -5,6 +5,7 @@ import dev.strataproxy.registry.JsonRegistryStore;
 import dev.strataproxy.registry.NoopRegistryStore;
 import dev.strataproxy.registry.RegistryStore;
 import dev.strataproxy.agent.BackendAgentServer;
+import dev.strataproxy.agent.BackendMessageBroker;
 import dev.strataproxy.app.ConfigLoader;
 import dev.strataproxy.app.ConfigValidationResult;
 import dev.strataproxy.app.ConfigValidator;
@@ -185,12 +186,15 @@ public final class StrataProxyLauncher {
             started.add(scheduler);
             var serverReference = new AtomicReference<NettyProxyNetworkServer>();
             var pluginPlayers = new PluginPlayerService(serverReference, metrics);
+            var messageBroker = new BackendMessageBroker();
+            started.add(messageBroker);
             var pluginServers = new PluginServerService(registry, registryPersistence, scheduler, "strataproxy");
             BuiltInProxyCommands.register(commandRegistry, pluginPlayers, pluginServers);
             var pluginManager = new PluginManager(
                     commandRegistry,
                     eventBus,
                     pluginPlayers,
+                    metadata -> messageBroker.forPlugin(metadata.id()),
                     metadata -> new PluginServerService(registry, registryPersistence, scheduler, metadata.id()),
                     scheduler,
                     LoggerFactory.getLogger("dev.strataproxy.plugin"));
@@ -251,7 +255,8 @@ public final class StrataProxyLauncher {
             if (config.backendAgent().enabled()) {
                 var backendAgent = new BackendAgentServer(
                         config.backendAgent(),
-                        new PluginServerService(registry, registryPersistence, scheduler, "bukkit-agent"));
+                        new PluginServerService(registry, registryPersistence, scheduler, "bukkit-agent"),
+                        messageBroker);
                 backendAgent.start();
                 started.add(backendAgent);
                 out.println("StrataProxy backend-agent bound on " + config.backendAgent().bindAddress()

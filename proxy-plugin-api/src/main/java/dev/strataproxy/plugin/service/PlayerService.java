@@ -35,19 +35,6 @@ public interface PlayerService {
     }
 
     /**
-     * Sends an opaque plugin-message payload to the player's current backend.
-     * Completion means Netty accepted the packet for writing, not that Bukkit processed it.
-     */
-    default CompletionStage<PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
-        return java.util.concurrent.CompletableFuture.completedFuture(PluginMessageResult.failure("unsupported"));
-    }
-
-    /** Sends a plugin message to one exact proxy connection. */
-    default CompletionStage<PluginMessageResult> sendPluginMessage(PlayerIdentity player, String channel, byte[] payload) {
-        return java.util.concurrent.CompletableFuture.completedFuture(PluginMessageResult.failure("identity_message_unsupported"));
-    }
-
-    /**
  * Provides find.
  *
      * @param playerName player name

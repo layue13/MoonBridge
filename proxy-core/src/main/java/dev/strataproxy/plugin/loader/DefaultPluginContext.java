@@ -5,6 +5,7 @@ import dev.strataproxy.plugin.PluginMetadata;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
 import dev.strataproxy.plugin.service.PlayerService;
+import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerService;
 import org.slf4j.Logger;
@@ -15,6 +16,7 @@ final class DefaultPluginContext implements PluginContext {
     private final CommandRegistry commands;
     private final EventBus events;
     private final PlayerService players;
+    private final ProxyChannelService channels;
     private final ServerService servers;
     private final Scheduler scheduler;
     private final Logger logger;
@@ -24,12 +26,14 @@ final class DefaultPluginContext implements PluginContext {
             CommandRegistry commands,
             EventBus events,
             PlayerService players,
+            ProxyChannelService channels,
             ServerService servers,
             Scheduler scheduler) {
         this.metadata = metadata;
         this.commands = commands;
         this.events = events;
         this.players = players;
+        this.channels = channels;
         this.servers = servers;
         this.scheduler = scheduler;
         this.logger = LoggerFactory.getLogger("dev.strataproxy.plugin." + metadata.id());
@@ -57,6 +61,11 @@ final class DefaultPluginContext implements PluginContext {
     /** Provides players. */
     public PlayerService players() {
         return players;
+    }
+
+    @Override
+    public ProxyChannelService channels() {
+        return channels;
     }
 
     @Override

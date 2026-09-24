@@ -1,6 +1,5 @@
 package dev.strataproxy.network;
 
-import dev.strataproxy.plugin.service.PluginMessageResult;
 import dev.strataproxy.plugin.service.PlayerIdentity;
 
 import java.util.Locale;
@@ -86,24 +85,6 @@ final class RelaySessionRegistry {
                     "transfer_unavailable", session.identity().playerName(), session.serverName(), targetServerName));
         }
         return controller.replaceBackend(targetServerName);
-    }
-
-    CompletionStage<PluginMessageResult> sendPluginMessage(String playerName, String channel, byte[] payload) {
-        var session = find(playerName).orElse(null);
-        if (session == null) return CompletableFuture.completedFuture(PluginMessageResult.failure("player_not_found"));
-        var controller = session.replacementController();
-        return controller == null
-                ? CompletableFuture.completedFuture(PluginMessageResult.failure("backend_unavailable"))
-                : controller.sendPluginMessage(channel, payload);
-    }
-
-    CompletionStage<PluginMessageResult> sendPluginMessage(PlayerIdentity identity, String channel, byte[] payload) {
-        var session = find(identity).orElse(null);
-        if (session == null) return CompletableFuture.completedFuture(PluginMessageResult.failure("player_not_found"));
-        var controller = session.replacementController();
-        return controller == null
-                ? CompletableFuture.completedFuture(PluginMessageResult.failure("backend_unavailable"))
-                : controller.sendPluginMessage(channel, payload);
     }
 
     private static String key(String playerName) {

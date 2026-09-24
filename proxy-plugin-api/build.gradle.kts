@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     api(libs.findLibrary("slf4j-api").get())
+    api(project(":backend-agent-api"))
 }
 
 java {

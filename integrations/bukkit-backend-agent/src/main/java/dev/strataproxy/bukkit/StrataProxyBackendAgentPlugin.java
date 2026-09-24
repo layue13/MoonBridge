@@ -23,9 +23,10 @@ import java.util.UUID;
 /** Bukkit-side adapter for the restricted StrataProxy backend-agent protocol. */
 public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
     private BackendAgentClient client;
-    private BukkitBackendMessageApi messaging;
+    private BackendChannelClient messaging;
     private int heartbeatTask = -1;
     private boolean unregisterOnDisable;
+    private volatile boolean registered;
 
     @Override
     public void onEnable() {
@@ -37,7 +38,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
-        messaging = new BukkitBackendMessageApi(this);
+        messaging = new BackendChannelClient(this, client);
         getServer().getServicesManager().register(BackendAgentApi.class, messaging, this, ServicePriority.Normal);
         unregisterOnDisable = getConfig().getBoolean("unregisterOnDisable", true);
         runAsync("register");
@@ -45,7 +46,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         heartbeatTask = getServer().getScheduler().scheduleAsyncRepeatingTask(this, new Runnable() {
             @Override
             public void run() {
-                runAsync("heartbeat");
+                runAsync(registered ? "heartbeat" : "register");
             }
         }, heartbeatTicks, heartbeatTicks);
     }
@@ -60,7 +61,8 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
             messaging.close();
         }
         if (client != null && unregisterOnDisable) {
-            runAsync("unregister");
+            try { client.call("unregister"); }
+            catch (Exception exception) { getLogger().warning("StrataProxy backend-agent unregister failed: " + exception.getMessage()); }
         }
     }
 
@@ -71,7 +73,11 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
                 try {
                     String response = client.call(operation);
                     if (!response.contains("\"success\":true")) {
+                        if ("heartbeat".equals(operation) && response.contains("not_registered")) registered = false;
                         getLogger().warning("StrataProxy backend-agent " + operation + " failed: " + response);
+                    } else if ("register".equals(operation) && messaging != null) {
+                        registered = true;
+                        messaging.start();
                     }
                 } catch (Exception exception) {
                     getLogger().warning("StrataProxy backend-agent " + operation + " failed: " + exception.getMessage());
@@ -80,7 +86,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         });
     }
 
-    private static final class BackendAgentClient {
+    static final class BackendAgentClient {
         private final String proxyHost;
         private final int proxyPort;
         private final String secret;
@@ -126,12 +132,7 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
         }
 
         String call(String operation) throws Exception {
-            String payload = operation.equals("register") ? backendJsonWithOperation(operation) : "{\"operation\":\"" + operation + "\",\"name\":\"" + escape(backendName) + "\",\"instanceId\":\"" + instanceId + "\"}";
-            String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.getBytes(StandardCharsets.UTF_8));
-            long timestamp = System.currentTimeMillis();
-            String nonce = UUID.randomUUID().toString().replace("-", "");
-            String signature = hex(hmac(backendName + "\n" + timestamp + "\n" + nonce + "\n" + encoded));
-            String envelope = "{\"agentId\":\"" + escape(backendName) + "\",\"timestamp\":" + timestamp + ",\"nonce\":\"" + nonce + "\",\"payload\":\"" + encoded + "\",\"signature\":\"" + signature + "\"}";
+            String envelope = envelope(operation);
             Socket socket = new Socket(proxyHost, proxyPort);
             try {
                 socket.setSoTimeout(5000);
@@ -144,6 +145,39 @@ public final class StrataProxyBackendAgentPlugin extends JavaPlugin {
             } finally {
                 socket.close();
             }
+        }
+
+        Socket openStream() throws Exception {
+            Socket socket = new Socket(proxyHost, proxyPort);
+            try {
+                socket.setSoTimeout(5000);
+                byte[] greeting = (envelope("stream") + "\n").getBytes(StandardCharsets.UTF_8);
+                socket.getOutputStream().write(greeting);
+                socket.getOutputStream().flush();
+                java.io.ByteArrayOutputStream answer = new java.io.ByteArrayOutputStream();
+                int value;
+                while ((value = socket.getInputStream().read()) != '\n') {
+                    if (value < 0 || answer.size() >= 4096) throw new IllegalStateException("invalid proxy stream response");
+                    answer.write(value);
+                }
+                if (!new String(answer.toByteArray(), StandardCharsets.UTF_8).contains("\"success\":true")) {
+                    throw new IllegalStateException("proxy rejected the agent message stream");
+                }
+                socket.setSoTimeout(0);
+                return socket;
+            } catch (Exception exception) {
+                socket.close();
+                throw exception;
+            }
+        }
+
+        private String envelope(String operation) throws Exception {
+            String payload = operation.equals("register") ? backendJsonWithOperation(operation) : "{\"operation\":\"" + operation + "\",\"name\":\"" + escape(backendName) + "\",\"instanceId\":\"" + instanceId + "\"}";
+            String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.getBytes(StandardCharsets.UTF_8));
+            long timestamp = System.currentTimeMillis();
+            String nonce = UUID.randomUUID().toString().replace("-", "");
+            String signature = hex(hmac(backendName + "\n" + timestamp + "\n" + nonce + "\n" + encoded));
+            return "{\"agentId\":\"" + escape(backendName) + "\",\"timestamp\":" + timestamp + ",\"nonce\":\"" + nonce + "\",\"payload\":\"" + encoded + "\",\"signature\":\"" + signature + "\"}";
         }
 
         private String backendJsonWithOperation(String operation) {

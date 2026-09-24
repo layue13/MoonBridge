@@ -9,6 +9,7 @@ import dev.strataproxy.plugin.command.CommandResult;
 import dev.strataproxy.plugin.command.CommandSource;
 import dev.strataproxy.plugin.command.CommandSpec;
 import dev.strataproxy.plugin.service.PlayerService;
+import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.ServerService;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,7 @@ final class PluginManagerTest {
                 new DefaultCommandRegistry(),
                 new SimpleEventBus(),
                 emptyPlayers(),
+                emptyChannels(),
                 emptyServers(),
                 scheduler,
                 LoggerFactory.getLogger("test"))) {
@@ -54,6 +56,7 @@ final class PluginManagerTest {
                 new DefaultCommandRegistry(),
                 new SimpleEventBus(),
                 emptyPlayers(),
+                emptyChannels(),
                 emptyServers(),
                 scheduler,
                 LoggerFactory.getLogger("test"))) {
@@ -89,6 +92,7 @@ final class PluginManagerTest {
                 commands,
                 new SimpleEventBus(),
                 emptyPlayers(),
+                emptyChannels(),
                 emptyServers(),
                 scheduler,
                 LoggerFactory.getLogger("test"))) {
@@ -127,6 +131,10 @@ final class PluginManagerTest {
                 return List.of();
             }
         };
+    }
+
+    private static ProxyChannelService emptyChannels() {
+        return new dev.strataproxy.agent.BackendMessageBroker().forPlugin("test");
     }
 
     private static ServerService emptyServers() {
