@@ -45,12 +45,17 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
-        if (!(message instanceof ByteBuf packet)) {
+        if (!(message instanceof ByteBuf frame)) {
             ReferenceCountUtil.release(message);
             fail(ctx, "unexpected backend message type");
             return;
         }
         try {
+            ByteBuf packet = frame.duplicate();
+            int frameLength = ProtocolVarInt.read(packet);
+            if (frameLength < 1 || frameLength != packet.readableBytes()) {
+                throw new IllegalArgumentException("invalid backend transfer frame");
+            }
             if (state == State.FAILED || state == State.HANDED_OFF) return;
             if (state == State.LOGIN) {
                 int id = ProtocolVarInt.read(packet.duplicate());
@@ -80,8 +85,10 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
                     queuedBytes += bytes;
                 }
                 observation.observePacket(true, packet);
-                if (state == State.PLAY && joinGame != null
-                        && (observation.forgeSeen() || observation.ready().isDone())) {
+                // Forge sends ServerHello before it can finish the handshake and issue Join Game.
+                // The proxy must connect the player to this backend so the client can answer it.
+                if (state == State.PLAY && (observation.forgeSeen()
+                        || (joinGame != null && observation.ready().isDone()))) {
                     state = State.READY;
                     ctx.channel().config().setAutoRead(false);
                     deadline.cancel(false);
@@ -91,7 +98,7 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
         } catch (RuntimeException malformed) {
             fail(ctx, "malformed backend transfer packet");
         } finally {
-            packet.release();
+            frame.release();
         }
     }
 

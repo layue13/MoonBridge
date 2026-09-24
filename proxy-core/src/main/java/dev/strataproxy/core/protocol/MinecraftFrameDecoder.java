@@ -9,8 +9,15 @@ import java.util.List;
 /** Splits Minecraft length-prefixed frames, returning reference-counted zero-copy slices. */
 public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
     private final ProtocolProfile profile;
+    private final boolean retainLengthPrefix;
 
-    public MinecraftFrameDecoder(ProtocolProfile profile) { this.profile = profile; }
+    public MinecraftFrameDecoder(ProtocolProfile profile) { this(profile, false); }
+
+    /** Retained-prefix mode yields complete wire frames for a packet-aware relay. */
+    public MinecraftFrameDecoder(ProtocolProfile profile, boolean retainLengthPrefix) {
+        this.profile = profile;
+        this.retainLengthPrefix = retainLengthPrefix;
+    }
 
     @Override
     protected void decode(ChannelHandlerContext context, ByteBuf input, List<Object> output) {
@@ -34,7 +41,10 @@ public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
         if (ProtocolVarInt.encodedSize(length) != prefixBytes) throw new DecoderException("non-canonical frame length");
         if (length < 0 || length > profile.maxFrameBytes()) throw new DecoderException("frame length out of bounds: " + length);
         if (readable - prefixBytes < length) return;
-        input.skipBytes(prefixBytes);
-        output.add(input.readRetainedSlice(length));
+        if (retainLengthPrefix) output.add(input.readRetainedSlice(prefixBytes + length));
+        else {
+            input.skipBytes(prefixBytes);
+            output.add(input.readRetainedSlice(length));
+        }
     }
 }

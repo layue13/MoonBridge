@@ -75,6 +75,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     private ScheduledFuture<?> initialLoginDeadline;
     private PlayObservation playObservation;
     private RawRelay.Link relay;
+    private Integer clientEntityId;
+    private TransferFrameHandler.State frameState;
     private PendingTransfer pendingTransfer;
     private TransferAttempt transfer;
 
@@ -421,13 +423,19 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private CompletableFuture<Void> removeHandshakeCodecs(Channel channel) {
+        return removeHandshakeCodecs(channel, false);
+    }
+
+    private CompletableFuture<Void> removeHandshakeCodecs(Channel channel, boolean retainFrameDecoder) {
         CompletableFuture<Void> removed = new CompletableFuture<>();
         channel.eventLoop().execute(() -> {
             try {
                 ChannelPipeline pipeline = channel.pipeline();
                 if (pipeline.get("initial-session") != null) pipeline.remove("initial-session");
                 if (pipeline.get("transfer-candidate") != null) pipeline.remove("transfer-candidate");
-                if (pipeline.get("minecraft-frame-decoder") != null) pipeline.remove("minecraft-frame-decoder");
+                if (!retainFrameDecoder && pipeline.get("minecraft-frame-decoder") != null) {
+                    pipeline.remove("minecraft-frame-decoder");
+                }
                 if (pipeline.get("encrypted-frame-decoder") != null) pipeline.remove("encrypted-frame-decoder");
                 if (pipeline.get("minecraft-frame-encoder") != null) pipeline.remove("minecraft-frame-encoder");
                 if (pipeline.get("session-lifecycle") == null) pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
@@ -512,7 +520,10 @@ final class Session extends ChannelInboundHandlerAdapter {
                     .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                     .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
                         @Override protected void initChannel(SocketChannel channel) {
-                            installCodecs(channel.pipeline());
+                            channel.pipeline().addLast("minecraft-frame-decoder",
+                                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
+                                            ProtocolProfile.minecraft1710(), true));
+                            channel.pipeline().addLast("minecraft-frame-encoder", new SessionFrameEncoder());
                             channel.pipeline().addLast("transfer-candidate", attempt.candidate);
                         }
                     });
@@ -572,8 +583,15 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
             attempt.oldRelay.detach().whenComplete((removed, detachFailure) ->
                     frontend.eventLoop().execute(() -> {
-                        if (detachFailure != null || closed.get() || !attempt.channel.isActive()) {
+                        if (detachFailure != null) {
+                            boolean oldRelayStillAttached = frontend.pipeline().get("raw-relay") != null
+                                    && backend.pipeline().get("raw-relay") != null;
                             failTransfer(attempt, "could not detach old backend relay");
+                            if (!oldRelayStillAttached) closePair();
+                            return;
+                        }
+                        if (closed.get() || !attempt.channel.isActive()) {
+                            failTransfer(attempt, "replacement backend closed during transfer");
                             closePair();
                             return;
                         }
@@ -591,7 +609,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
-        removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
+        removeHandshakeCodecs(attempt.channel, true).whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(() -> {
                     if (failure != null || closed.get() || !attempt.channel.isActive()) {
                         failTransfer(attempt, "replacement backend pipeline failed");
@@ -606,6 +624,10 @@ final class Session extends ChannelInboundHandlerAdapter {
         PlayObservation nextObservation = attempt.candidate.observation();
         RawRelay.Link next;
         try {
+            if (clientEntityId == null) clientEntityId = playObservation.entityId().orElseThrow();
+            attempt.frameState = new TransferFrameHandler.State(frontend, attempt.channel, nextObservation,
+                    playObservation.dimension(), clientEntityId, attempt.candidate.joinGame(), this::closePair);
+            installTransferFrameHandlers(attempt.frameState, attempt.channel);
             next = RawRelay.attach(frontend, attempt.channel,
                     bytes -> nextObservation.observeStream(false, bytes),
                     bytes -> nextObservation.observeStream(true, bytes));
@@ -639,11 +661,13 @@ final class Session extends ChannelInboundHandlerAdapter {
                 Channel oldBackend = backend;
                 CapacityReservation oldReservation = reservation;
                 PlayObservation oldObservation = playObservation;
+                TransferFrameHandler.State oldFrameState = frameState;
                 backend = attempt.channel;
                 reservation = attempt.claim;
                 selected = attempt.target;
                 playObservation = nextObservation;
                 relay = next;
+                frameState = attempt.frameState;
                 owner.onlineMap().put(identity,
                         new PlayerView(identity, view.username(), selected.handle().id().value()));
                 transfer = null;
@@ -651,10 +675,23 @@ final class Session extends ChannelInboundHandlerAdapter {
                 oldBackend.close();
                 oldReservation.close();
                 oldObservation.close();
+                if (oldFrameState != null) oldFrameState.close();
                 next.start();
                 attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
             }));
         }));
+    }
+
+    private void installTransferFrameHandlers(TransferFrameHandler.State state, Channel target) {
+        ChannelPipeline clientPipeline = frontend.pipeline();
+        if (clientPipeline.get("transfer-frame-handler") != null) clientPipeline.remove("transfer-frame-handler");
+        if (clientPipeline.get("transfer-frame-decoder") == null) {
+            clientPipeline.addLast("transfer-frame-decoder",
+                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
+                            ProtocolProfile.minecraft1710(), true));
+        }
+        clientPipeline.addLast("transfer-frame-handler", new TransferFrameHandler(state, false));
+        target.pipeline().addLast("transfer-frame-handler", new TransferFrameHandler(state, true));
     }
 
     private ByteBuf transferOpening(TransferAttempt attempt) {
@@ -665,11 +702,13 @@ final class Session extends ChannelInboundHandlerAdapter {
                 ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
                 try { output.writeBytes(reset); } finally { reset.release(); }
             }
-            int targetDimension = attempt.candidate.observation().dimension()
-                    .orElse(attempt.candidate.joinGame().dimension());
-            ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
-                    attempt.candidate.joinGame(), playObservation.dimension(), targetDimension);
-            try { output.writeBytes(respawns); } finally { respawns.release(); }
+            if (attempt.candidate.joinGame() != null) {
+                int targetDimension = attempt.candidate.observation().dimension()
+                        .orElse(attempt.candidate.joinGame().dimension());
+                ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
+                        attempt.candidate.joinGame(), playObservation.dimension(), targetDimension);
+                try { output.writeBytes(respawns); } finally { respawns.release(); }
+            }
             for (ByteBuf packet : queued) {
                 ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), packet);
                 try { output.writeBytes(frame); } finally { frame.release(); }
@@ -689,6 +728,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         attempt.failureReason = reason;
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
+        if (attempt.frameState != null) attempt.frameState.close();
         attempt.claim.close();
         if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
     }
@@ -718,6 +758,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (upstream != null) upstream.close();
             if (reservation != null) reservation.close();
             if (playObservation != null) playObservation.close();
+            if (frameState != null) frameState.close();
             PendingTransfer waiting = pendingTransfer;
             if (waiting != null) {
                 pendingTransfer = null;
@@ -761,6 +802,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         private final CompletableFuture<TransferResult> result;
         private final RawRelay.Link oldRelay;
         private TransferCandidate candidate;
+        private TransferFrameHandler.State frameState;
         private Channel channel;
         private boolean pauseInProgress;
         private boolean paused;

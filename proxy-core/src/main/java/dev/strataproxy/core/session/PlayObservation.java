@@ -21,6 +21,8 @@ final class PlayObservation implements AutoCloseable {
     private boolean backendComplete;
     private boolean clientComplete;
     private OptionalInt dimension = OptionalInt.empty();
+    private OptionalInt forgeDimensionOverride = OptionalInt.empty();
+    private OptionalInt entityId = OptionalInt.empty();
 
     void observeStream(boolean clientbound, ByteBuf bytes) {
         if (ready.isDone()) return;
@@ -34,12 +36,17 @@ final class PlayObservation implements AutoCloseable {
         if (clientbound) {
             Minecraft1710PlayPackets.joinGame(packet).ifPresent(join -> {
                 joinSeen = true;
-                dimension = OptionalInt.of(join.dimension());
+                entityId = OptionalInt.of(join.entityId());
+                dimension = forgeDimensionOverride.isPresent() ? forgeDimensionOverride
+                        : OptionalInt.of(join.dimension());
             });
             Minecraft1710PlayPackets.forgeHandshake(packet, true).ifPresent(handshake -> {
                 forgeSeen = true;
                 handshake.hello().ifPresent(hello -> {
-                    if (hello.dimensionOverride() != 0) dimension = OptionalInt.of(hello.dimensionOverride());
+                    if (hello.dimensionOverride() != 0) {
+                        forgeDimensionOverride = OptionalInt.of(hello.dimensionOverride());
+                        dimension = forgeDimensionOverride;
+                    }
                 });
                 if (handshake.discriminator() == 0xFF
                         && handshake.phase().isPresent() && handshake.phase().getAsInt() == 3) {
@@ -61,6 +68,7 @@ final class PlayObservation implements AutoCloseable {
     CompletableFuture<Void> ready() { return ready; }
     boolean forgeSeen() { return forgeSeen; }
     OptionalInt dimension() { return dimension; }
+    OptionalInt entityId() { return entityId; }
 
     @Override public void close() {
         clientFrames.close();

@@ -8,14 +8,14 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 - **服务器目录**：静态配置与插件调用同一个注册接口。目录维护地址、声明的容量，以及本代理连接和入服预留的数量；它不采集后端 CPU、TPS、内存等负载。同名重注册生成新句柄，旧异步结果不能修改新条目。
 - **插件 API**：插件可查询 `PlayerView`、`ServerView`，动态注册后端，并以一个异步回调决定初始落点。空岛分配、实例唤醒和玩法数据由插件自行实现。
 - **发现方式**：DNS 是独立插件，核心不认识 DNS 或 Agent。配置只启用列出的插件；插件关闭时其注册会清理。
-- **协议热路径**：协议 5 的初始帧解析与普通数据转发分离。建立会话后使用 Netty `ByteBuf` 原样转发，并按目标通道可写状态控制读取。
+- **协议热路径**：协议 5 的初始帧解析与普通数据转发分离。初次连接使用 Netty `ByteBuf` 原样转发；转服后只解析帧边界及少数需要改写的包，并按目标通道可写状态控制读取。
 - **日志**：SLF4J API 与 Logback 运行时。
 
 ## 当前可运行范围
 
-配置必须显式选择 `authentication: OFFLINE` 或 `ONLINE_BUNGEE`。两种模式均解析协议 5 Handshake 与 Login Start，等待异步落点，预留容量，连接后端，确认 Login Success，然后转发普通字节流。在线模式执行加密握手、异步会话校验，并向可信的 Bungee 兼容后端转发已验证身份。状态查询由代理直接回答。`Players.transfer` 会在旧后端继续服务时登录候选后端，确认可进入 PLAY 后暂停旧链路，发送 Forge reset 和 Respawn，最后切换原始字节转发；候选登录失败时保留旧链路。DNS 与 Agent 是调用通用注册 API 的独立插件。
+配置必须显式选择 `authentication: OFFLINE` 或 `ONLINE_BUNGEE`。两种模式均解析协议 5 Handshake 与 Login Start，等待异步落点，预留容量，连接后端，确认 Login Success，然后转发普通字节流。在线模式执行加密握手、异步会话校验，并向可信的 Bungee 兼容后端转发已验证身份。状态查询由代理直接回答。`Players.transfer` 会在旧后端继续服务时登录候选后端；普通后端等到 Join Game 与 Position and Look，Forge 后端收到 ServerHello 后先切换握手链路，待客户端完成握手并收到 Join Game 时再合成 Respawn。切换后的玩家实体 ID 会映射到原客户端 ID；候选登录失败时保留旧链路。DNS 与 Agent 是调用通用注册 API 的独立插件。
 
-**验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括失败回退、同维度 Respawn、维度覆盖和中途断线清理。在线认证仅通过注入会话校验器的合成 TCP 测试。真实 Mojang 服务、Uranium/Bungee 兼容后端和 1.7.10 Forge 整合包尚未联机验证，也未做同条件性能验收；当前不能宣称生产可用或实服 Forge 转服兼容。
+**验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括失败回退、同维度 Respawn、握手后 Join Game、维度覆盖、玩家实体 ID 映射和中途断线清理。在线认证仅通过注入会话校验器的合成 TCP 测试。真实 Mojang 服务、Uranium/Bungee 兼容后端和 1.7.10 Forge 整合包尚未联机验证，也未做同条件性能验收；当前不能宣称生产可用或实服 Forge 转服兼容。
 
 ## 配置与运行
 

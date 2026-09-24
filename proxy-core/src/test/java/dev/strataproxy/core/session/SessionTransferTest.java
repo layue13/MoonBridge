@@ -57,8 +57,10 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    acceptLogin(input, output, 0);
+                    acceptLogin(input, output, 0, 200);
                     assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    assertArrayEquals(new byte[]{0x0B, 0, 0, 0, (byte) 200, 1}, readFrame(input));
+                    writeFrame(output, new byte[]{0x1A, 0, 0, 0, (byte) 200, 1});
                     writeFrame(output, new byte[]{0x03, 0x44});
                     newRelayed.complete(null);
                     while (input.read() != -1) { }
@@ -80,13 +82,15 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input))); // Initial Position and Look.
                     var player = awaitPlayer(listener);
                     assertEquals("old", player.currentServer().orElseThrow());
-                    assertEquals(TransferStatus.NETWORK_READY,
-                            listener.transfer(player.identity(), "new").toCompletableFuture()
-                                    .get(5, TimeUnit.SECONDS).status());
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
                     assertEquals(7, packetId(readFrame(input))); // Dummy respawn for same dimension.
                     assertEquals(7, packetId(readFrame(input))); // Target dimension.
                     assertEquals(8, packetId(readFrame(input))); // Target Position and Look, no second Login Success.
                     writeFrame(output, new byte[]{0x01, 0x33});
+                    writeFrame(output, new byte[]{0x0B, 0, 0, 0, 100, 1});
+                    assertArrayEquals(new byte[]{0x1A, 0, 0, 0, 100, 1}, readFrame(input));
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newRelayed.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
@@ -163,8 +167,12 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    acceptForgeLogin(input, output, 5);
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(5));
+                    writeFrame(output, serverForgeAck());
                     assertArrayEquals(clientForgeAck(), readFrame(input));
+                    sendJoinGame(output, 0, 100);
                     if (input.read() != -1) throw new AssertionError("old Forge backend received post-transfer data");
                     oldClosed.complete(null);
                 } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
@@ -174,8 +182,12 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    acceptForgeLogin(input, output, 7);
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(7));
                     assertArrayEquals(clientForgeAck(), readFrame(input));
+                    writeFrame(output, serverForgeAck());
+                    sendJoinGame(output, 0, 200);
                     writeFrame(output, new byte[]{0x03, 0x44});
                     newNegotiated.complete(null);
                     while (input.read() != -1) { }
@@ -193,24 +205,24 @@ final class SessionTransferTest {
                     DataOutputStream output = new DataOutputStream(client.getOutputStream());
                     sendLogin(output);
                     assertEquals(2, packetId(readFrame(input)));
-                    assertEquals(1, packetId(readFrame(input)));
                     assertArrayEquals(serverForgeHello(5), readFrame(input));
                     assertArrayEquals(serverForgeAck(), readFrame(input));
                     writeFrame(output, clientForgeAck());
+                    assertEquals(1, packetId(readFrame(input)));
                     var player = awaitPlayer(listener);
-                    assertEquals(TransferStatus.NETWORK_READY,
-                            listener.transfer(player.identity(), "new").toCompletableFuture()
-                                    .get(5, TimeUnit.SECONDS).status());
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
                     byte[] reset = readFrame(input);
                     assertEquals(0x3f, packetId(reset));
                     assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertArrayEquals(serverForgeHello(7), readFrame(input));
+                    writeFrame(output, clientForgeAck());
+                    assertArrayEquals(serverForgeAck(), readFrame(input));
                     byte[] respawn = readFrame(input);
                     var respawnInput = new DataInputStream(new ByteArrayInputStream(respawn));
                     assertEquals(7, readVarInt(respawnInput));
                     assertEquals(7, respawnInput.readInt()); // Target override, not Join Game's signed byte.
-                    assertArrayEquals(serverForgeHello(7), readFrame(input));
-                    assertArrayEquals(serverForgeAck(), readFrame(input));
-                    writeFrame(output, clientForgeAck());
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newNegotiated.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
@@ -293,49 +305,42 @@ final class SessionTransferTest {
     }
 
     private static void acceptLogin(DataInputStream input, DataOutputStream output, int dimension) throws Exception {
+        acceptLogin(input, output, dimension, 100);
+    }
+
+    private static void acceptLogin(DataInputStream input, DataOutputStream output, int dimension, int entityId)
+            throws Exception {
+        acceptHandshakeAndLogin(input, output);
+        sendLoginSuccess(output);
+        sendJoinGame(output, dimension, entityId);
+        writeFrame(output, new byte[]{0x08});
+    }
+
+    private static void acceptHandshakeAndLogin(DataInputStream input, DataOutputStream output) throws Exception {
         assertEquals(0, packetId(readFrame(input)));
         assertEquals(0, packetId(readFrame(input)));
+    }
+
+    private static void sendLoginSuccess(DataOutputStream output) throws Exception {
         ByteArrayOutputStream success = new ByteArrayOutputStream();
         var successData = new DataOutputStream(success);
         writeVarInt(successData, 2);
         writeString(successData, PLAYER_ID.toString());
         writeString(successData, USERNAME);
         writeFrame(output, success.toByteArray());
+    }
+
+    private static void sendJoinGame(DataOutputStream output, int dimension, int entityId) throws Exception {
         ByteArrayOutputStream join = new ByteArrayOutputStream();
         var joinData = new DataOutputStream(join);
         writeVarInt(joinData, 1);
-        joinData.writeInt(100);
+        joinData.writeInt(entityId);
         joinData.writeByte(0);
         joinData.writeByte(dimension);
         joinData.writeByte(1);
         joinData.writeByte(20);
         writeString(joinData, "default");
         writeFrame(output, join.toByteArray());
-        writeFrame(output, new byte[]{0x08});
-    }
-
-    private static void acceptForgeLogin(DataInputStream input, DataOutputStream output, int dimensionOverride)
-            throws Exception {
-        assertEquals(0, packetId(readFrame(input)));
-        assertEquals(0, packetId(readFrame(input)));
-        ByteArrayOutputStream success = new ByteArrayOutputStream();
-        var successData = new DataOutputStream(success);
-        writeVarInt(successData, 2);
-        writeString(successData, PLAYER_ID.toString());
-        writeString(successData, USERNAME);
-        writeFrame(output, success.toByteArray());
-        ByteArrayOutputStream join = new ByteArrayOutputStream();
-        var joinData = new DataOutputStream(join);
-        writeVarInt(joinData, 1);
-        joinData.writeInt(100);
-        joinData.writeByte(0);
-        joinData.writeByte(0);
-        joinData.writeByte(1);
-        joinData.writeByte(20);
-        writeString(joinData, "default");
-        writeFrame(output, join.toByteArray());
-        writeFrame(output, serverForgeHello(dimensionOverride));
-        writeFrame(output, serverForgeAck());
     }
 
     private static byte[] serverForgeHello(int dimensionOverride) throws Exception {
