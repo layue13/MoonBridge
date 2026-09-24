@@ -85,13 +85,18 @@ final class RawRelayTest {
             var paused = link.pause().toCompletableFuture();
             pump(client, backend);
             paused.get(1, TimeUnit.SECONDS);
-            client.writeInbound(Unpooled.wrappedBuffer(new byte[] {1}));
+            var queued = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(queued);
             pump(client, backend);
             assertNull(backend.readOutbound());
 
             var resumed = link.resume().toCompletableFuture();
             pump(client, backend);
             resumed.get(1, TimeUnit.SECONDS);
+            var first = (io.netty.buffer.ByteBuf) backend.readOutbound();
+            assertSame(queued, first);
+            assertEquals(1, first.readUnsignedByte());
+            first.release();
             client.writeInbound(Unpooled.wrappedBuffer(new byte[] {2}));
             pump(client, backend);
             var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
@@ -104,6 +109,77 @@ final class RawRelayTest {
             backend.close();
             pump(client, backend);
             assertTrue(client.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void detachWithQueuedMessagesFailsWithoutDetachingEitherSide() throws Exception {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var link = RawRelay.attach(client, backend);
+            link.start();
+            pump(client, backend);
+            var paused = link.pause().toCompletableFuture();
+            pump(client, backend);
+            paused.get(1, TimeUnit.SECONDS);
+
+            var queued = Unpooled.wrappedBuffer(new byte[] {3, 4});
+            client.writeInbound(queued);
+            pump(client, backend);
+            var detached = link.detach().toCompletableFuture();
+            pump(client, backend);
+            assertTrue(detached.isCompletedExceptionally());
+            assertTrue(client.isOpen());
+            assertTrue(backend.isOpen());
+
+            var resumed = link.resume().toCompletableFuture();
+            pump(client, backend);
+            resumed.get(1, TimeUnit.SECONDS);
+            var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
+            assertSame(queued, forwarded);
+            assertEquals(3, forwarded.readUnsignedByte());
+            assertEquals(4, forwarded.readUnsignedByte());
+            forwarded.release();
+
+            assertEquals(0, queued.refCnt());
+            var detachedAfterDrain = link.detach().toCompletableFuture();
+            pump(client, backend);
+            detachedAfterDrain.get(1, TimeUnit.SECONDS);
+            assertTrue(client.isOpen());
+            assertTrue(backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void pausedQueueOverflowClosesBothSidesAndReleasesEveryBuffer() throws Exception {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var link = RawRelay.attach(client, backend);
+            link.start();
+            pump(client, backend);
+            var paused = link.pause().toCompletableFuture();
+            pump(client, backend);
+            paused.get(1, TimeUnit.SECONDS);
+
+            var first = Unpooled.buffer(RawRelay.MAX_PAUSED_BYTES, RawRelay.MAX_PAUSED_BYTES)
+                    .writeZero(RawRelay.MAX_PAUSED_BYTES);
+            var overflow = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(first);
+            client.writeInbound(overflow);
+            pump(client, backend);
+
+            assertEquals(0, first.refCnt());
+            assertEquals(0, overflow.refCnt());
+            assertTrue(!client.isOpen());
+            assertTrue(!backend.isOpen());
         } finally {
             client.finishAndReleaseAll();
             backend.finishAndReleaseAll();

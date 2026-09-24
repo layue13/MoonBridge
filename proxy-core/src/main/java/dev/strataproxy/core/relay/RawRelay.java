@@ -7,6 +7,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 
+import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -16,6 +17,10 @@ import java.util.function.Consumer;
 
 /** Relays already negotiated protocol bytes without copying payload buffers. */
 public final class RawRelay {
+    // Per direction: bound retained in-flight reads while a backend is being replaced.
+    static final int MAX_PAUSED_BYTES = 2 * 1024 * 1024;
+    static final int MAX_PAUSED_MESSAGES = 1024;
+
     private RawRelay() {
     }
 
@@ -75,10 +80,11 @@ public final class RawRelay {
             return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.resume(), fromBackend.resume()));
         }
 
-        /** Removes both paused handlers without closing either channel. */
+        /** Removes both paused handlers if neither side has queued reads; otherwise leaves the link resumable. */
         public CompletionStage<Void> detach() {
-            return pause().thenCompose(ignored ->
-                    CompletableFuture.allOf(fromClient.detach(), fromBackend.detach()));
+            return pause().thenCompose(ignored -> CompletableFuture.allOf(
+                    fromClient.ensureDetachable(), fromBackend.ensureDetachable()))
+                    .thenCompose(ignored -> CompletableFuture.allOf(fromClient.detach(), fromBackend.detach()));
         }
 
         /** Removes temporary protocol observers; the ordinary relay path then forwards without inspecting buffers. */
@@ -121,14 +127,17 @@ public final class RawRelay {
 
     private static final class Side extends ChannelInboundHandlerAdapter {
         private final Channel peer;
+        private final ArrayDeque<ByteBuf> pausedMessages = new ArrayDeque<>();
         private Consumer<ByteBuf> observer;
         private ChannelHandlerContext context;
         private Side opposite;
         private int writesInFlight;
+        private int pausedBytes;
         private boolean closed;
         private boolean paused;
         private boolean detached;
         private CompletableFuture<Void> pauseComplete;
+        private CompletableFuture<Void> resumeComplete;
 
         private Side(Channel peer, Consumer<ByteBuf> observer) {
             this.peer = peer;
@@ -182,14 +191,16 @@ public final class RawRelay {
         private CompletableFuture<Void> resume() {
             CompletableFuture<Void> result = new CompletableFuture<>();
             context.executor().execute(() -> {
-                if (closed || detached || writesInFlight != 0 || !context.channel().isActive()) {
+                if (resumeComplete != null) {
+                    resumeComplete.whenComplete((ignored, failure) -> completeFrom(result, failure));
+                    return;
+                }
+                if (closed || detached || writesInFlight != 0 || !context.channel().isActive() || !paused) {
                     result.completeExceptionally(new IllegalStateException("relay is not ready to resume"));
                     return;
                 }
-                paused = false;
-                pauseComplete = null;
-                requestRead();
-                result.complete(null);
+                resumeComplete = result;
+                drainPausedMessages();
             });
             return result;
         }
@@ -199,6 +210,10 @@ public final class RawRelay {
             context.executor().execute(() -> {
                 if (!paused || writesInFlight != 0 || detached) {
                     result.completeExceptionally(new IllegalStateException("relay is not paused"));
+                    return;
+                }
+                if (!pausedMessages.isEmpty()) {
+                    result.completeExceptionally(new IllegalStateException("relay has queued messages to resume"));
                     return;
                 }
                 detached = true;
@@ -212,13 +227,45 @@ public final class RawRelay {
             return result;
         }
 
+        private CompletableFuture<Void> ensureDetachable() {
+            CompletableFuture<Void> result = new CompletableFuture<>();
+            context.executor().execute(() -> {
+                if (!paused || writesInFlight != 0 || detached) {
+                    result.completeExceptionally(new IllegalStateException("relay is not paused"));
+                } else if (!pausedMessages.isEmpty()) {
+                    result.completeExceptionally(new IllegalStateException("relay has queued messages to resume"));
+                } else {
+                    result.complete(null);
+                }
+            });
+            return result;
+        }
+
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object message) {
-            if (paused || detached) {
+            if (detached || closed) {
                 ReferenceCountUtil.release(message);
                 return;
             }
-            if (!(message instanceof ByteBuf) || closed || !peer.isActive()) {
+            if (!(message instanceof ByteBuf)) {
+                ReferenceCountUtil.release(message);
+                closePair(ctx);
+                return;
+            }
+            if (paused) {
+                ByteBuf bytes = (ByteBuf) message;
+                int readable = bytes.readableBytes();
+                if (pausedMessages.size() >= MAX_PAUSED_MESSAGES
+                        || readable > MAX_PAUSED_BYTES - pausedBytes) {
+                    ReferenceCountUtil.release(message);
+                    closePair(ctx);
+                    return;
+                }
+                pausedMessages.addLast(bytes);
+                pausedBytes += readable;
+                return;
+            }
+            if (!peer.isActive()) {
                 ReferenceCountUtil.release(message);
                 closePair(ctx);
                 return;
@@ -253,6 +300,7 @@ public final class RawRelay {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
+            releasePausedMessages();
             if (!detached) closePair(ctx);
             ctx.fireChannelInactive();
         }
@@ -265,12 +313,65 @@ public final class RawRelay {
         private void closePair(ChannelHandlerContext ctx) {
             if (closed) return;
             closed = true;
+            releasePausedMessages();
             if (pauseComplete != null) {
                 pauseComplete.completeExceptionally(new IllegalStateException("relay closed while pausing"));
                 pauseComplete = null;
             }
+            if (resumeComplete != null) {
+                resumeComplete.completeExceptionally(new IllegalStateException("relay closed while resuming"));
+                resumeComplete = null;
+            }
             ctx.channel().close();
             peer.close();
+        }
+
+        private void drainPausedMessages() {
+            if (closed || detached || resumeComplete == null) return;
+            if (!peer.isActive()) {
+                failResume(new IllegalStateException("relay peer closed while resuming"));
+                return;
+            }
+            ByteBuf next = pausedMessages.pollFirst();
+            if (next == null) {
+                pausedBytes = 0;
+                paused = false;
+                pauseComplete = null;
+                CompletableFuture<Void> completed = resumeComplete;
+                resumeComplete = null;
+                requestRead();
+                completed.complete(null);
+                return;
+            }
+            pausedBytes -= next.readableBytes();
+            writesInFlight++;
+            peer.writeAndFlush(next).addListener((ChannelFutureListener) future ->
+                    context.executor().execute(() -> {
+                        writesInFlight--;
+                        if (!future.isSuccess()) {
+                            failResume(future.cause());
+                            return;
+                        }
+                        drainPausedMessages();
+                    }));
+        }
+
+        private void failResume(Throwable failure) {
+            CompletableFuture<Void> result = resumeComplete;
+            resumeComplete = null;
+            if (result != null) result.completeExceptionally(failure);
+            closePair(context);
+        }
+
+        private void releasePausedMessages() {
+            ByteBuf bytes;
+            while ((bytes = pausedMessages.pollFirst()) != null) ReferenceCountUtil.release(bytes);
+            pausedBytes = 0;
+        }
+
+        private static void completeFrom(CompletableFuture<Void> target, Throwable failure) {
+            if (failure == null) target.complete(null);
+            else target.completeExceptionally(failure);
         }
     }
 }
