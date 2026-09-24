@@ -1,5 +1,0 @@
-name: StrataProxyBackendAgent
-main: dev.strataproxy.bukkit.StrataProxyBackendAgentPlugin
-version: 0.2.0-SNAPSHOT
-author: StrataProxy
-description: Registers this Bukkit backend with a StrataProxy backend-agent endpoint.

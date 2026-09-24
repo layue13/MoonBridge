@@ -1,0 +1,24 @@
+package dev.strataproxy.core.protocol;
+
+/** Wire limits and packet rules for one explicitly supported Minecraft protocol. */
+public record ProtocolProfile(
+        int protocolVersion,
+        int maxFrameBytes,
+        int maxHandshakeHostCharacters,
+        int maxLoginNameCharacters) {
+
+    public static final int PROTOCOL_1_7_10 = 5;
+    private static final ProtocolProfile MINECRAFT_1_7_10 = new ProtocolProfile(5, 2 * 1024 * 1024, 255, 16);
+
+    public ProtocolProfile {
+        if (protocolVersion < 0) throw new IllegalArgumentException("protocolVersion must be non-negative");
+        if (maxFrameBytes < 1) throw new IllegalArgumentException("maxFrameBytes must be positive");
+        if (maxHandshakeHostCharacters < 1 || maxLoginNameCharacters < 1) {
+            throw new IllegalArgumentException("string limits must be positive");
+        }
+    }
+
+    public static ProtocolProfile minecraft1710() {
+        return MINECRAFT_1_7_10;
+    }
+}

@@ -4,6 +4,7 @@ netty = "4.2.2.Final"
 jackson = "2.20.0"
 picocli = "4.7.7"
 slf4j = "2.0.18"
+logback = "1.6.3"
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -17,4 +18,4 @@ jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", ver
 jackson-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 cli-picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
-slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }

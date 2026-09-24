@@ -1,0 +1,14 @@
+# Example: enable the DNS plugin instead of configured static backends.
+# Replace the host with a DNS name that resolves to your backend nodes.
+listen: "0.0.0.0:25577"
+authentication: OFFLINE
+backends: []
+plugins:
+  directory: "plugins"
+  enabled:
+    dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
+      host: "backends.example.net"
+      port: "25565"
+      namePrefix: "discovered"
+      capacity: "100"
+      refreshSeconds: "30"

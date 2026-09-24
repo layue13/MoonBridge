@@ -1,96 +1,11 @@
-network:
-  bind: "0.0.0.0:25577"
-  workerThreads: 0
-  nativeTransport: true
-  maxFrameBytes: "8mb"
-  connectTimeoutMillis: 5000
-  writeBufferLow: "4mb"
-  writeBufferHigh: "16mb"
-  maxConnections: 10000
-  maxConnectionsPerAddress: 200
-  # 0 disables per-second admission rate limits. Tune these on public listeners to absorb login storms.
-  maxNewConnectionsPerSecond: 0
-  maxNewConnectionsPerAddressPerSecond: 0
-  initialHandshakeTimeoutMillis: 5000
-  # Enable only behind a trusted HAProxy/Load Balancer that sends PROXY protocol v1.
-  proxyProtocol: false
-
-registry:
-  staticServers: true
-  persistenceEnabled: true
-  persistencePath: "data/registry.json"
-  healthCheckEnabled: true
-  healthCheckInterval: "5s"
-  healthCheckTimeout: "2s"
-  # tcp keeps compatibility; minecraft-status verifies the backend speaks the Minecraft status protocol.
-  healthCheckMode: "tcp"
-
-# Dedicated backend-agent endpoint for the official Bukkit adapter. This is not an Admin API.
-# Keep it disabled unless a backend agent is installed; all trusted agents share this random secret.
-backendAgent:
-  enabled: false
-  bind: "127.0.0.1:25578"
-  sharedSecret: ""
-  heartbeatTimeout: "30s"
-  maxConnections: 32
-  maxQueuedConnections: 64
-  maxNonces: 4096
-
-compression:
-  mode: adaptive
-  minThreshold: 256
-  maxThreshold: 8192
-  cpuGuard: 0.75
-  rewriteEnabled: false
-  rewriteMaxEventLoopDelayMillis: 25
-
-observability:
-  flushIntervalSeconds: 5
-
-status:
-  enabled: true
-  motd: "StrataProxy"
-  protocolName: "StrataProxy"
-  protocolVersion: -1
-  maxPlayers: 1000
-  # Optional server-list icon. Use either a data:image/png;base64 URI or a PNG path relative to this config file.
-  favicon: ""
-  faviconPath: ""
-  samplePlayers: []
-
-auth:
-  onlineMode: false
-  rsaKeyBits: 1024
-  verifyTokenBytes: 4
-  sessionVerification: false
-  sessionVerificationTimeout: "5s"
-
-forwarding:
-  # Supported modes: none, velocity-modern, bungee-legacy, bungee-guard.
-  # velocity-modern and bungee-guard require a shared secret.
-  mode: "none"
-  secret: ""
-
-native:
-  enabled: true
-  autoDetect: true
-  preferNativeTransport: true
-  requireNativeTransport: false
-  preferOpenSslTls: false
-  preferNativeCompression: false
-  disabledFeatures: []
-  forcedFeatures: []
-
-servers:
-  - name: "lobby-1"
+listen: "0.0.0.0:25577"
+authentication: OFFLINE
+plugins:
+  directory: "plugins"
+  enabled: {}
+backends:
+  - name: "lobby"
     address: "127.0.0.1:25565"
-    tags: ["lobby"]
-    capabilities: ["modern-forwarding"]
-    protocolRange: "any"
-    weight: 100
-    softCapacity: 500
-    hardCapacity: 600
-    drainMode: false
-    metadata:
-      group: "lobby"
-      host: "localhost"
+    tags:
+      role: "lobby"
+    capacity: 500
