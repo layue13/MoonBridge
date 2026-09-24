@@ -35,6 +35,16 @@ public interface PlayerService {
     }
 
     /**
+     * Invokes the transfer routing stage for one exact connection, then transfers
+     * to the selected backend. The route key may identify a gameplay group.
+     */
+    default CompletionStage<PlayerTransfer> route(PlayerIdentity player, String routeKey) {
+        return java.util.concurrent.CompletableFuture.completedFuture(new PlayerTransfer(
+                false, "route_unsupported", player, "", "", "",
+                PlayerTransfer.TransferStage.REJECTED, false, ""));
+    }
+
+    /**
  * Provides find.
  *
      * @param playerName player name

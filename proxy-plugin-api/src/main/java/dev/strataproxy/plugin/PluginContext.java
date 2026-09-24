@@ -2,6 +2,7 @@ package dev.strataproxy.plugin;
 
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
+import dev.strataproxy.plugin.route.RouteService;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.Scheduler;
@@ -42,6 +43,9 @@ public interface PluginContext {
 
     /** Returns the independent backend-agent channel broker. */
     ProxyChannelService channels();
+
+    /** Registers policies for initial connection and in-session transfer routing. */
+    RouteService routes();
 
     /**
  * Provides servers.

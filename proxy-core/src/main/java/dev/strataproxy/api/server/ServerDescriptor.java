@@ -16,8 +16,8 @@ import java.util.Set;
  * @param tags free-form routing labels such as region, mode, or shard
  * @param capabilities feature flags that clients or routes may require
  * @param protocolRange supported Minecraft protocol versions
- * @param weight relative routing weight before health and load penalties are applied
- * @param softCapacity player count at which routing starts reducing preference
+ * @param weight reserved relative weight for a future route policy
+ * @param softCapacity reserved player threshold for a future route policy
  * @param hardCapacity player count at which new routing is rejected; zero means unlimited
  * @param drainMode initial drain flag for this server
  * @param metadata extra routing and operational metadata, including optional {@code host} or {@code route} aliases

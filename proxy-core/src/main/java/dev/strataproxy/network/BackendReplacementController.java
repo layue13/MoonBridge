@@ -89,6 +89,10 @@ final class BackendReplacementController {
         this.session.replacementController(this);
     }
 
+    int protocolVersion() {
+        return profile.protocolVersion();
+    }
+
     CompletionStage<PlayerTransferResult> replaceBackend(String targetServerName) {
         var result = new CompletableFuture<PlayerTransferResult>();
         var frontend = session.frontend();

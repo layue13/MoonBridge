@@ -57,6 +57,7 @@ servers:
 
 常用配置边界：
 
+- 默认入服选择按后端名称排序，在健康、未排空、协议匹配且未达到硬容量的后端中取第一个。若请求域名匹配后端名称、标签或 `metadata.host` / `metadata.route`，只在匹配的后端中选择；已配置的玩法入口没有可用后端时不会回退到其他玩法。`weight` 和软容量不参与默认选择，可由插件路由策略使用。
 - `healthCheckMode: tcp` 只检查 TCP 可连接；`minecraft-status` 还要求后端能正常回复服务器列表状态。
 - `forwarding.mode` 可选 `none`、`velocity-modern`、`bungee-legacy`、`bungee-guard`。使用 `velocity-modern` 或 `bungee-guard` 时必须同时设置 `forwarding.secret`，并在后端配置相同密钥。
 - `registry.persistenceEnabled: true` 会将标记为持久化的动态后端写入 `registry.persistencePath`；临时后端不会跨重启保留。
@@ -152,7 +153,7 @@ version=1.0.0
 main=com.example.ExamplePlugin
 ```
 
-入口实现 `ProxyPlugin`。`PluginContext` 提供命令、事件、玩家查询/转服、后端查询/注册、调度器和插件日志。动态后端默认是临时的；选择 `ServerPersistence.PERSISTENT` 才会写入持久化注册表。插件只能修改自己创建的后端，不能覆盖 YAML 静态后端或其他插件的后端。
+入口实现 `ProxyPlugin`。`PluginContext` 提供命令、事件、分阶段路由、玩家查询/转服、后端查询/注册、调度器和插件日志。动态后端默认是临时的；选择 `ServerPersistence.PERSISTENT` 才会写入持久化注册表。插件只能修改自己创建的后端，不能覆盖 YAML 静态后端或其他插件的后端。
 
 ```java
 public final class ExamplePlugin implements ProxyPlugin {
@@ -165,6 +166,22 @@ public final class ExamplePlugin implements ProxyPlugin {
 ```
 
 不要在事件回调或命令处理中阻塞 Netty 线程；耗时操作请交给 `context.scheduler()`。代理内置玩家命令为 `/server <server>`、`/hub`、`/lobby`、`/servers` 和 `/glist`。
+
+### 分阶段路由
+
+插件通过 `context.routes().register(stage, priority, policy)` 注册策略。`INITIAL` 在代理获得玩家身份后、连接第一个后端前执行：离线模式读取 LoginStart 后触发，在线模式完成会话验证后触发。`TRANSFER` 在已连接玩家调用 `context.players().route(playerIdentity, routeKey)` 时触发；它不会因为负载变化自动迁移玩家。直接指定目标的 `transfer(...)` 仍可用，不经过路由策略。
+
+策略返回 `CompletionStage<RouteDecision>`，可以异步查询数据库或远端服务。`pass()` 继续执行下一个策略；`select(serverName)` 选定后端；`reject(reason)` 拒绝本次路由。优先级高的策略先执行，同优先级按注册顺序执行。全部 `pass()` 时，`INITIAL` 使用上面的最小默认入服选择，`TRANSFER` 按 `routeKey` 匹配后端名称、标签或 `metadata.route`。代理会在建立连接前再次检查目标后端的健康、排空、硬容量与协议兼容性。
+
+```java
+context.routes().register(RouteStage.INITIAL, 100, route ->
+        playerSettings.findSpawn(route.playerIdentity(), route.playerName())
+                .thenApply(spawn -> spawn == null
+                        ? RouteDecision.pass()
+                        : RouteDecision.select(spawn)));
+```
+
+路由回调在 Netty 事件循环之外运行；每个策略有 3 秒超时，异常或超时会拒绝本次路由。`RouteContext` 只描述此次路由请求。插件可随时通过 `PluginContext.servers().find(name)`、`firstWithTag(tag)` 或 `servers()` 获取 `ServerView`，自行按玩法、玩家配置或负载选服。`ServerView` 包含健康状态、排空状态、容量、协议范围、标签、元数据和负载；每次查询返回当前快照，不会随状态更新而改变。负载中的玩家数取自代理当前连接，流量是代理侧采样值；它不代表后端 CPU、TPS 或业务队列。插件卸载或加载失败时，代理会注销其路由策略。
 
 ## 发布
 

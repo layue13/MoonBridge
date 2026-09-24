@@ -13,8 +13,8 @@ import java.util.Set;
  * @param tags routing tags
  * @param capabilities backend capability names matching StrataProxy server capabilities
  * @param protocolRange accepted protocol range
- * @param weight relative routing weight
- * @param softCapacity player count where routing preference starts decreasing
+ * @param weight reserved relative weight for a future route policy
+ * @param softCapacity reserved soft capacity for a future route policy
  * @param hardCapacity player count where new routing is rejected; zero means unlimited
  * @param drainMode initial drain mode
  * @param metadata extra routing and operational metadata

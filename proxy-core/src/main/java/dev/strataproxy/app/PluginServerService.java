@@ -9,7 +9,10 @@ import dev.strataproxy.api.server.ServerRegistry;
 import dev.strataproxy.registry.RegistryPersistenceService;
 import dev.strataproxy.plugin.service.Scheduler;
 import dev.strataproxy.plugin.service.ServerMutationResult;
+import dev.strataproxy.plugin.service.ServerHealthView;
+import dev.strataproxy.plugin.service.ServerLoadView;
 import dev.strataproxy.plugin.service.ServerPersistence;
+import dev.strataproxy.plugin.service.ServerProtocolRange;
 import dev.strataproxy.plugin.service.ServerRegistration;
 import dev.strataproxy.plugin.service.ServerRemoval;
 import dev.strataproxy.plugin.service.ServerView;
@@ -190,8 +193,19 @@ final class PluginServerService implements dev.strataproxy.plugin.service.Server
 
     private static ServerView view(RegisteredServer server) {
         var descriptor = server.descriptor();
+        var health = server.health();
+        var load = server.load();
         return new ServerView(descriptor.name(), descriptor.address(), descriptor.tags(), descriptor.drainMode(),
-                descriptor.softCapacity(), descriptor.hardCapacity());
+                descriptor.softCapacity(), descriptor.hardCapacity(),
+                descriptor.capabilities().stream().map(Enum::name).collect(Collectors.toUnmodifiableSet()),
+                new ServerProtocolRange(descriptor.protocolRange().minProtocol(),
+                        descriptor.protocolRange().maxProtocol(), descriptor.protocolRange().displayName()),
+                descriptor.weight(), descriptor.metadata(),
+                new ServerHealthView(ServerHealthView.Status.valueOf(health.status().name()),
+                        health.backendPingMillis(), health.recentFailureRate(), health.reason(), health.updatedAt()),
+                new ServerLoadView(load.players(), load.softCapacity(), load.hardCapacity(),
+                        load.inboundBytesPerSecond(), load.outboundBytesPerSecond(),
+                        load.packetsPerSecond(), load.eventLoopDelayMillis()));
     }
 
     private static String rootMessage(Throwable throwable) {

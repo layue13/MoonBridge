@@ -47,14 +47,23 @@ final class ProxyObservedLoadReporter implements AutoCloseable {
                     traffic.backendToFrontendBytes());
             var prior = previous.getOrDefault(name, current);
             var load = server.load();
-            registry.updateLoad(name, new ServerLoad(
-                    load.players(),
-                    load.softCapacity(),
-                    load.hardCapacity(),
-                    rate(current.frontendToBackendBytes() - prior.frontendToBackendBytes(), seconds),
-                    rate(current.backendToFrontendBytes() - prior.backendToFrontendBytes(), seconds),
-                    0,
-                    snapshot.eventLoopDelayNanos() / 1_000_000.0d));
+            var registered = registry.get(name).orElse(null);
+            if (registered != server) {
+                continue;
+            }
+            var players = Math.toIntExact(Math.min(Integer.MAX_VALUE, metrics.serverConnectionCount(name)));
+            try {
+                registry.updateLoad(name, new ServerLoad(
+                        players,
+                        load.softCapacity(),
+                        load.hardCapacity(),
+                        rate(current.frontendToBackendBytes() - prior.frontendToBackendBytes(), seconds),
+                        rate(current.backendToFrontendBytes() - prior.backendToFrontendBytes(), seconds),
+                        0,
+                        snapshot.eventLoopDelayNanos() / 1_000_000.0d));
+            } catch (IllegalArgumentException ignored) {
+                // The server may have been unregistered after the identity check.
+            }
             next.put(name, current);
         }
         previous = Map.copyOf(next);

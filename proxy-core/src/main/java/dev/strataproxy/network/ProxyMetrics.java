@@ -55,8 +55,14 @@ public final class ProxyMetrics {
         state.activeConnections.incrementAndGet(); state.routedConnections.increment();
     }
     public void serverConnectionClosed(String server) {
-        serverConnections.computeIfAbsent(normalize(server), ignored -> new MutableServerConnections())
-                .activeConnections.updateAndGet(value -> Math.max(0, value - 1));
+        var state = serverConnections.get(normalize(server));
+        if (state != null) {
+            state.activeConnections.updateAndGet(value -> Math.max(0, value - 1));
+        }
+    }
+    public long serverConnectionCount(String server) {
+        var state = serverConnections.get(normalize(server));
+        return state == null ? 0 : Math.max(0, state.activeConnections.get());
     }
     public void playerSessionStarted(String player, String server, String remoteAddress) {
         playerSessionStarted(player, null, "", server, remoteAddress);

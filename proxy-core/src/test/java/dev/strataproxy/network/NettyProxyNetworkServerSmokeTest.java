@@ -14,6 +14,11 @@ import dev.strataproxy.plugin.command.CommandResult;
 import dev.strataproxy.plugin.command.CommandSpec;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
+import dev.strataproxy.plugin.route.RouteDecision;
+import dev.strataproxy.plugin.route.RouteStage;
+import dev.strataproxy.plugin.runtime.PluginPlayerService;
+import dev.strataproxy.plugin.service.PlayerIdentity;
+import dev.strataproxy.route.StageRouteEngine;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +36,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -110,7 +116,7 @@ final class NettyProxyNetworkServerSmokeTest {
     @Test
     void forwardsMinecraftHandshakeAndBackendBytesOverRealTcp() throws Exception {
         var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
-        var pendingLoginFrame = packetFrame(0x01, 42);
+        var pendingLoginFrame = loginStartFrame("Steve");
         var clientBytes = concat(handshake, pendingLoginFrame);
         var backendResponse = new byte[] {0x11, 0x22, 0x33, 0x44};
         var backendExecutor = Executors.newSingleThreadExecutor();
@@ -165,6 +171,58 @@ final class NettyProxyNetworkServerSmokeTest {
                 assertEquals(0, connections.activeConnections());
                 assertEquals(clientBytes.length, traffic.frontendToBackendBytes());
                 assertEquals(backendResponse.length, traffic.backendToFrontendBytes());
+            }
+        } finally {
+            backendExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    void waitsForAsyncInitialRouteAfterLoginStartBeforeConnectingBackend() throws Exception {
+        var handshake = handshakeFrame(5, "play.example.net", 25565, 2);
+        var login = loginStartFrame("Steve");
+        var decision = new java.util.concurrent.CompletableFuture<java.util.Optional<RegisteredServer>>();
+        var observedName = new AtomicReference<String>();
+        var backendExecutor = Executors.newSingleThreadExecutor();
+        try (var backendSocket = new ServerSocket(0)) {
+            backendSocket.setSoTimeout(5_000);
+            var selected = server("spawn", backendSocket.getLocalPort());
+            var backendRead = backendExecutor.submit(() -> {
+                try (var accepted = backendSocket.accept()) {
+                    accepted.setSoTimeout(5_000);
+                    return concat(readMinecraftFrame(accepted.getInputStream()),
+                            readMinecraftFrame(accepted.getInputStream()));
+                }
+            });
+            var resolver = new BackendResolver() {
+                @Override
+                public java.util.Optional<RegisteredServer> resolve(
+                        MinecraftHandshake request, java.net.SocketAddress remoteAddress) {
+                    return java.util.Optional.of(selected);
+                }
+
+                @Override
+                public java.util.concurrent.CompletionStage<java.util.Optional<RegisteredServer>> resolveInitial(
+                        MinecraftHandshake request, java.net.SocketAddress remoteAddress,
+                        dev.strataproxy.plugin.service.PlayerIdentity identity, String playerName) {
+                    observedName.set(playerName);
+                    return decision;
+                }
+            };
+            try (var proxy = proxy(1, resolver, new ProxyMetrics(),
+                    new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000))) {
+                proxy.bind(new InetSocketAddress("127.0.0.1", 0)).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                try (var client = new Socket()) {
+                    client.connect(proxy.bindAddress(), 5_000);
+                    client.getOutputStream().write(concat(handshake, login));
+                    client.getOutputStream().flush();
+                    for (var attempt = 0; attempt < 100 && observedName.get() == null; attempt++) {
+                        Thread.sleep(10);
+                    }
+                    assertEquals("Steve", observedName.get());
+                    decision.complete(java.util.Optional.of(selected));
+                    assertArrayEquals(concat(handshake, login), backendRead.get(5, TimeUnit.SECONDS));
+                }
             }
         } finally {
             backendExecutor.shutdownNow();
@@ -320,7 +378,7 @@ final class NettyProxyNetworkServerSmokeTest {
     }
 
     @Test
-    void externalPlayerTransferReplacesBackendAfterNewConnectionIsReady() throws Exception {
+    void routedPlayerTransferReplacesBackendAfterNewConnectionIsReady() throws Exception {
         var handshake = handshakeFrame(763, "play.example.net", 25565, 2);
         var login = loginStartFrame("Steve");
         var clientBytes = concat(handshake, login);
@@ -362,11 +420,18 @@ final class NettyProxyNetworkServerSmokeTest {
             var metrics = new ProxyMetrics();
             var tuning = new NetworkTuning(4096, 1_000, 128, 1024, 100, 100, 5_000);
             var resolver = new ReplacementBackendResolver(first, second);
-            try (var proxy = proxy(
+            try (var routes = new StageRouteEngine(Duration.ofSeconds(1));
+                 var proxy = proxy(
                     1,
-                    resolver,
-                    metrics,
-                    tuning)) {
+                     resolver,
+                     metrics,
+                     tuning)) {
+                routes.forPlugin("island-routing").register(RouteStage.TRANSFER, 0, context -> {
+                    assertEquals("island", context.routeKey());
+                    assertEquals("survival-1", context.currentServer());
+                    assertEquals(763, context.protocolVersion());
+                    return CompletableFuture.completedFuture(RouteDecision.select("survival-2"));
+                });
                 proxy.bind(new InetSocketAddress("127.0.0.1", 0))
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
@@ -378,7 +443,10 @@ final class NettyProxyNetworkServerSmokeTest {
                     client.getOutputStream().flush();
 
                     awaitPlayerSession(metrics, "Steve", "survival-1");
-                    var transfer = proxy.transferPlayer("Steve", "survival-2")
+                    var session = metrics.findPlayerSession("Steve").orElseThrow();
+                    var identity = new PlayerIdentity(session.playerId(), session.connectionId());
+                    var players = new PluginPlayerService(new AtomicReference<>(proxy), metrics, routes, List::of);
+                    var transfer = players.route(identity, "island")
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertTrue(transfer.success(), "transfer outcome was " + transfer.outcome());
@@ -700,6 +768,7 @@ final class NettyProxyNetworkServerSmokeTest {
                     client.setSoTimeout(5_000);
                     client.getOutputStream().write("PROXY TCP4 203.0.113.7 198.51.100.10 41000 25577\r\n".getBytes(StandardCharsets.US_ASCII));
                     client.getOutputStream().write(handshake);
+                    client.getOutputStream().write(loginStartFrame("Steve"));
                     client.getOutputStream().flush();
                     assertArrayEquals(handshake, backendRead.get(5, TimeUnit.SECONDS));
                 }
@@ -798,6 +867,7 @@ final class NettyProxyNetworkServerSmokeTest {
                 client.connect(proxy.bindAddress(), 5_000);
                 client.setSoTimeout(5_000);
                 client.getOutputStream().write(handshakeFrame(763, "play.example.net", 25565, 2));
+                client.getOutputStream().write(loginStartFrame("Steve"));
                 client.getOutputStream().flush();
 
                 assertEquals("Backend server is unavailable.", loginDisconnectReason(readMinecraftFrame(client.getInputStream())));

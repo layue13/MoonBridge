@@ -19,6 +19,7 @@ record MinecraftLoginStart(String username, Optional<ChatSessionKey> chatSession
             if (!probe.complete()) {
                 throw new IllegalArgumentException("incomplete Login Start frame");
             }
+            duplicate.writerIndex(duplicate.readerIndex() + probe.totalBytes());
             duplicate.skipBytes(probe.varIntBytes());
             var packetId = MinecraftProtocolCodec.readVarInt(duplicate);
             if (packetId != 0) {

@@ -11,10 +11,16 @@ import dev.strataproxy.plugin.command.CommandSpec;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.ServerService;
+import dev.strataproxy.plugin.route.RouteContext;
+import dev.strataproxy.plugin.route.RouteDecision;
+import dev.strataproxy.plugin.route.RouteStage;
+import dev.strataproxy.route.StageRouteEngine;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
+import java.time.Duration;
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
@@ -23,6 +29,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PluginManagerTest {
@@ -113,6 +120,28 @@ final class PluginManagerTest {
         assertEquals(1, DescriptorPlugin.disabled.get());
     }
 
+    @Test
+    void failedPluginLoadUnregistersItsRoutePolicies() throws Exception {
+        var pluginJar = Files.createTempFile("strataproxy-failed-route", ".jar");
+        try (var output = new JarOutputStream(Files.newOutputStream(pluginJar))) {
+            output.putNextEntry(new JarEntry("strataproxy-plugin.properties"));
+            output.write(("id=failed-route\nmain=" + FailingRoutePlugin.class.getName() + "\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+        var scheduler = new DefaultScheduler();
+        try (var engine = new StageRouteEngine(Duration.ofSeconds(1));
+             var manager = new PluginManager(new DefaultCommandRegistry(), new SimpleEventBus(),
+                     emptyPlayers(), ignored -> emptyChannels(), ignored -> emptyServers(),
+                     metadata -> engine.forPlugin(metadata.id()), scheduler, LoggerFactory.getLogger("test"))) {
+            assertThrows(IOException.class, () -> manager.loadJar(pluginJar));
+            var context = new RouteContext(RouteStage.INITIAL, "", "", 0, "", null, "", "");
+            assertEquals(RouteDecision.Kind.PASS, engine.evaluate(context).toCompletableFuture().join().kind());
+        } finally {
+            scheduler.close();
+        }
+    }
+
     private static PlayerService emptyPlayers() {
         return new PlayerService() {
             @Override
@@ -185,6 +214,19 @@ final class PluginManagerTest {
         @Override
         public void onDisable() {
             disabled.incrementAndGet();
+        }
+    }
+
+    public static final class FailingRoutePlugin implements ProxyPlugin {
+        @Override
+        public void onLoad(PluginContext context) {
+            context.routes().register(RouteStage.INITIAL, 0,
+                    ignored -> CompletableFuture.completedFuture(RouteDecision.reject("stale")));
+        }
+
+        @Override
+        public void onEnable() {
+            throw new IllegalStateException("intentional test failure");
         }
     }
 }

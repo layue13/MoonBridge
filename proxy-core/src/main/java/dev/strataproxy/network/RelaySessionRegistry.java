@@ -47,6 +47,13 @@ final class RelaySessionRegistry {
         return Optional.of(session);
     }
 
+    java.util.OptionalInt protocolVersion(PlayerIdentity identity) {
+        return find(identity).map(RelaySession::replacementController)
+                .map(BackendReplacementController::protocolVersion)
+                .map(java.util.OptionalInt::of)
+                .orElseGet(java.util.OptionalInt::empty);
+    }
+
     CompletionStage<PlayerTransferResult> transferPlayer(String playerName, String targetServerName) {
         if (playerName == null || playerName.isBlank()) {
             return CompletableFuture.completedFuture(PlayerTransferResult.failure(

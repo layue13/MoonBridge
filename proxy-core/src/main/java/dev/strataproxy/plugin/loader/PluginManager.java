@@ -4,6 +4,7 @@ import dev.strataproxy.plugin.PluginMetadata;
 import dev.strataproxy.plugin.ProxyPlugin;
 import dev.strataproxy.plugin.command.CommandRegistry;
 import dev.strataproxy.plugin.event.EventBus;
+import dev.strataproxy.plugin.route.RouteService;
 import dev.strataproxy.plugin.service.PlayerService;
 import dev.strataproxy.plugin.service.ProxyChannelService;
 import dev.strataproxy.plugin.service.Scheduler;
@@ -21,6 +22,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Properties;
 import java.util.ServiceLoader;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.jar.JarFile;
 import org.slf4j.Logger;
@@ -36,10 +39,12 @@ public final class PluginManager implements AutoCloseable {
     private final EventBus events;
     private final PlayerService players;
     private final Function<PluginMetadata, ProxyChannelService> channels;
+    private final Function<PluginMetadata, RouteService> routes;
     private final Function<PluginMetadata, ServerService> servers;
     private final Scheduler scheduler;
     private final Logger logger;
     private final List<LoadedPlugin> plugins = new ArrayList<>();
+    private final Map<LoadedPlugin, ScopedRoutes> pluginRoutes = new IdentityHashMap<>();
 
     /**
      * Creates a plugin manager backed by proxy services.
@@ -59,7 +64,8 @@ public final class PluginManager implements AutoCloseable {
             ServerService servers,
             Scheduler scheduler,
             Logger logger) {
-        this(commands, events, players, ignored -> channels, ignored -> servers, scheduler, logger);
+        this(commands, events, players, ignored -> channels, ignored -> servers,
+                ignored -> (stage, priority, policy) -> () -> { }, scheduler, logger);
     }
 
     /**
@@ -80,10 +86,24 @@ public final class PluginManager implements AutoCloseable {
             Function<PluginMetadata, ServerService> servers,
             Scheduler scheduler,
             Logger logger) {
+        this(commands, events, players, channels, servers,
+                ignored -> (stage, priority, policy) -> () -> { }, scheduler, logger);
+    }
+
+    public PluginManager(
+            CommandRegistry commands,
+            EventBus events,
+            PlayerService players,
+            Function<PluginMetadata, ProxyChannelService> channels,
+            Function<PluginMetadata, ServerService> servers,
+            Function<PluginMetadata, RouteService> routes,
+            Scheduler scheduler,
+            Logger logger) {
         this.commands = commands;
         this.events = events;
         this.players = players;
         this.channels = channels;
+        this.routes = routes;
         this.servers = servers == null ? ignored -> null : servers;
         this.scheduler = scheduler;
         this.logger = logger == null ? LoggerFactory.getLogger(PluginManager.class) : logger;
@@ -131,19 +151,23 @@ public final class PluginManager implements AutoCloseable {
         var source = jarPath.toAbsolutePath().normalize();
         var classLoader = new URLClassLoader(new URL[] { source.toUri().toURL() }, ProxyPlugin.class.getClassLoader());
         ProxyPlugin plugin = null;
+        ScopedRoutes scopedRoutes = null;
         try {
             var loaded = instantiate(source, classLoader);
             plugin = loaded.instance();
+            scopedRoutes = new ScopedRoutes(routes.apply(loaded.metadata()));
             loaded.instance().onLoad(new DefaultPluginContext(
                     loaded.metadata(),
                     commands,
                     events,
                     players,
                     channels.apply(loaded.metadata()),
+                    scopedRoutes,
                     servers.apply(loaded.metadata()),
                     scheduler));
             loaded.instance().onEnable();
             plugins.add(loaded);
+            pluginRoutes.put(loaded, scopedRoutes);
             logger.info("Loaded StrataProxy plugin {} from {}", loaded.metadata().id(), source);
             return loaded.metadata();
         } catch (IOException | ReflectiveOperationException | RuntimeException | LinkageError exception) {
@@ -153,6 +177,9 @@ public final class PluginManager implements AutoCloseable {
                 } catch (RuntimeException disableException) {
                     logger.warn("Plugin failed during rollback disable after load failure", disableException);
                 }
+            }
+            if (scopedRoutes != null) {
+                scopedRoutes.close();
             }
             closeClassLoader(classLoader);
             throw new IOException("failed to load plugin jar " + source + ": " + exception.getMessage(), exception);
@@ -179,10 +206,58 @@ public final class PluginManager implements AutoCloseable {
             } catch (RuntimeException exception) {
                 logger.warn("Plugin {} failed during disable", plugin.metadata().id(), exception);
             } finally {
+                var scopedRoutes = pluginRoutes.remove(plugin);
+                if (scopedRoutes != null) {
+                    scopedRoutes.close();
+                }
                 closeClassLoader(plugin.classLoader());
             }
         }
         plugins.clear();
+    }
+
+    private static final class ScopedRoutes implements RouteService, AutoCloseable {
+        private final RouteService delegate;
+        private final List<AutoCloseable> registrations = new ArrayList<>();
+        private boolean closed;
+
+        private ScopedRoutes(RouteService delegate) {
+            this.delegate = java.util.Objects.requireNonNull(delegate, "route service");
+        }
+
+        @Override
+        public synchronized AutoCloseable register(
+                dev.strataproxy.plugin.route.RouteStage stage,
+                int priority,
+                dev.strataproxy.plugin.route.RoutePolicy policy) {
+            if (closed) {
+                throw new IllegalStateException("Plugin routes are closed");
+            }
+            var registration = delegate.register(stage, priority, policy);
+            registrations.add(registration);
+            return () -> {
+                synchronized (ScopedRoutes.this) {
+                    registrations.remove(registration);
+                    registration.close();
+                }
+            };
+        }
+
+        @Override
+        public synchronized void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            for (var registration : registrations) {
+                try {
+                    registration.close();
+                } catch (Exception ignored) {
+                    // Continue releasing the other registrations.
+                }
+            }
+            registrations.clear();
+        }
     }
 
     private LoadedPlugin instantiate(Path source, URLClassLoader classLoader)

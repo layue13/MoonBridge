@@ -183,6 +183,11 @@ public final class NettyProxyNetworkServer implements ProxyNetworkServer {
         return relaySessions.transferPlayer(player, targetServerName);
     }
 
+    /** Returns the protocol negotiated by an exact live player connection. */
+    public java.util.OptionalInt playerProtocol(dev.strataproxy.plugin.service.PlayerIdentity player) {
+        return relaySessions.protocolVersion(player);
+    }
+
     @Override
     /** Provides close. */
     public void close() {

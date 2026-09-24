@@ -47,7 +47,11 @@ final class InitialHandshakeRouteHandlerTest {
                 metrics,
                 NetworkTuning.defaults()));
 
-        assertFalse(channel.writeInbound(handshakeFrame(763, "play.example.net", 25565, 2)));
+        var input = Unpooled.buffer();
+        input.writeBytes(handshakeFrame(763, "play.example.net", 25565, 2));
+        input.writeBytes(loginStartFrame("Steve"));
+        assertFalse(channel.writeInbound(input));
+        channel.runPendingTasks();
 
         var snapshot = metrics.snapshot();
         assertEquals(1, snapshot.failedRoutes());
@@ -82,6 +86,17 @@ final class InitialHandshakeRouteHandlerTest {
         payload.writeShort(port);
         writeVarInt(payload, nextState);
 
+        var frame = Unpooled.buffer();
+        writeVarInt(frame, payload.readableBytes());
+        frame.writeBytes(payload);
+        payload.release();
+        return frame;
+    }
+
+    private static io.netty.buffer.ByteBuf loginStartFrame(String playerName) {
+        var payload = Unpooled.buffer();
+        writeVarInt(payload, 0);
+        writeString(payload, playerName);
         var frame = Unpooled.buffer();
         writeVarInt(frame, payload.readableBytes());
         frame.writeBytes(payload);
