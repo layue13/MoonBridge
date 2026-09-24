@@ -40,6 +40,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
@@ -57,6 +58,7 @@ public final class PluginHost implements AutoCloseable {
     private State state = State.LOADING;
     private InitialPlacementHandler placementHandler;
     private LoadedPlugin placementPlugin;
+    private boolean placementConfigured;
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
         this(catalog, players, placementTimeout, Math.max(2, Runtime.getRuntime().availableProcessors()), 128);
@@ -157,6 +159,7 @@ public final class PluginHost implements AutoCloseable {
                     }
                     placementHandler = candidate.get();
                     placementPlugin = loaded;
+                    placementConfigured = true;
                 }
             }
             for (LoadedPlugin loaded : plugins) {
@@ -181,14 +184,20 @@ public final class PluginHost implements AutoCloseable {
             }
             handler = placementHandler;
             handlerPlugin = placementPlugin;
+            if (handler == null && placementConfigured) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Configured initial placement plugin is unavailable"));
+            }
         }
         if (handler == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
 
         CompletableFuture<Optional<PlacementDecision>> result = new CompletableFuture<>();
+        AtomicBoolean decided = new AtomicBoolean();
         var timeoutTask = timer.schedule(
                 () -> {
+                    if (!decided.compareAndSet(false, true)) return;
                     PlacementTimeoutException timeout = new PlacementTimeoutException(placementTimeout);
                     failPlacementPlugin(handlerPlugin, timeout);
                     result.completeExceptionally(timeout);
@@ -197,7 +206,7 @@ public final class PluginHost implements AutoCloseable {
         result.whenComplete((ignored, failure) -> timeoutTask.cancel(false));
         try {
             callbacks.execute(() -> {
-                if (result.isDone()) {
+                if (decided.get()) {
                     return;
                 }
                 try {
@@ -205,21 +214,28 @@ public final class PluginHost implements AutoCloseable {
                             handler.place(player, snapshotServers()), "placement handler stage");
                     stage.whenComplete((decision, failure) -> {
                         if (failure != null) {
+                            if (!decided.compareAndSet(false, true)) return;
                             failPlacementPlugin(handlerPlugin, failure);
                             result.completeExceptionally(failure);
                         } else if (decision == null) {
-                            result.completeExceptionally(new IllegalStateException("Placement handler returned null"));
+                            if (!decided.compareAndSet(false, true)) return;
+                            IllegalStateException invalid = new IllegalStateException("Placement handler returned null");
+                            failPlacementPlugin(handlerPlugin, invalid);
+                            result.completeExceptionally(invalid);
                         } else {
-                            result.complete(Optional.of(decision));
+                            if (decided.compareAndSet(false, true)) result.complete(Optional.of(decision));
                         }
                     });
                 } catch (Throwable failure) {
+                    if (!decided.compareAndSet(false, true)) return;
                     failPlacementPlugin(handlerPlugin, failure);
                     result.completeExceptionally(failure);
                 }
             });
         } catch (RejectedExecutionException overloaded) {
-            result.completeExceptionally(new PluginOverloadedException(overloaded));
+            if (decided.compareAndSet(false, true)) {
+                result.completeExceptionally(new PluginOverloadedException(overloaded));
+            }
         }
         return result;
     }

@@ -38,11 +38,14 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @io.netty.channel.ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
+    private static final int INITIAL_LOGIN_TIMEOUT_SECONDS = 15;
     private final ProxySessionListener owner;
     private final Channel frontend;
     private volatile Channel backend;
@@ -52,6 +55,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private VerifiedProfile verifiedProfile;
     private boolean verifyingIdentity;
     private PlayerIdentity identity;
+    private boolean identityClaimed;
     private PlayerView view;
     private BackendView selected;
     private CapacityReservation reservation;
@@ -61,10 +65,18 @@ final class Session extends ChannelInboundHandlerAdapter {
     private int transitionBufferBytes;
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private ScheduledFuture<?> initialLoginDeadline;
 
     Session(ProxySessionListener owner, Channel frontend) {
         this.owner = owner;
         this.frontend = frontend;
+    }
+
+    @Override public void handlerAdded(ChannelHandlerContext ctx) {
+        if (ctx.channel() == frontend) {
+            initialLoginDeadline = frontend.eventLoop().schedule(this::closePair,
+                    INITIAL_LOGIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        }
     }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
@@ -179,6 +191,11 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void beginPlacement(UUID uuid, String username) {
         identity = new PlayerIdentity(uuid, owner.allocateConnectionId());
+        if (!owner.claimIdentity(uuid, this)) {
+            closePair();
+            return;
+        }
+        identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         placementInProgress = true;
         frontend.config().setAutoRead(false);
@@ -241,12 +258,16 @@ final class Session extends ChannelInboundHandlerAdapter {
                     }
                 });
         ChannelFuture connect = bootstrap.connect(new InetSocketAddress(selected.address().getHost(), selected.address().getPort()));
+        backend = connect.channel();
         connect.addListener(future -> {
+            if (closed.get()) {
+                connect.channel().close();
+                return;
+            }
             if (!future.isSuccess()) {
                 closePair();
                 return;
             }
-            backend = connect.channel();
             ByteBuf handshakeBody = owner.onlineMode()
                     ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
                             (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
@@ -299,6 +320,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         published = true;
+        if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
         owner.onlineMap().put(identity, new PlayerView(identity, view.username(), selected.handle().id().value()));
         owner.sessions().put(identity, this);
         relayStarting = true;
@@ -413,10 +435,12 @@ final class Session extends ChannelInboundHandlerAdapter {
     void closePair() {
         if (!closed.compareAndSet(false, true)) return;
         Runnable cleanup = () -> {
+            if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();
             if (reservation != null) reservation.close();
+            if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
             owner.allSessions().remove(this);
             PendingFrame pending;
             while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();

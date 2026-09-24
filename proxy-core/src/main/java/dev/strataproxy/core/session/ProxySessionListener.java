@@ -30,6 +30,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.concurrent.ThreadFactory;
@@ -45,6 +46,7 @@ public final class ProxySessionListener implements Players {
     private final EventLoopGroup workers = new NioEventLoopGroup(0, namedFactory("strataproxy-session-io"));
     private final ConcurrentHashMap<PlayerIdentity, PlayerView> online = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<PlayerIdentity, Session> sessions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Session> claimedIdentities = new ConcurrentHashMap<>();
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextConnectionId = new AtomicLong();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
@@ -175,6 +177,8 @@ public final class ProxySessionListener implements Players {
     Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement() { return placement; }
     ConcurrentHashMap<PlayerIdentity, PlayerView> onlineMap() { return online; }
     ConcurrentHashMap<PlayerIdentity, Session> sessions() { return sessions; }
+    boolean claimIdentity(UUID uuid, Session session) { return claimedIdentities.putIfAbsent(uuid, session) == null; }
+    void releaseIdentity(UUID uuid, Session session) { claimedIdentities.remove(uuid, session); }
     Set<Session> allSessions() { return allSessions; }
     long allocateConnectionId() { return nextConnectionId(); }
 }

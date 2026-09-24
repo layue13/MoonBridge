@@ -40,6 +40,76 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
     @Test
+    void rejectsSecondConnectionForSamePlayerIdentity() throws Exception {
+        String username = "SamePlayer";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var releaseBackend = new java.util.concurrent.CountDownLatch(1);
+            var backendDone = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    ByteArrayOutputStream success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    releaseBackend.await(5, TimeUnit.SECONDS);
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-duplicate-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()),
+                    2, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket first = new Socket(InetAddress.getLoopbackAddress(), port);
+                     Socket second = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    first.setSoTimeout(5000);
+                    second.setSoTimeout(5000);
+                    sendLogin(first, username);
+                    assertEquals(2, readVarInt(readFrame(new DataInputStream(first.getInputStream()))));
+                    sendLogin(second, username);
+                    assertEquals(-1, second.getInputStream().read());
+                    assertEquals(1, listener.online().size());
+                    assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().connectedPlayers());
+                }
+            } finally {
+                releaseBackend.countDown();
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static void sendLogin(Socket client, String username) throws Exception {
+        DataOutputStream output = new DataOutputStream(client.getOutputStream());
+        ByteArrayOutputStream hello = new ByteArrayOutputStream();
+        writeVarInt(hello, 0);
+        writeVarInt(hello, 5);
+        writeString(hello, "localhost");
+        hello.write(0); hello.write(1);
+        writeVarInt(hello, 2);
+        writeFrame(output, hello.toByteArray());
+        ByteArrayOutputStream login = new ByteArrayOutputStream();
+        writeVarInt(login, 0);
+        writeString(login, username);
+        writeFrame(output, login.toByteArray());
+    }
+
+    @Test
     void onlineLoginForwardsVerifiedIdentityAndEncryptsPlayStream() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var catalog = new InMemoryBackendCatalog();

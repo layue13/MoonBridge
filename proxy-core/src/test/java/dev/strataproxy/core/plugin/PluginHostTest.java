@@ -80,6 +80,9 @@ class PluginHostTest {
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
         assertInstanceOf(PlacementTimeoutException.class, failure.getCause());
         assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("placement")).isEmpty());
+        CompletionException unavailable = assertThrows(CompletionException.class,
+                () -> host.placeInitial(PLAYER).toCompletableFuture().join());
+        assertEquals("Configured initial placement plugin is unavailable", unavailable.getCause().getMessage());
         host.close();
     }
 

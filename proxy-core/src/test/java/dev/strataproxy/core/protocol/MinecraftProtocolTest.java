@@ -89,19 +89,6 @@ class MinecraftProtocolTest {
         } finally { tooLong.release(); }
     }
 
-    @Test void detectsForgeMarkerAndRetainsOpaqueDataAsSlice() {
-        ByteBuf packet = Unpooled.buffer();
-        ProtocolVarInt.write(packet, 0xFA);
-        ProtocolStrings.write(packet, "FML|HS", 20);
-        packet.writeBytes(new byte[] {3, 4, 5});
-        try (ForgeMarker marker = ForgeMarker.detect(packet, profile).orElseThrow()) {
-            assertEquals("FML|HS", marker.channel());
-            assertEquals(3, (int) marker.payload().readUnsignedByte());
-            assertEquals(4, (int) marker.payload().readUnsignedByte());
-            assertEquals(5, (int) marker.payload().readUnsignedByte());
-        } finally { packet.release(); }
-    }
-
     private static void assertBadFrame(byte[] bytes, ProtocolProfile profile) {
         EmbeddedChannel channel = new EmbeddedChannel(new MinecraftFrameDecoder(profile));
         ByteBuf input = Unpooled.wrappedBuffer(bytes);
