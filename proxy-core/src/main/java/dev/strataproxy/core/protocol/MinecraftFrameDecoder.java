@@ -19,6 +19,11 @@ public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
         this.retainLengthPrefix = retainLengthPrefix;
     }
 
+    /** Call on the channel event loop after reads are paused before moving a session to another backend. */
+    public boolean hasPartialFrame() {
+        return actualReadableBytes() > 0;
+    }
+
     @Override
     protected void decode(ChannelHandlerContext context, ByteBuf input, List<Object> output) {
         int start = input.readerIndex();

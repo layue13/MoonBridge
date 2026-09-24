@@ -12,9 +12,43 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /** Exercises the cleartext-to-ciphertext boundary when both arrive in one TCP read. */
 class MinecraftFrameDecoderTransitionTest {
+    @Test
+    void retainedPrefixModeWaitsForCompleteFramesAndSplitsCoalescedFrames() {
+        var decoder = new MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true);
+        EmbeddedChannel channel = new EmbeddedChannel(decoder);
+        try {
+            channel.writeInbound(Unpooled.wrappedBuffer(new byte[]{3, 0x11}));
+            assertNull(channel.readInbound());
+            assertTrue(decoder.hasPartialFrame());
+            channel.writeInbound(Unpooled.wrappedBuffer(new byte[]{0x22, 0x33, 2, 0x44, 0x55}));
+            assertFalse(decoder.hasPartialFrame());
+            ByteBuf first = channel.readInbound();
+            ByteBuf second = channel.readInbound();
+            try {
+                assertEquals(4, first.readableBytes());
+                assertEquals(3, ProtocolVarInt.read(first));
+                assertEquals(0x11, first.readUnsignedByte());
+                assertEquals(0x22, first.readUnsignedByte());
+                assertEquals(0x33, first.readUnsignedByte());
+                assertEquals(2, ProtocolVarInt.read(second));
+                assertEquals(0x44, second.readUnsignedByte());
+                assertEquals(0x55, second.readUnsignedByte());
+                assertNull(channel.readInbound());
+            } finally {
+                first.release();
+                second.release();
+            }
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
     @Test
     void decoderRemovalPassesRemainingBytesThroughNewCipherBeforeFraming() {
         List<Integer> received = new ArrayList<>();

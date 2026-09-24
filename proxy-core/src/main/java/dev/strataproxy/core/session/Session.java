@@ -100,12 +100,17 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         try {
             if (closed.get()) return;
+            ByteBuf body = packet.duplicate();
+            int frameLength = ProtocolVarInt.read(body);
+            if (frameLength < 1 || frameLength != body.readableBytes()) {
+                throw new IllegalArgumentException("invalid session frame");
+            }
             if (relayStarting) {
-                bufferTransitionFrame(ctx.channel() == frontend, packet);
+                bufferTransitionFrame(ctx.channel() == frontend, body);
                 return;
             }
-            if (ctx.channel() == frontend) receiveFrontend(packet);
-            else receiveBackend(packet);
+            if (ctx.channel() == frontend) receiveFrontend(body);
+            else receiveBackend(body);
         } catch (RuntimeException failure) {
             closePair();
         } finally {
@@ -179,7 +184,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             pipeline.addAfter("minecraft-frame-decoder", "minecraft-cipher-decoder", new MinecraftCipherDecoder(secret));
             pipeline.addAfter("minecraft-cipher-decoder", "encrypted-frame-decoder",
-                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710()));
+                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true));
             pipeline.addBefore("minecraft-frame-encoder", "minecraft-cipher-encoder", new MinecraftCipherEncoder(secret));
             pipeline.remove("minecraft-frame-decoder");
         } finally {
@@ -292,7 +297,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private static void installCodecs(ChannelPipeline pipeline) {
-        pipeline.addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710()));
+        pipeline.addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
+                ProtocolProfile.minecraft1710(), true));
         pipeline.addLast("minecraft-frame-encoder", new SessionFrameEncoder());
     }
 
@@ -423,20 +429,12 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private CompletableFuture<Void> removeHandshakeCodecs(Channel channel) {
-        return removeHandshakeCodecs(channel, false);
-    }
-
-    private CompletableFuture<Void> removeHandshakeCodecs(Channel channel, boolean retainFrameDecoder) {
         CompletableFuture<Void> removed = new CompletableFuture<>();
         channel.eventLoop().execute(() -> {
             try {
                 ChannelPipeline pipeline = channel.pipeline();
                 if (pipeline.get("initial-session") != null) pipeline.remove("initial-session");
                 if (pipeline.get("transfer-candidate") != null) pipeline.remove("transfer-candidate");
-                if (!retainFrameDecoder && pipeline.get("minecraft-frame-decoder") != null) {
-                    pipeline.remove("minecraft-frame-decoder");
-                }
-                if (pipeline.get("encrypted-frame-decoder") != null) pipeline.remove("encrypted-frame-decoder");
                 if (pipeline.get("minecraft-frame-encoder") != null) pipeline.remove("minecraft-frame-encoder");
                 if (pipeline.get("session-lifecycle") == null) pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
                     @Override public void channelInactive(ChannelHandlerContext ctx) {
@@ -577,6 +575,10 @@ final class Session extends ChannelInboundHandlerAdapter {
                 resumeAfterFailedTransfer(attempt);
                 return;
             }
+            if (clientHasPartialFrame()) {
+                failTransfer(attempt, "client packet was incomplete at the transfer boundary");
+                return;
+            }
             if (!attempt.channel.isActive() || !attempt.claim.commit()) {
                 failTransfer(attempt, "replacement backend became unavailable");
                 return;
@@ -601,6 +603,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         }));
     }
 
+    private boolean clientHasPartialFrame() {
+        ChannelPipeline pipeline = frontend.pipeline();
+        var decoder = pipeline.get("minecraft-frame-decoder");
+        if (decoder == null) decoder = pipeline.get("encrypted-frame-decoder");
+        if (!(decoder instanceof dev.strataproxy.core.protocol.MinecraftFrameDecoder frameDecoder)) {
+            throw new IllegalStateException("client frame decoder missing during transfer");
+        }
+        return frameDecoder.hasPartialFrame();
+    }
+
     private void activateCandidate(TransferAttempt attempt) {
         try {
             attempt.candidate.handOff();
@@ -609,7 +621,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
-        removeHandshakeCodecs(attempt.channel, true).whenComplete((ignored, failure) ->
+        removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(() -> {
                     if (failure != null || closed.get() || !attempt.channel.isActive()) {
                         failTransfer(attempt, "replacement backend pipeline failed");
@@ -685,10 +697,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void installTransferFrameHandlers(TransferFrameHandler.State state, Channel target) {
         ChannelPipeline clientPipeline = frontend.pipeline();
         if (clientPipeline.get("transfer-frame-handler") != null) clientPipeline.remove("transfer-frame-handler");
-        if (clientPipeline.get("transfer-frame-decoder") == null) {
-            clientPipeline.addLast("transfer-frame-decoder",
-                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
-                            ProtocolProfile.minecraft1710(), true));
+        if (clientPipeline.get("minecraft-frame-decoder") == null
+                && clientPipeline.get("encrypted-frame-decoder") == null) {
+            throw new IllegalStateException("client frame decoder missing during transfer");
         }
         clientPipeline.addLast("transfer-frame-handler", new TransferFrameHandler(state, false));
         target.pipeline().addLast("transfer-frame-handler", new TransferFrameHandler(state, true));
