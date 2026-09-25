@@ -57,7 +57,7 @@ plugins:
       # maxInstances: "128"
 ```
 
-密钥不要提交到仓库；插件和 Agent 必须使用同一个值。跨主机部署时，应绑定到私有网络，并通过可信 TLS 终止器或私有链路保护传输；HMAC 验证身份和请求完整性，但不加密流量。`AgentRegistrationClient` 是仅依赖 JDK 的示例客户端：设置 `STRATAPROXY_AGENT_SECRET`，然后运行 `AgentExampleMain <http-endpoint> <agent-id> <backend-name> <tcp-address> <capacity>`，其中端点形如 `http://127.0.0.1:28080/registration`。示例每 10 秒续租一次，租约 30 秒；正常退出时尝试注销，异常退出由租约过期清理。Agent 协议只注册后端地址和声明容量，不上报业务负载，也不需要消息队列。
+密钥不要提交到仓库；插件和 Agent 必须使用同一个值。跨主机部署时，应绑定到私有网络，并通过可信 TLS 终止器或私有链路保护传输；HMAC 验证身份和请求完整性，但不加密流量。`AgentRegistrationClient` 是仅依赖 JDK 的示例客户端：设置 `STRATAPROXY_AGENT_SECRET`，然后运行 `AgentExampleMain <http-endpoint> <agent-id> <backend-name> <tcp-address> <capacity>`，其中端点形如 `http://127.0.0.1:28080/registration`。示例每 10 秒续租一次，租约 30 秒；网络故障和服务端暂时不可用时继续重试，租约过期导致旧 generation 被拒绝时换用新 generation 注册；认证或请求格式错误则退出。正常退出时尝试注销，异常退出由租约过期清理。Agent 协议只注册后端地址和声明容量，不上报业务负载，也不需要消息队列。
 
 ## 开发验证
 

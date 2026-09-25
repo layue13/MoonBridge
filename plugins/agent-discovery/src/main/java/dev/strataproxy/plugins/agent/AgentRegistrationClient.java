@@ -13,13 +13,13 @@ import java.util.UUID;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-/** Minimal Java client; use a fresh generation UUID for each agent process start. */
+/** Minimal Java client; fenced generations are replaced after a lease expires. */
 public final class AgentRegistrationClient {
     private static final SecureRandom RANDOM = new SecureRandom();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final URI endpoint;
     private final String agentId;
-    private final UUID generation;
+    private UUID generation;
     private final byte[] secret;
     private final String backendName;
     private final URI backendAddress;
@@ -40,14 +40,23 @@ public final class AgentRegistrationClient {
 
     public static UUID newGeneration() { return UUID.randomUUID(); }
 
-    public void registerOrHeartbeat() throws IOException, InterruptedException {
-        String body = "action=register&generation=" + encode(generation.toString())
-                + "&name=" + encode(backendName) + "&address=" + encode(backendAddress.toString())
-                + "&capacity=" + capacity + "&leaseSeconds=" + leaseSeconds;
-        send(body);
+    public synchronized void registerOrHeartbeat() throws IOException, InterruptedException {
+        try {
+            send(registrationBody(generation));
+        } catch (ResponseException conflict) {
+            if (conflict.statusCode() != 409) throw conflict;
+            generation = newGeneration();
+            send(registrationBody(generation));
+        }
     }
 
-    public void unregister() throws IOException, InterruptedException {
+    private String registrationBody(UUID currentGeneration) {
+        return "action=register&generation=" + encode(currentGeneration.toString())
+                + "&name=" + encode(backendName) + "&address=" + encode(backendAddress.toString())
+                + "&capacity=" + capacity + "&leaseSeconds=" + leaseSeconds;
+    }
+
+    public synchronized void unregister() throws IOException, InterruptedException {
         send("action=unregister&generation=" + encode(generation.toString()));
     }
 
@@ -64,7 +73,18 @@ public final class AgentRegistrationClient {
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
         HttpResponse<Void> response = http.send(request, HttpResponse.BodyHandlers.discarding());
         if (response.statusCode() < 200 || response.statusCode() >= 300)
-            throw new IOException("Registration endpoint returned HTTP " + response.statusCode());
+            throw new ResponseException(response.statusCode());
+    }
+
+    public static final class ResponseException extends IOException {
+        private final int statusCode;
+
+        private ResponseException(int statusCode) {
+            super("Registration endpoint returned HTTP " + statusCode);
+            this.statusCode = statusCode;
+        }
+
+        public int statusCode() { return statusCode; }
     }
 
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }

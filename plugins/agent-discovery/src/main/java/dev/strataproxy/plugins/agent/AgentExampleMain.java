@@ -1,11 +1,17 @@
 package dev.strataproxy.plugins.agent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 /** Runnable sample: args are endpoint, agent id, backend name, backend tcp URI, capacity. */
 public final class AgentExampleMain {
+    private static final Logger LOGGER = LoggerFactory.getLogger(AgentExampleMain.class);
+
     private AgentExampleMain() { }
 
     public static void main(String[] args) throws Exception {
@@ -21,7 +27,14 @@ public final class AgentExampleMain {
             try { client.unregister(); } catch (Exception ignored) { /* The lease expires if shutdown is abrupt. */ }
         }, "strataproxy-agent-shutdown"));
         while (!Thread.currentThread().isInterrupted()) {
-            client.registerOrHeartbeat();
+            try {
+                client.registerOrHeartbeat();
+            } catch (AgentRegistrationClient.ResponseException response) {
+                if (response.statusCode() != 409 && response.statusCode() < 500) throw response;
+                LOGGER.warn("Agent registration endpoint returned HTTP {}; retrying", response.statusCode());
+            } catch (IOException networkFailure) {
+                LOGGER.warn("Agent registration request failed; retrying", networkFailure);
+            }
             Thread.sleep(10_000);
         }
     }

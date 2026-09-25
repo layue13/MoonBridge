@@ -18,13 +18,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -152,6 +152,35 @@ class AgentDiscoveryPluginTest {
         }
     }
 
+    @Test
+    void clientRecoversAfterItsGenerationExpires() throws Exception {
+        RecordingServers servers = new RecordingServers();
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
+        AgentDiscoveryPlugin plugin = plugin(servers, port);
+        plugin.onEnable();
+        try {
+            var client = new AgentRegistrationClient(
+                    URI.create("http://127.0.0.1:" + port + AgentDiscoveryPlugin.PATH),
+                    "agent-recovery", UUID.randomUUID(), SECRET, "game-recovery",
+                    URI.create("tcp://127.0.0.1:25565"), 10, 5);
+            client.registerOrHeartbeat();
+            String firstGeneration = servers.definitions.get("game-recovery")
+                    .metadata().get("agent.generation");
+            plugin.leases.expire(System.currentTimeMillis() + 5_001);
+            assertFalse(servers.definitions.containsKey("game-recovery"));
+
+            client.registerOrHeartbeat();
+            String renewedGeneration = servers.definitions.get("game-recovery")
+                    .metadata().get("agent.generation");
+            assertNotEquals(firstGeneration, renewedGeneration);
+            client.unregister();
+            assertFalse(servers.definitions.containsKey("game-recovery"));
+        } finally {
+            plugin.onDisable();
+        }
+    }
+
     private static HttpResponse<String> post(HttpClient client, URI endpoint, String agent, String timestamp,
                                               String nonce, String signature, String body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(3))
@@ -193,7 +222,7 @@ class AgentDiscoveryPluginTest {
     }
 
     private static final class RecordingServers implements Servers {
-        private final Map<String, ServerDefinition> definitions = new HashMap<>();
+        private final Map<String, ServerDefinition> definitions = new ConcurrentHashMap<>();
         private int unregisterCount;
         @Override public Optional<ServerView> find(String backendName) { return Optional.empty(); }
         @Override public List<ServerView> all() { return List.of(); }
