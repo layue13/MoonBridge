@@ -59,6 +59,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class Session extends ChannelInboundHandlerAdapter {
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
     private final ProxySessionListener owner;
     private final Channel frontend;
     private volatile Channel backend;
@@ -74,7 +75,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private BackendView selected;
     private CapacityReservation reservation;
     private boolean placementInProgress;
-    private boolean loginDisconnectSent;
+    private boolean loginDisconnectStarted;
     private volatile boolean published;
     private boolean relayStarting;
     private int transitionBufferBytes;
@@ -360,9 +361,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void disconnectLogin(String reason) {
-        if (closed.get() || loginDisconnectSent) return;
-        loginDisconnectSent = true;
+        if (closed.get() || loginDisconnectStarted) return;
+        loginDisconnectStarted = true;
         frontend.config().setAutoRead(false);
+        resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
         if (!frontend.isActive()) { closePair(); return; }
         try {
             frontend.writeAndFlush(MinecraftLoginDisconnect.encode(frontend.alloc(), reason))
@@ -379,6 +381,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void receiveBackend(ByteBuf packet) {
+        if (loginDisconnectStarted) return;
         ByteBuf input = packet.duplicate();
         int id = ProtocolVarInt.read(input);
         if (id == 1) { // Encryption Request means backend is not in offline mode.
@@ -386,6 +389,9 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         if (id == 0) { // Login Disconnect.
+            loginDisconnectStarted = true;
+            frontend.config().setAutoRead(false);
+            resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
             frontend.writeAndFlush(packet.copy()).addListener(ignored -> closePair());
             return;
         }
@@ -1041,11 +1047,12 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void channelInactive(ChannelHandlerContext ctx) {
-        closePair();
+        if (ctx.channel() != backend || !loginDisconnectStarted) closePair();
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        closePair();
+        if (ctx.channel() == backend && loginDisconnectStarted) ctx.close();
+        else closePair();
     }
 
     Optional<PlayerView> onlineView() {
