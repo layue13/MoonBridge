@@ -1,5 +1,6 @@
 package dev.strataproxy.core.protocol;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 
@@ -8,6 +9,9 @@ import java.util.OptionalInt;
 
 /** The few protocol 5 PLAY packets a backend switch must understand or synthesize. */
 public final class Minecraft1710PlayPackets {
+    private static final ObjectMapper JSON = new ObjectMapper();
+    public static final int CLIENT_CHAT = 0x01;
+    public static final int SERVER_CHAT = 0x02;
     public static final int JOIN_GAME = 0x01;
     public static final int RESPAWN = 0x07;
     public static final int CLIENT_CUSTOM_PAYLOAD = 0x17;
@@ -15,6 +19,43 @@ public final class Minecraft1710PlayPackets {
     public static final int SERVER_DISCONNECT = 0x40;
 
     private Minecraft1710PlayPackets() { }
+
+    /** Reads a complete client PLAY frame. Non-chat frames are left untouched. */
+    public static Optional<String> playerChat(ByteBuf frame) {
+        // The frame decoder already verified the prefix. Peek at the one-byte chat ID
+        // before creating a duplicate so ordinary gameplay packets stay allocation-free.
+        int offset = frame.readerIndex();
+        for (int index = 0; index < 3; index++) {
+            int current = frame.getUnsignedByte(offset++);
+            if ((current & 0x80) == 0) {
+                if (frame.getUnsignedByte(offset) != CLIENT_CHAT) return Optional.empty();
+                break;
+            }
+        }
+        ByteBuf input = frame.duplicate();
+        int length = ProtocolVarInt.read(input);
+        if (length < 1 || length != input.readableBytes()) throw new ProtocolException("invalid PLAY frame length");
+        if (ProtocolVarInt.read(input) != CLIENT_CHAT) return Optional.empty();
+        String message = ProtocolStrings.read(input, 100);
+        if (input.isReadable()) throw new ProtocolException("trailing client chat bytes");
+        return Optional.of(message);
+    }
+
+    /** Encodes a plain-text proxy reply as a protocol 5 clientbound PLAY chat frame. */
+    public static ByteBuf chatReply(ByteBufAllocator allocator, String message) {
+        if (message == null || message.length() > 1024) {
+            throw new IllegalArgumentException("chat reply must contain at most 1024 characters");
+        }
+        String component = JSON.createObjectNode().put("text", message).toString();
+        ByteBuf packet = allocator.buffer();
+        try {
+            ProtocolVarInt.write(packet, SERVER_CHAT);
+            ProtocolStrings.write(packet, component, 32767);
+            return frame(allocator, packet);
+        } finally {
+            packet.release();
+        }
+    }
 
     public record JoinGame(int entityId, int gameMode, int dimension, int difficulty, String levelType) { }
 

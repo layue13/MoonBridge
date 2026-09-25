@@ -55,6 +55,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Mutable session control state is confined to the frontend event loop. */
 @io.netty.channel.ChannelHandler.Sharable
@@ -62,6 +63,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final int MAX_TRANSITION_BUFFER_FRAMES = 1024;
+    private static final int MAX_PENDING_COMMAND_REPLIES = 64;
+    private static final int COMMAND_BURST = 10;
+    private static final long COMMAND_TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
+    private static final long COMMAND_NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
     private final ProxySessionListener owner;
@@ -84,6 +89,11 @@ final class Session extends ChannelInboundHandlerAdapter {
     private int transitionBufferBytes;
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicInteger pendingCommandReplies = new AtomicInteger();
+    private int commandTokens = COMMAND_BURST;
+    private long commandTokenRefillNanos = System.nanoTime();
+    private long lastCommandNoticeNanos;
+    private boolean commandNoticeSent;
     private ScheduledFuture<?> initialLoginDeadline;
     private ScheduledFuture<?> initialPlayDeadline;
     private PlayObservation playObservation;
@@ -500,6 +510,10 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             var observation = playObservation;
             frontend.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, true, this::closePair));
+            if (owner.commandDispatcher() != null) {
+                frontend.pipeline().addLast("player-commands", new PlayerCommandInterceptor(
+                        this::dispatchPlayerCommand, this::closePair));
+            }
             target.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, false, this::closePair));
             var link = RawRelay.attach(frontend, target,
                     bytes -> observation.observeFrame(false, bytes),
@@ -520,6 +534,59 @@ final class Session extends ChannelInboundHandlerAdapter {
             });
         } catch (RuntimeException failure) {
             closePair();
+        }
+    }
+
+    private boolean dispatchPlayerCommand(String message) {
+        if (closed.get() || !published) return false;
+        return owner.commandDispatcher().dispatch(view, message, this::sendCommandReply, this::admitPlayerCommand);
+    }
+
+    private boolean admitPlayerCommand() {
+        long now = System.nanoTime();
+        long elapsed = now - commandTokenRefillNanos;
+        if (elapsed >= COMMAND_TOKEN_NANOS) {
+            long replenished = Math.min(COMMAND_BURST, elapsed / COMMAND_TOKEN_NANOS);
+            commandTokens = (int) Math.min(COMMAND_BURST, commandTokens + replenished);
+            commandTokenRefillNanos = now;
+        }
+        if (commandTokens > 0) {
+            commandTokens--;
+            return true;
+        }
+        if (!commandNoticeSent || now - lastCommandNoticeNanos >= COMMAND_NOTICE_NANOS) {
+            commandNoticeSent = true;
+            lastCommandNoticeNanos = now;
+            sendCommandReply("Too many proxy commands. Please slow down.");
+        }
+        return false;
+    }
+
+    private void sendCommandReply(String message) {
+        if (message == null || message.length() > 1024) {
+            throw new IllegalArgumentException("chat reply must contain at most 1024 characters");
+        }
+        if (pendingCommandReplies.incrementAndGet() > MAX_PENDING_COMMAND_REPLIES) {
+            pendingCommandReplies.decrementAndGet();
+            return;
+        }
+        Runnable send = () -> {
+            try {
+                if (closed.get() || !frontend.isActive() || !frontend.isWritable()) return;
+                ByteBuf frame = Minecraft1710PlayPackets.chatReply(frontend.alloc(), message);
+                frontend.writeAndFlush(frame).addListener(write -> {
+                    if (!write.isSuccess()) closePair();
+                });
+            } finally {
+                pendingCommandReplies.decrementAndGet();
+            }
+        };
+        if (frontend.eventLoop().inEventLoop()) send.run();
+        else {
+            try { frontend.eventLoop().execute(send); }
+            catch (RejectedExecutionException ignored) {
+                pendingCommandReplies.decrementAndGet();
+            }
         }
     }
 
@@ -1075,6 +1142,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
             if (published) owner.sessionUnpublished();
             owner.allSessions().remove(this);
+            owner.sessionClosed();
             PendingFrame pending;
             while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();
             transitionBufferBytes = 0;

@@ -305,6 +305,10 @@ class DnsDiscoveryPluginTest {
                 return servers;
             }
 
+            @Override public dev.strataproxy.api.Commands commands() {
+                return (name, handler) -> { throw new UnsupportedOperationException(); };
+            }
+
             @Override
             public org.slf4j.Logger logger() {
                 return LoggerFactory.getLogger("dns-discovery-test");

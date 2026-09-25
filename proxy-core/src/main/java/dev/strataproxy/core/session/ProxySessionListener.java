@@ -40,10 +40,16 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Consumer;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.ThreadFactory;
 
 /** Owns protocol 5 client sessions from login through backend disconnect. */
 public final class ProxySessionListener implements Players {
+    @FunctionalInterface public interface CommandDispatcher {
+        /** Returns true only if this proxy owns the command. */
+        boolean dispatch(PlayerView player, String message, Consumer<String> reply, BooleanSupplier admission);
+    }
     private final SocketAddress bindAddress;
     private final BackendCatalog catalog;
     private final SessionVerifier verifier;
@@ -60,7 +66,10 @@ public final class ProxySessionListener implements Players {
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextConnectionId = new AtomicLong();
     private final AtomicInteger onlineCount = new AtomicInteger();
+    private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
+    private volatile CommandDispatcher commandDispatcher;
+    private int maxConnections = 4096;
     private volatile Channel listener;
     private volatile boolean closed;
     private boolean started;
@@ -149,6 +158,21 @@ public final class ProxySessionListener implements Players {
         this.placement = Objects.requireNonNull(placement, "placement");
     }
 
+    /** Configures optional plugin command dispatch before the listener starts. */
+    public synchronized void setCommandDispatcher(CommandDispatcher dispatcher) {
+        if (started || closed || commandDispatcher != null) {
+            throw new IllegalStateException("Command dispatcher must be configured once before listener start");
+        }
+        commandDispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
+    }
+
+    /** Bounds accepted sessions, including clients that have not completed login. */
+    public synchronized void setMaxConnections(int limit) {
+        if (started || closed) throw new IllegalStateException("Connection limit must be set before listener start");
+        if (limit < 1 || limit > 1_000_000) throw new IllegalArgumentException("invalid connection limit");
+        maxConnections = limit;
+    }
+
     public synchronized CompletionStage<Channel> start() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("listener is closed"));
         if (started) return CompletableFuture.failedFuture(new IllegalStateException("listener already started"));
@@ -190,12 +214,13 @@ public final class ProxySessionListener implements Players {
 
     /** Serializes admission with close() so every accepted session is either closed or rejected. */
     private synchronized Session registerSession(SocketChannel channel) {
-        if (closed) {
+        if (closed || connectionCount.get() >= maxConnections) {
             channel.close();
             return null;
         }
         Session session = new Session(this, channel);
         allSessions.add(session);
+        connectionCount.incrementAndGet();
         return session;
     }
 
@@ -266,6 +291,7 @@ public final class ProxySessionListener implements Players {
         return MinecraftEncryptionRequest.create("", encryptionKeys.getPublic(), random);
     }
     Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement() { return placement; }
+    CommandDispatcher commandDispatcher() { return commandDispatcher; }
     boolean claimIdentity(UUID uuid, Session session) { return sessionsByPlayerId.putIfAbsent(uuid, session) == null; }
     void releaseIdentity(UUID uuid, Session session) { sessionsByPlayerId.remove(uuid, session); }
     Set<Session> allSessions() { return allSessions; }
@@ -273,4 +299,5 @@ public final class ProxySessionListener implements Players {
     int onlineCount() { return onlineCount.get(); }
     void sessionPublished() { onlineCount.incrementAndGet(); }
     void sessionUnpublished() { onlineCount.decrementAndGet(); }
+    void sessionClosed() { connectionCount.decrementAndGet(); }
 }

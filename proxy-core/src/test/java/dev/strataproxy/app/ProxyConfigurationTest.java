@@ -27,6 +27,43 @@ final class ProxyConfigurationTest {
         try {
             Files.writeString(config, "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nbackends: []\n");
             assertEquals(0, new ProxyConfigurationLoader().load(config).backends().size());
+            assertEquals(4096, new ProxyConfigurationLoader().load(config).maxConnections());
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
+    void rejectsInvalidConnectionLimit() throws Exception {
+        var config = Files.createTempFile("strataproxy-cap", ".yml");
+        try {
+            for (int invalid : new int[]{0, -1, 1_000_001}) {
+                Files.writeString(config, "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n"
+                        + "maxConnections: " + invalid + "\n");
+                assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                        () -> new ProxyConfigurationLoader().load(config));
+            }
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
+    void offlinePublicBindRequiresExplicitOptIn() throws Exception {
+        var config = Files.createTempFile("strataproxy-public-offline", ".yml");
+        try {
+            String publicOffline = "listen: \"0.0.0.0:25577\"\nauthentication: OFFLINE\n";
+            Files.writeString(config, publicOffline);
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, "listen: \"localhost:25577\"\nauthentication: OFFLINE\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, publicOffline + "allowOfflinePublicAccess: true\n");
+            assertEquals(true, new ProxyConfigurationLoader().load(config).allowOfflinePublicAccess());
+            Files.writeString(config, "listen: \"0.0.0.0:25577\"\nauthentication: ONLINE_BUNGEE\n");
+            assertEquals(ProxyConfiguration.Authentication.ONLINE_BUNGEE,
+                    new ProxyConfigurationLoader().load(config).authentication());
         } finally {
             Files.deleteIfExists(config);
         }

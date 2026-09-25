@@ -46,11 +46,13 @@ public final class ProxySessionBenchmark {
         int payload = intArg(args, "payload", 1024);
         int repeats = intArg(args, "repeats", 2);
         int window = intArg(args, "window", 1);
+        int commandInterceptor = intArg(args, "command-interceptor", 1);
         String mode = modeArg(args);
         boolean afterTransfer = mode.equals("post-transfer");
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
-                || repeats < 1 || repeats > 10 || window < 1 || window > 1024) {
+                || repeats < 1 || repeats > 10 || window < 1 || window > 1024
+                || (commandInterceptor != 0 && commandInterceptor != 1)) {
             throw new IllegalArgumentException("bounds: connections 1..32, messages 1..100000, warmup 0..10000, "
                     + "payload 5..1048576, repeats 1..10, window 1..1024");
         }
@@ -75,13 +77,15 @@ public final class ProxySessionBenchmark {
                     new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             proxy.setPlacement(player -> java.util.concurrent.CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("bench"))));
+            if (commandInterceptor == 1) proxy.setCommandDispatcher((player, message, reply, admission) -> false);
             try {
                 int proxyPort = ((InetSocketAddress) proxy.start().toCompletableFuture()
                         .get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS).localAddress()).getPort();
                 System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
                                 + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
-                                + "window_per_connection=%d repeats=%d%n",
-                        mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats);
+                                + "window_per_connection=%d repeats=%d command_interceptor=%d%n",
+                        mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats,
+                        commandInterceptor);
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
                         + "connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.");
                 if (afterTransfer) System.out.println("Proxy clients switch from bench to replacement before warmup; "
@@ -462,7 +466,8 @@ public final class ProxySessionBenchmark {
     private static int intArg(String[] args, String key, int fallback) {
         int found = fallback;
         boolean seen = false;
-        List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window", "mode");
+        List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window",
+                "mode", "command-interceptor");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);

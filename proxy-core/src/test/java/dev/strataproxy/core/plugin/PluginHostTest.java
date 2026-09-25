@@ -1,6 +1,7 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
+import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
@@ -43,6 +44,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -51,6 +53,104 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PluginHostTest {
     private static final PlayerView PLAYER = new PlayerView(
             new PlayerIdentity(UUID.randomUUID(), 1), "TestPlayer", Optional.empty());
+
+    @Test
+    void commandsDispatchOffCallerThreadAndReleaseTheirNames() throws Exception {
+        var plugin = new CapturingPlugin("unused", false);
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
+        try {
+            host.load(List.of(plugin));
+            var observed = new CompletableFuture<CommandInvocation>();
+            var worker = new CompletableFuture<Thread>();
+            var reply = new CompletableFuture<String>();
+            var registration = plugin.context.commands().register("Ping", invocation -> {
+                worker.complete(Thread.currentThread());
+                observed.complete(invocation);
+                invocation.reply("pong");
+            });
+            assertThrows(IllegalArgumentException.class,
+                    () -> plugin.context.commands().register("PING", invocation -> { }));
+            host.enable();
+            assertFalse(host.dispatchCommand(PLAYER, "/other", reply::complete));
+            assertFalse(host.dispatchCommand(PLAYER, "/other", reply::complete,
+                    () -> { throw new AssertionError("unknown command must not consume admission"); }));
+            assertTrue(host.dispatchCommand(PLAYER, "/PING blocked", reply::complete, () -> false));
+            assertFalse(worker.isDone());
+            assertTrue(host.dispatchCommand(PLAYER, "/PING hello world", reply::complete));
+            assertNotEquals(Thread.currentThread(), worker.get(5, TimeUnit.SECONDS));
+            assertEquals("ping", observed.get(5, TimeUnit.SECONDS).name());
+            assertEquals("hello world", observed.get(5, TimeUnit.SECONDS).arguments());
+            assertEquals("pong", reply.get(5, TimeUnit.SECONDS));
+            registration.unregister();
+            registration.unregister();
+            assertFalse(host.dispatchCommand(PLAYER, "/ping", text -> { }));
+        } finally {
+            host.close();
+        }
+        assertThrows(IllegalStateException.class,
+                () -> plugin.context.commands().register("late", invocation -> { }));
+    }
+
+    @Test
+    void pluginShutdownHasOneBoundedDeadlineEvenIfDisableIgnoresInterrupts() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var context = new java.util.concurrent.atomic.AtomicReference<PluginContext>();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext value) { context.set(value); }
+            @Override public void onDisable() {
+                entered.countDown();
+                while (release.getCount() != 0) {
+                    try { release.await(100, TimeUnit.MILLISECONDS); }
+                    catch (InterruptedException ignored) { /* Simulate a broken plugin. */ }
+                }
+            }
+        };
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                1, 1, Duration.ofMillis(100));
+        try {
+            host.load(List.of(plugin));
+            host.enable();
+            long start = System.nanoTime();
+            host.close();
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(2));
+            assertThrows(IllegalStateException.class,
+                    () -> context.get().commands().register("late", invocation -> { }));
+        } finally {
+            release.countDown();
+            host.close();
+        }
+    }
+
+    @Test
+    void saturatedCommandWorkersRejectWithoutRunningPluginCodeOnCaller() throws Exception {
+        var plugin = new CapturingPlugin("unused", false);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new AtomicInteger();
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1), 1, 1);
+        try {
+            host.load(List.of(plugin));
+            plugin.context.commands().register("slow", invocation -> {
+                calls.incrementAndGet();
+                entered.countDown();
+                release.await(5, TimeUnit.SECONDS);
+            });
+            host.enable();
+            assertTrue(host.dispatchCommand(PLAYER, "/slow one", text -> { }));
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            assertTrue(host.dispatchCommand(PLAYER, "/slow two", text -> { }));
+            var rejectedReply = new CompletableFuture<String>();
+            assertTrue(host.dispatchCommand(PLAYER, "/slow three", rejectedReply::complete));
+            assertEquals("Proxy command service is busy. Please try again.",
+                    rejectedReply.get(1, TimeUnit.SECONDS));
+            assertEquals(1, calls.get());
+        } finally {
+            release.countDown();
+            host.close();
+        }
+    }
 
     @Test
     void disabledBrokenJarCannotPreventConfiguredPluginFromLoading(@TempDir Path directory) throws Exception {

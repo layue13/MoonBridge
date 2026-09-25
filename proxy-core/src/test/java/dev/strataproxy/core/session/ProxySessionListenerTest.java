@@ -2,6 +2,9 @@ package dev.strataproxy.core.session;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.Plugin;
+import dev.strataproxy.api.PluginContext;
+import dev.strataproxy.core.plugin.PluginHost;
 import dev.strataproxy.core.auth.MinecraftEncryptionRequest;
 import dev.strataproxy.core.auth.MinecraftEncryptionResponse;
 import dev.strataproxy.core.auth.ProfileProperty;
@@ -58,6 +61,126 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
+    @Test
+    void connectionLimitRejectsExcessIncompleteLoginsAndReleasesCapacity() throws Exception {
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                new InMemoryBackendCatalog());
+        listener.setMaxConnections(1);
+        listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket first = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (listener.allSessions().size() != 1 && System.nanoTime() < deadline) Thread.sleep(5);
+                assertEquals(1, listener.allSessions().size());
+                try (Socket rejected = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    rejected.setSoTimeout(5000);
+                    try { assertEquals(-1, rejected.getInputStream().read()); }
+                    catch (SocketException reset) { /* Windows may reset a socket closed before its first read. */ }
+                }
+                assertEquals(1, listener.allSessions().size());
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+            assertTrue(listener.allSessions().isEmpty());
+            try (Socket admitted = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (listener.allSessions().size() != 1 && System.nanoTime() < deadline) Thread.sleep(5);
+                assertEquals(1, listener.allSessions().size());
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+    @Test
+    void registeredPlayerCommandRepliesWithoutReachingBackendAndOtherChatPassesThrough() throws Exception {
+        String username = "CommandUser";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        var handlerThread = new CompletableFuture<String>();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var received = new CompletableFuture<List<byte[]>>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    writeFrame(output, new byte[]{0x01, 0, 0, 0, 42, 0, 0, 1, 20,
+                            7, 'd', 'e', 'f', 'a', 'u', 'l', 't'});
+                    var position = new ByteArrayOutputStream();
+                    var data = new DataOutputStream(position);
+                    data.writeByte(0x08);
+                    data.writeDouble(0);
+                    data.writeDouble(64);
+                    data.writeDouble(0);
+                    data.writeFloat(0);
+                    data.writeFloat(0);
+                    data.writeByte(0);
+                    writeFrame(output, position.toByteArray());
+                    received.complete(List.of(readFrame(input), readFrame(input)));
+                } catch (Throwable failure) {
+                    received.completeExceptionally(failure);
+                }
+            }, "fake-command-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            try (var plugins = new PluginHost(catalog, listener, Duration.ofSeconds(5))) {
+                plugins.load(List.of(new Plugin() {
+                    @Override public void onLoad(PluginContext context) {
+                        context.commands().register("where", invocation -> {
+                            handlerThread.complete(Thread.currentThread().getName());
+                            invocation.reply(invocation.player().username() + ":" + invocation.arguments());
+                        });
+                    }
+                }));
+                plugins.enable();
+                listener.setPlacement(plugins::placeInitial);
+                listener.setCommandDispatcher(plugins::dispatchCommand);
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    assertEquals(1, readVarInt(readFrame(input)));
+                    assertEquals(8, readVarInt(readFrame(input)));
+                    writeFrame(output, chatPacket("/where lobby"));
+                    var reply = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(2, readVarInt(reply));
+                    assertEquals("CommandUser:lobby",
+                            new ObjectMapper().readTree(readString(reply, 32767)).path("text").asText());
+                    assertTrue(handlerThread.get(5, TimeUnit.SECONDS).startsWith("strataproxy-plugin-command-"));
+                    writeFrame(output, chatPacket("hello"));
+                    writeFrame(output, chatPacket("/unknown arg"));
+                    var backendChat = received.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(chatPacket("hello"), backendChat.get(0));
+                    assertArrayEquals(chatPacket("/unknown arg"), backendChat.get(1));
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static byte[] chatPacket(String text) throws Exception {
+        var packet = new ByteArrayOutputStream();
+        writeVarInt(packet, 1);
+        writeString(packet, text);
+        return packet.toByteArray();
+    }
     @Test
     void shutdownWhileAcceptingClientsClosesEveryRegisteredSession() throws Exception {
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
@@ -793,7 +916,7 @@ final class ProxySessionListenerTest {
                     output.write(framed(success.toByteArray()));
                     output.write(framed(new byte[]{0x02, 0x55}));
                     output.flush();
-                    assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    assertArrayEquals(new byte[]{0x03, 0x33}, readFrame(input));
                     writeFrame(output, new byte[]{0x03, 0x44});
                     backendDone.complete(null);
                 } catch (Throwable failure) {
@@ -813,6 +936,12 @@ final class ProxySessionListenerTest {
                         return CompletableFuture.completedFuture(Optional.of(new VerifiedProfile(uuid, "Alice", java.util.List.of())));
                     });
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
+            listener.setCommandDispatcher((player, message, reply, admission) -> {
+                if (!message.equals("/ping")) return false;
+                if (!admission.getAsBoolean()) return true;
+                reply.accept("pong");
+                return true;
+            });
             try {
                 var bound = listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(),
@@ -853,7 +982,14 @@ final class ProxySessionListenerTest {
                     assertEquals(uuid.toString(), readString(success, 36));
                     assertEquals("Alice", readString(success, 16));
                     assertArrayEquals(new byte[]{0x02, 0x55}, readFrame(encryptedInput));
-                    byte[] encryptedPlay = aes(secret, Cipher.ENCRYPT_MODE).update(framed(new byte[]{0x01, 0x33}));
+                    Cipher encryptor = aes(secret, Cipher.ENCRYPT_MODE);
+                    clearOutput.write(encryptor.update(framed(chatPacket("/ping"))));
+                    clearOutput.flush();
+                    var commandReply = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(2, readVarInt(commandReply));
+                    assertEquals("pong",
+                            new ObjectMapper().readTree(readString(commandReply, 32767)).path("text").asText());
+                    byte[] encryptedPlay = encryptor.update(framed(new byte[]{0x03, 0x33}));
                     assertEquals(3, encryptedPlay.length);
                     clearOutput.write(encryptedPlay);
                     clearOutput.flush();

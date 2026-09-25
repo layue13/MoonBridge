@@ -1,6 +1,10 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
+import dev.strataproxy.api.CommandHandler;
+import dev.strataproxy.api.CommandInvocation;
+import dev.strataproxy.api.CommandRegistration;
+import dev.strataproxy.api.Commands;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
@@ -32,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -43,15 +48,20 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.BooleanSupplier;
 import java.util.jar.JarFile;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
@@ -65,12 +75,15 @@ public final class PluginHost implements AutoCloseable {
     private final BackendCatalog catalog;
     private final Players players;
     private final Duration placementTimeout;
+    private final Duration shutdownTimeout;
     private final ThreadPoolExecutor callbacks;
+    private final ThreadPoolExecutor commandWorkers;
+    private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
     private final ScheduledExecutorService timer;
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
-    private State state = State.LOADING;
+    private volatile State state = State.LOADING;
     private InitialPlacementHandler placementHandler;
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
@@ -79,17 +92,29 @@ public final class PluginHost implements AutoCloseable {
 
     PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout,
                int callbackThreads, int callbackQueueCapacity) {
+        this(catalog, players, placementTimeout, callbackThreads, callbackQueueCapacity, Duration.ofSeconds(10));
+    }
+
+    PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout,
+               int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout) {
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.players = Objects.requireNonNull(players, "players");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
+        this.shutdownTimeout = Objects.requireNonNull(shutdownTimeout, "shutdownTimeout");
         if (placementTimeout.isZero() || placementTimeout.isNegative()) {
             throw new IllegalArgumentException("placementTimeout must be positive");
+        }
+        if (shutdownTimeout.isZero() || shutdownTimeout.isNegative()) {
+            throw new IllegalArgumentException("shutdownTimeout must be positive");
         }
         if (callbackThreads < 1 || callbackQueueCapacity < 1) {
             throw new IllegalArgumentException("callback executor sizes must be positive");
         }
         this.callbacks = new ThreadPoolExecutor(callbackThreads, callbackThreads, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(callbackQueueCapacity), namedThreads("strataproxy-plugin-callback"),
+                new ThreadPoolExecutor.AbortPolicy());
+        this.commandWorkers = new ThreadPoolExecutor(callbackThreads, callbackThreads, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(callbackQueueCapacity), namedThreads("strataproxy-plugin-command"),
                 new ThreadPoolExecutor.AbortPolicy());
         this.timer = Executors.newSingleThreadScheduledExecutor(namedThreads("strataproxy-plugin-timeout"));
     }
@@ -296,6 +321,44 @@ public final class PluginHost implements AutoCloseable {
         return result;
     }
 
+    /** Claims only known root commands; caller retains and forwards every other chat frame. */
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply) {
+        return dispatchCommand(player, message, reply, () -> true);
+    }
+
+    /** Admission is checked only after the command name is known, preserving unknown-command passthrough. */
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply,
+                                   BooleanSupplier admission) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(reply, "reply");
+        Objects.requireNonNull(admission, "admission");
+        if (state != State.ENABLED || !message.startsWith("/") || message.length() < 2) return false;
+        int end = 1;
+        while (end < message.length() && !Character.isWhitespace(message.charAt(end))) end++;
+        String name = message.substring(1, end).toLowerCase(Locale.ROOT);
+        RegisteredCommand registered = commands.get(name);
+        if (registered == null || !registered.context.active) return false;
+        if (!admission.getAsBoolean()) return true;
+        String arguments = end == message.length() ? "" : message.substring(end).stripLeading();
+        CommandInvocation invocation = new CommandInvocation(player, name, arguments,
+                text -> { if (registered.context.active) reply.accept(text); });
+        try {
+            commandWorkers.execute(() -> {
+                if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) return;
+                try {
+                    registered.handler.execute(invocation);
+                } catch (Throwable failure) {
+                    LOGGER.warn("Plugin {} command /{} failed", registered.context.owner.id(), name, failure);
+                    invocation.reply("Proxy command failed.");
+                }
+            });
+        } catch (RejectedExecutionException overloaded) {
+            reply.accept("Proxy command service is busy. Please try again.");
+        }
+        return true;
+    }
+
     @Override
     public synchronized void close() {
         if (state == State.CLOSED) {
@@ -307,15 +370,13 @@ public final class PluginHost implements AutoCloseable {
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
         }
         callbacks.shutdownNow();
+        commandWorkers.shutdownNow();
         timer.shutdownNow();
+        long deadline = System.nanoTime() + shutdownTimeout.toNanos();
         for (int index = plugins.size() - 1; index >= 0; index--) {
             LoadedPlugin loaded = plugins.get(index);
             if (loaded.enabled) {
-                try {
-                    loaded.plugin.onDisable();
-                } catch (Throwable failure) {
-                    LOGGER.warn("Plugin {} failed during onDisable", loaded.owner.id(), failure);
-                }
+                disableWithinDeadline(loaded, deadline);
             }
             loaded.context.deactivateAndRemove();
         }
@@ -328,6 +389,30 @@ public final class PluginHost implements AutoCloseable {
         }
         classLoaders.clear();
         placementHandler = null;
+    }
+
+    private void disableWithinDeadline(LoadedPlugin loaded, long deadline) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+            LOGGER.warn("Skipping onDisable for plugin {} after shutdown deadline", loaded.owner.id());
+            return;
+        }
+        FutureTask<Void> stop = new FutureTask<>(() -> {
+            loaded.plugin.onDisable();
+            return null;
+        });
+        Thread.ofVirtual().name("strataproxy-plugin-disable-" + loaded.owner.id()).start(stop);
+        try {
+            stop.get(remaining, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException timeout) {
+            stop.cancel(true);
+            LOGGER.warn("Plugin {} onDisable exceeded shutdown deadline", loaded.owner.id());
+        } catch (ExecutionException failure) {
+            LOGGER.warn("Plugin {} failed during onDisable", loaded.owner.id(), failure.getCause());
+        } catch (InterruptedException interrupted) {
+            stop.cancel(true);
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void loadOne(Plugin plugin, String id, Map<String, String> settings) {
@@ -378,6 +463,8 @@ public final class PluginHost implements AutoCloseable {
     private record PendingPlacement(CompletableFuture<Optional<PlacementDecision>> result,
                                     AtomicBoolean decided) { }
 
+    private record RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler) { }
+
     private static final class LoadedPlugin {
         private final Plugin plugin;
         private final BackendOwner owner;
@@ -395,6 +482,7 @@ public final class PluginHost implements AutoCloseable {
         private final BackendOwner owner;
         private final Players pluginPlayers;
         private final PluginServers servers;
+        private final Commands pluginCommands;
         private final Logger logger;
         private final Map<String, String> settings;
         private volatile boolean active = true;
@@ -403,22 +491,48 @@ public final class PluginHost implements AutoCloseable {
             this.owner = owner;
             this.pluginPlayers = new PluginPlayers(this);
             this.servers = new PluginServers(this);
+            this.pluginCommands = new PluginCommands(this);
             this.logger = LoggerFactory.getLogger("plugin." + owner.id());
             this.settings = Map.copyOf(settings);
         }
 
         @Override public Players players() { return pluginPlayers; }
         @Override public Servers servers() { return servers; }
+        @Override public Commands commands() { return pluginCommands; }
         @Override public Logger logger() { return logger; }
         @Override public Map<String, String> settings() { return settings; }
 
         private synchronized void deactivateAndRemove() {
             active = false;
+            commands.entrySet().removeIf(entry -> entry.getValue().context == this);
             catalog.removeOwner(owner);
         }
 
         private void requireActive() {
             if (!active) throw new IllegalStateException("Plugin context is inactive");
+        }
+    }
+
+    private final class PluginCommands implements Commands {
+        private final PluginContextImpl context;
+
+        private PluginCommands(PluginContextImpl context) { this.context = context; }
+
+        @Override public CommandRegistration register(String name, CommandHandler handler) {
+            Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(handler, "handler");
+            String normalized = name.toLowerCase(Locale.ROOT);
+            if (!normalized.matches("[a-z0-9_.:-]{1,32}")) {
+                throw new IllegalArgumentException("invalid command name: " + name);
+            }
+            synchronized (context) {
+                context.requireActive();
+                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler);
+                if (commands.putIfAbsent(normalized, registration) != null) {
+                    throw new IllegalArgumentException("Command already registered: /" + normalized);
+                }
+                return () -> commands.remove(normalized, registration);
+            }
         }
     }
 
