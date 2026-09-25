@@ -41,6 +41,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
@@ -56,6 +57,9 @@ import java.util.jar.JarFile;
 public final class PluginHost implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(PluginHost.class);
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
+    private static final ThreadFactory TRANSFER_COMPLETION_THREADS = Thread.ofVirtual()
+            .name("strataproxy-plugin-transfer-", 0).factory();
+    private static final Executor TRANSFER_COMPLETIONS = task -> TRANSFER_COMPLETION_THREADS.newThread(task).start();
 
     private final BackendCatalog catalog;
     private final Players players;
@@ -425,7 +429,10 @@ public final class PluginHost implements AutoCloseable {
         @Override public CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
             synchronized (context) {
                 context.requireActive();
-                return players.transfer(identity, backendName);
+                // CompletableFuture runs dependent callbacks on its completion thread by default.
+                // Do not let plugin callbacks execute on the player's Netty event loop.
+                return players.transfer(identity, backendName)
+                        .whenCompleteAsync((ignored, failure) -> { }, TRANSFER_COMPLETIONS);
             }
         }
     }

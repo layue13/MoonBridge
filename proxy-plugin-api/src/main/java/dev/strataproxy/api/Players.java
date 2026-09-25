@@ -16,6 +16,7 @@ public interface Players {
      * Requests a transfer by backend name. NETWORK_READY means the proxy wrote the world
      * transition after the target's protocol handshake; it does not assert plugin game readiness.
      * A failed target handshake after the client has switched chains closes the player session.
+     * When accessed through PluginContext, results complete off the player's I/O loop.
      */
     CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName);
 }

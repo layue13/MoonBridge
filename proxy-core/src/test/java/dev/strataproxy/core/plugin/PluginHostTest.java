@@ -44,6 +44,7 @@ import java.util.jar.JarOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -155,6 +156,42 @@ class PluginHostTest {
         assertThrows(IllegalStateException.class, retained::online);
         assertThrows(IllegalStateException.class, retainedServers::all);
         assertEquals(1, transfers.get());
+    }
+
+    @Test
+    void blockingPluginTransferCallbackDoesNotBlockTheSessionThread() throws Exception {
+        var underlying = new CompletableFuture<TransferResult>();
+        Players delegate = new Players() {
+            @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.of(PLAYER); }
+            @Override public List<PlayerView> online() { return List.of(PLAYER); }
+            @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
+                    PlayerIdentity identity, String backendName) { return underlying; }
+        };
+        var plugin = new CapturingPlugin("unused", false);
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), delegate, Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var callbackThread = new CompletableFuture<Thread>();
+            var releaseCallback = new CountDownLatch(1);
+            var producerDone = new CompletableFuture<Void>();
+            plugin.context.players().transfer(PLAYER.identity(), "lobby").whenComplete((result, failure) -> {
+                callbackThread.complete(Thread.currentThread());
+                try { releaseCallback.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            });
+            Thread producer = new Thread(() -> {
+                underlying.complete(TransferResult.of(TransferStatus.NETWORK_READY));
+                producerDone.complete(null);
+            }, "simulated-session-io");
+            try {
+                producer.start();
+                assertNotEquals(producer, callbackThread.get(5, TimeUnit.SECONDS));
+                producerDone.get(1, TimeUnit.SECONDS);
+            } finally {
+                releaseCallback.countDown();
+                producer.join(5_000);
+            }
+        }
     }
 
     @Test
