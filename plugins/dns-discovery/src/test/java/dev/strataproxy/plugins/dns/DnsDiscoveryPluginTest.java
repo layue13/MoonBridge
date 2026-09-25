@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -152,7 +153,7 @@ class DnsDiscoveryPluginTest {
     }
 
     @Test
-    void uncachedResolverQueriesBothAddressFamiliesOnEveryRefresh() throws Exception {
+    void resolverKeepsFailedAddressFamilyUntilItsThirdMiss() throws Exception {
         InetAddress firstV4 = address(192, 0, 2, 10);
         InetAddress secondV4 = address(192, 0, 2, 11);
         InetAddress firstV6 = InetAddress.getByAddress(new byte[]{
@@ -163,6 +164,7 @@ class DnsDiscoveryPluginTest {
                 0, 0, 0, 0, 0, 0, 0, 11});
         AtomicReference<byte[]> v4 = new AtomicReference<>(firstV4.getAddress());
         AtomicReference<byte[]> v6 = new AtomicReference<>(firstV6.getAddress());
+        AtomicBoolean dropV6 = new AtomicBoolean();
         AtomicReference<Throwable> dnsFailure = new AtomicReference<>();
         try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
             Thread dnsThread = new Thread(() -> {
@@ -170,6 +172,7 @@ class DnsDiscoveryPluginTest {
                     try {
                         DatagramPacket query = new DatagramPacket(new byte[4096], 4096);
                         socket.receive(query);
+                        if (dropV6.get() && dnsQuestionType(query) == 28) continue;
                         byte[] response = dnsAnswer(query, v4.get(), v6.get());
                         socket.send(new DatagramPacket(response, response.length, query.getSocketAddress()));
                     } catch (java.net.SocketException closed) {
@@ -184,7 +187,7 @@ class DnsDiscoveryPluginTest {
             dnsThread.setDaemon(true);
             dnsThread.start();
             InetSocketAddress endpoint = new InetSocketAddress("127.0.0.1", socket.getLocalPort());
-            try (var resolver = new DnsDiscoveryPlugin.UncachedAddressResolver(
+            try (var resolver = new DnsDiscoveryPlugin.RefreshingAddressResolver(
                     hostname -> DnsServerAddresses.singleton(endpoint).stream())) {
                 assertEquals(Set.of(firstV4, firstV6),
                         Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
@@ -192,6 +195,33 @@ class DnsDiscoveryPluginTest {
                 v6.set(secondV6.getAddress());
                 assertEquals(Set.of(secondV4, secondV6),
                         Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                v6.set(null);
+                assertEquals(Set.of(secondV4),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                v6.set(secondV6.getAddress());
+                v4.set(null);
+                assertEquals(Set.of(secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                v4.set(secondV4.getAddress());
+                dropV6.set(true);
+                assertEquals(Set.of(secondV4, secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                assertEquals(Set.of(secondV4, secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                assertEquals(Set.of(secondV4),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))),
+                        "a timed-out AAAA query should retire only its stale address family after three misses");
+                dropV6.set(false);
+                assertEquals(Set.of(secondV4, secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                v4.set(null);
+                dropV6.set(true);
+                assertEquals(Set.of(secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                assertEquals(Set.of(secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                assertEquals(0, resolver.resolve("backend.dynamic.test").length,
+                        "the last stale address should be removed on its third missed query");
             }
             assertNull(dnsFailure.get());
         }
@@ -203,7 +233,7 @@ class DnsDiscoveryPluginTest {
         int offset = 12;
         while (offset < length && request[offset] != 0) offset += 1 + (request[offset] & 0xff);
         if (offset + 5 > length) throw new IOException("truncated DNS question");
-        int type = ((request[offset + 1] & 0xff) << 8) | (request[offset + 2] & 0xff);
+        int type = dnsQuestionType(query);
         int questionLength = offset + 5 - 12;
         byte[] address = type == 1 ? v4 : type == 28 ? v6 : null;
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -223,6 +253,15 @@ class DnsDiscoveryPluginTest {
             output.write(address);
         }
         return bytes.toByteArray();
+    }
+
+    private static int dnsQuestionType(DatagramPacket query) throws IOException {
+        byte[] request = query.getData();
+        int length = query.getLength();
+        int offset = 12;
+        while (offset < length && request[offset] != 0) offset += 1 + (request[offset] & 0xff);
+        if (offset + 5 > length) throw new IOException("truncated DNS question");
+        return ((request[offset + 1] & 0xff) << 8) | (request[offset + 2] & 0xff);
     }
 
     @Test

@@ -19,16 +19,19 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,7 +50,7 @@ public final class DnsDiscoveryPlugin implements Plugin {
     private int consecutiveLookupFailures;
     private volatile boolean closed;
 
-    public DnsDiscoveryPlugin() { this(new UncachedAddressResolver()); }
+    public DnsDiscoveryPlugin() { this(new RefreshingAddressResolver()); }
 
     DnsDiscoveryPlugin(AddressResolver resolver) {
         this.resolver = Objects.requireNonNull(resolver, "resolver");
@@ -261,16 +264,20 @@ public final class DnsDiscoveryPlugin implements Plugin {
         @Override default void close() throws Exception { }
     }
 
-    /** A separate event loop with disabled DNS caches avoids the JVM's process-wide address cache. */
-    static final class UncachedAddressResolver implements AddressResolver {
+    /** Queries both DNS families without a resolver cache and fences transient partial answers. */
+    static final class RefreshingAddressResolver implements AddressResolver {
         private final DnsServerAddressStreamProvider nameServers;
         private NioEventLoopGroup eventLoops;
         private DnsNameResolver ipv4;
         private DnsNameResolver ipv6;
+        private List<InetAddress> lastIpv4 = List.of();
+        private List<InetAddress> lastIpv6 = List.of();
+        private int ipv4Failures;
+        private int ipv6Failures;
 
-        UncachedAddressResolver() { this(null); }
+        RefreshingAddressResolver() { this(null); }
 
-        UncachedAddressResolver(DnsServerAddressStreamProvider nameServers) {
+        RefreshingAddressResolver(DnsServerAddressStreamProvider nameServers) {
             this.nameServers = nameServers;
         }
 
@@ -289,27 +296,71 @@ public final class DnsDiscoveryPlugin implements Plugin {
             }
             var ipv4Result = ipv4.resolveAll(host);
             var ipv6Result = ipv6.resolveAll(host);
-            var addresses = new ArrayList<InetAddress>();
-            Exception firstFailure = null;
-            try { addresses.addAll(ipv4Result.get(5, TimeUnit.SECONDS)); }
+            List<InetAddress> currentIpv4 = null;
+            List<InetAddress> currentIpv6 = null;
+            Exception ipv4Failure = null;
+            Exception ipv6Failure = null;
+            try { currentIpv4 = ipv4Result.get(5, TimeUnit.SECONDS); }
             catch (InterruptedException interrupted) {
                 ipv4Result.cancel(true);
                 ipv6Result.cancel(true);
                 Thread.currentThread().interrupt();
                 throw interrupted;
             }
-            catch (Exception failure) { firstFailure = failure; }
-            try { addresses.addAll(ipv6Result.get(5, TimeUnit.SECONDS)); }
+            catch (Exception failure) {
+                if (recordAbsent(failure)) currentIpv4 = List.of();
+                else {
+                    ipv4Failure = failure;
+                    if (!ipv4Result.isDone()) ipv4Result.cancel(true);
+                }
+            }
+            try { currentIpv6 = ipv6Result.get(5, TimeUnit.SECONDS); }
             catch (InterruptedException interrupted) {
                 ipv6Result.cancel(true);
                 Thread.currentThread().interrupt();
                 throw interrupted;
             }
             catch (Exception failure) {
-                if (firstFailure == null) firstFailure = failure;
+                if (recordAbsent(failure)) currentIpv6 = List.of();
+                else {
+                    ipv6Failure = failure;
+                    if (!ipv6Result.isDone()) ipv6Result.cancel(true);
+                }
             }
-            if (addresses.isEmpty() && firstFailure != null) throw firstFailure;
+            if (currentIpv4 != null) {
+                lastIpv4 = List.copyOf(currentIpv4);
+                ipv4Failures = 0;
+            } else {
+                ipv4Failures = Math.min(MAX_CONSECUTIVE_LOOKUP_FAILURES, ipv4Failures + 1);
+                if (ipv4Failures == MAX_CONSECUTIVE_LOOKUP_FAILURES) lastIpv4 = List.of();
+            }
+            if (currentIpv6 != null) {
+                lastIpv6 = List.copyOf(currentIpv6);
+                ipv6Failures = 0;
+            } else {
+                ipv6Failures = Math.min(MAX_CONSECUTIVE_LOOKUP_FAILURES, ipv6Failures + 1);
+                if (ipv6Failures == MAX_CONSECUTIVE_LOOKUP_FAILURES) lastIpv6 = List.of();
+            }
+            if (ipv4Failure != null && ipv6Failure != null) throw ipv4Failure;
+            var addresses = new ArrayList<InetAddress>(lastIpv4.size() + lastIpv6.size());
+            addresses.addAll(lastIpv4);
+            addresses.addAll(lastIpv6);
+            if (addresses.isEmpty()) {
+                if (ipv4Failure != null && currentIpv6 != null
+                        && ipv4Failures == MAX_CONSECUTIVE_LOOKUP_FAILURES) return new InetAddress[0];
+                if (ipv6Failure != null && currentIpv4 != null
+                        && ipv6Failures == MAX_CONSECUTIVE_LOOKUP_FAILURES) return new InetAddress[0];
+                if (ipv4Failure != null) throw ipv4Failure;
+                if (ipv6Failure != null) throw ipv6Failure;
+                throw new UnknownHostException(host);
+            }
             return addresses.toArray(InetAddress[]::new);
+        }
+
+        private static boolean recordAbsent(Exception failure) {
+            Throwable reason = failure;
+            while (reason instanceof ExecutionException && reason.getCause() != null) reason = reason.getCause();
+            return reason instanceof UnknownHostException && reason.getCause() == null;
         }
 
         private DnsNameResolver newResolver(ResolvedAddressTypes family) {

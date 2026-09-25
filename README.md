@@ -37,7 +37,7 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 .\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\proxy-core\build\install\strataproxy\config\strataproxy.yml
 ```
 
-使用 DNS 插件时，把示例配置中的主机名换成自己的 DNS 主机名；相对插件目录随配置文件位置一起解析。
+使用 DNS 插件时，把示例配置中的主机名换成自己的 DNS 主机名；相对插件目录随配置文件位置一起解析。A 和 AAAA 记录分别刷新：一个地址族查询超时会暂时保留其上次结果，连续三次失败后只撤销该地址族；明确返回无记录会清除该地址族的缓存。两族均无记录时，目录在连续三次查询失败后撤销旧注册。
 
 ### Agent 动态注册插件
 
