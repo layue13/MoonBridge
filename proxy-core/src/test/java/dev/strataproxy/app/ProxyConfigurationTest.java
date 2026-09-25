@@ -42,7 +42,6 @@ final class ProxyConfigurationTest {
                     backends:
                       - name: lobby
                         address: "operator@127.0.0.1:25565"
-                        capacity: 100
                     """);
             assertEquals(1, ProxyMain.run(new String[]{"--validate-config", config.toString()}));
         } finally {
@@ -52,8 +51,8 @@ final class ProxyConfigurationTest {
 
     @Test
     void rejectsDuplicateStaticNames() {
-        var first = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25565", null, 100);
-        var second = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25566", null, 100);
+        var first = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25565", null);
+        var second = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25566", null);
         assertThrows(IllegalArgumentException.class,
                 () -> new ProxyConfiguration("127.0.0.1:25577", ProxyConfiguration.Authentication.OFFLINE,
                         java.util.List.of(first, second)));

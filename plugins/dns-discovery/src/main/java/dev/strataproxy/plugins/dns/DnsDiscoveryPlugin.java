@@ -251,7 +251,6 @@ public final class DnsDiscoveryPlugin implements Plugin {
                     name,
                     address,
                     Map.of("discovery", "dns"),
-                    config.capacity(),
                     Map.of("dns.host", config.host()));
             result.put(name, definition);
         }
@@ -386,12 +385,16 @@ public final class DnsDiscoveryPlugin implements Plugin {
     private record OwnedRegistration(ServerDefinition definition, ServerRegistration registration) {
     }
 
-    private record Configuration(String host, int port, String namePrefix, int capacity, int refreshSeconds) {
+    private record Configuration(String host, int port, String namePrefix, int refreshSeconds) {
         private static Configuration from(Map<String, String> settings) {
             Objects.requireNonNull(settings, "settings");
+            for (String key : settings.keySet()) {
+                if (!Set.of("host", "port", "namePrefix", "refreshSeconds").contains(key)) {
+                    throw new IllegalArgumentException("unknown DNS plugin setting '" + key + "'");
+                }
+            }
             String host = normalizeHost(required(settings, "host"));
             int port = integer(settings, "port", 25565, 1, 65535);
-            int capacity = integer(settings, "capacity", 100, 0, Integer.MAX_VALUE);
             int refreshSeconds = integer(settings, "refreshSeconds", 30, 1, 86400);
             String defaultPrefix = "dns-" + host.replace('.', '-');
             String prefix = settings.getOrDefault("namePrefix", defaultPrefix).trim();
@@ -399,7 +402,7 @@ public final class DnsDiscoveryPlugin implements Plugin {
                 throw new IllegalArgumentException("setting 'namePrefix' must start with a letter or digit and "
                         + "contain only letters, digits, '.', '_' or '-'");
             }
-            return new Configuration(host, port, prefix + "-", capacity, refreshSeconds);
+            return new Configuration(host, port, prefix + "-", refreshSeconds);
         }
 
         private static String required(Map<String, String> settings, String key) {

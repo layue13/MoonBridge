@@ -58,7 +58,7 @@ function WriteFrame([System.IO.Stream]$stream, [byte[]]$body) {
     $stream.Write($body)
 }
 
-function StatusMax([int]$port) {
+function StatusOnline([int]$port) {
     $client = [System.Net.Sockets.TcpClient]::new()
     try {
         $client.Connect([System.Net.IPAddress]::Loopback, $port)
@@ -79,20 +79,20 @@ function StatusMax([int]$port) {
         $packetStream = [System.IO.MemoryStream]::new($body)
         if ((ReadVarInt $packetStream) -ne 0) { throw 'Unexpected status packet id' }
         $json = [System.Text.Encoding]::UTF8.GetString((ReadExactly $packetStream (ReadVarInt $packetStream))) | ConvertFrom-Json
-        return [int]$json.players.max
+        return [int]$json.players.online
     } finally { $client.Dispose() }
 }
 
-function WaitForMax([int]$port, [int]$expected) {
+function WaitForOnline([int]$port, [int]$expected) {
     $last = $null
     for ($attempt = 0; $attempt -lt 50; $attempt++) {
         try {
-            $last = StatusMax $port
+            $last = StatusOnline $port
             if ($last -eq $expected) { return }
         } catch { $last = $_.Exception.Message }
         Start-Sleep -Milliseconds 100
     }
-    throw "Expected status max=$expected on port $port; last result=$last"
+    throw "Expected status online=$expected on port $port; last result=$last"
 }
 
 function StartFakeBackend([int]$ProbeCount = 1) {
@@ -227,6 +227,19 @@ function LoginThroughProxy([int]$port, [switch]$KeepOpen) {
     }
 }
 
+function WaitForLogin([int]$port, [switch]$KeepOpen) {
+    $last = $null
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        try {
+            $result = LoginThroughProxy $port -KeepOpen:$KeepOpen
+            return $result
+        }
+        catch { $last = $_.Exception.Message }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Discovered backend did not accept login on port $port; last result=$last"
+}
+
 function ExpectNoBackend([int]$port) {
     $client = [System.Net.Sockets.TcpClient]::new()
     try {
@@ -286,14 +299,13 @@ plugins:
     dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
       host: localhost
       port: "$($dnsBackend.Port)"
-      capacity: "17"
       refreshSeconds: "1"
 "@ | Set-Content -LiteralPath $dnsConfig -Encoding utf8
     $dns = StartProxy $dnsConfig $stdout $stderr
     $dnsAddresses = [System.Net.Dns]::GetHostAddresses('localhost').Length
-    WaitForMax $dnsPort (17 * $dnsAddresses)
-    Write-Output "DNS plugin: $dnsAddresses address(es), status max=$(StatusMax $dnsPort)"
-    LoginThroughProxy $dnsPort
+    WaitForOnline $dnsPort 0
+    WaitForLogin $dnsPort
+    Write-Output "DNS plugin: $dnsAddresses address(es), discovered backend accepted login"
     $null = Wait-Job -Job $dnsBackend.Job -Timeout 10
     if ($dnsBackend.Job.State -ne 'Completed') { throw "DNS fake backend job state=$($dnsBackend.Job.State)" }
     Receive-Job -Job $dnsBackend.Job -ErrorAction Stop | Out-Null
@@ -319,7 +331,8 @@ plugins:
       secret: "$secret"
 "@ | Set-Content -LiteralPath $agentConfig -Encoding utf8
     $agent = StartProxy $agentConfig $stdout $stderr
-    WaitForMax $proxyPort 0
+    WaitForOnline $proxyPort 0
+    ExpectNoBackend $proxyPort
     $generation = [guid]::NewGuid().ToString()
     $agentId = 'installed-smoke'
     $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
@@ -337,19 +350,18 @@ plugins:
             'X-Signature' = $signature
         } -TimeoutSec 5
     }
-    $registerBody = "action=register&generation=$generation&name=installed-smoke-backend&address=tcp%3A%2F%2F127.0.0.1%3A$($agentBackend.Port)&capacity=19&leaseSeconds=30"
+    $registerBody = "action=register&generation=$generation&name=installed-smoke-backend&address=tcp%3A%2F%2F127.0.0.1%3A$($agentBackend.Port)&leaseSeconds=30"
     $registered = SendAgent $registerBody
     if ($registered.StatusCode -ne 201) { throw "Agent registration returned $($registered.StatusCode)" }
-    WaitForMax $proxyPort 19
-    Write-Output "Agent plugin: registration status=$($registered.StatusCode), status max=$(StatusMax $proxyPort)"
-    $agentClient = LoginThroughProxy $proxyPort -KeepOpen
+    $agentClient = WaitForLogin $proxyPort -KeepOpen
+    Write-Output "Agent plugin: registration status=$($registered.StatusCode), discovered backend accepted login"
     Write-Output 'Agent plugin: discovered backend completed Login Success, Join Game, and PLAY relay'
     $nonce = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
     $unregistered = SendAgent "action=unregister&generation=$generation"
     if ($unregistered.StatusCode -ne 204) { throw "Agent unregister returned $($unregistered.StatusCode)" }
-    WaitForMax $proxyPort 1
+    WaitForOnline $proxyPort 1
     ExpectNoBackend $proxyPort
-    Write-Output 'Agent plugin: unregister status=204, status max=1 while player remains connected'
+    Write-Output 'Agent plugin: unregister status=204, existing player remains connected'
     $stream = $agentClient.GetStream()
     WriteFrame $stream ([byte[]]@(3, 43))
     $echo = ReadExactly $stream (ReadVarInt $stream)
@@ -361,8 +373,8 @@ plugins:
     $null = Wait-Job -Job $agentBackend.Job -Timeout 10
     if ($agentBackend.Job.State -ne 'Completed') { throw "Agent fake backend job state=$($agentBackend.Job.State)" }
     Receive-Job -Job $agentBackend.Job -ErrorAction Stop | Out-Null
-    WaitForMax $proxyPort 0
-    Write-Output 'Agent plugin: existing PLAY session survived unregister, status max=0 after disconnect'
+    WaitForOnline $proxyPort 0
+    Write-Output 'Agent plugin: existing PLAY session survived unregister, online=0 after disconnect'
 } catch {
     foreach ($backend in @($dnsBackend, $agentBackend)) {
         if ($backend) {

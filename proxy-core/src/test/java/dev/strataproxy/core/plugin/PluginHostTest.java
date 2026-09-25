@@ -17,7 +17,6 @@ import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.BackendView;
-import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -126,7 +125,7 @@ class PluginHostTest {
 
         assertThrows(IllegalStateException.class, () -> old.update(server("dynamic")));
         current.update(new ServerDefinition("dynamic", URI.create("tcp://127.0.0.1:25566"),
-                Map.of(), 20, Map.of()));
+                Map.of(), Map.of()));
         host.close();
         assertThrows(IllegalStateException.class, () -> current.unregister());
     }
@@ -336,7 +335,7 @@ class PluginHostTest {
     }
 
     private static ServerDefinition server(String name) {
-        return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), 20, Map.of());
+        return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), Map.of());
     }
 
     private static void serviceJar(Path path, String provider) throws IOException {
@@ -455,8 +454,5 @@ class PluginHostTest {
         }
         @Override public Optional<BackendView> find(BackendId id) { return delegate.find(id); }
         @Override public List<BackendView> snapshot() { return delegate.snapshot(); }
-        @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
-            return delegate.reserve(handle, units);
-        }
     }
 }

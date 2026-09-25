@@ -9,9 +9,6 @@ public record BackendView(
         BackendHandle handle,
         BackendOwner owner,
         URI address,
-        int capacity,
-        int connectedPlayers,
-        int reservedCapacity,
         Map<String, String> tags,
         Map<String, String> metadata) {
     public BackendView {
@@ -20,12 +17,5 @@ public record BackendView(
         Objects.requireNonNull(address, "address");
         tags = Map.copyOf(Objects.requireNonNull(tags, "tags"));
         metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
-        if (capacity < 0 || connectedPlayers < 0 || reservedCapacity < 0) {
-            throw new IllegalArgumentException("Capacity values must be non-negative");
-        }
-    }
-
-    public int availableUnits() {
-        return Math.max(0, capacity - connectedPlayers - reservedCapacity);
     }
 }

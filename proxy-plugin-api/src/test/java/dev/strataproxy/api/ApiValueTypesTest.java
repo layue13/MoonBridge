@@ -17,7 +17,7 @@ class ApiValueTypesTest {
         var metadata = new HashMap<>(Map.of("pool", "blue"));
 
         var definition = new ServerDefinition("game-1", URI.create("tcp://127.0.0.1:25565"),
-                tags, 100, metadata);
+                tags, metadata);
         tags.put("region", "us");
         metadata.put("pool", "green");
 
@@ -33,7 +33,7 @@ class ApiValueTypesTest {
                 "tcp://operator@127.0.0.1:25565", "tcp://127.0.0.1:25565/world",
                 "tcp://127.0.0.1:25565?mode=play", "tcp://127.0.0.1:25565#backend"}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> new ServerDefinition("game-1", URI.create(address), Map.of(), 100, Map.of()), address);
+                    () -> new ServerDefinition("game-1", URI.create(address), Map.of(), Map.of()), address);
         }
     }
 

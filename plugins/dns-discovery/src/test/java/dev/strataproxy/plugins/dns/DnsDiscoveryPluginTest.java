@@ -57,7 +57,6 @@ class DnsDiscoveryPluginTest {
                 "host", "backend.example",
                 "port", "25570",
                 "namePrefix", "forge",
-                "capacity", "48",
                 "refreshSeconds", "1")));
 
         plugin.onEnable();
@@ -69,7 +68,6 @@ class DnsDiscoveryPluginTest {
         assertEquals("tcp://10.1.2.3:25570", servers.definitions.get(firstName).address().toString());
         assertEquals("tcp://10.1.2.4:25570", servers.definitions.get(secondName).address().toString());
         assertEquals("tcp://[2001:db8:0:0:0:0:0:1]:25570", servers.definitions.get(ipv6Name).address().toString());
-        assertEquals(48, servers.definitions.get(ipv6Name).capacity());
         assertEquals(3, servers.registerCalls.get());
         assertEquals(List.of(firstName, secondName, ipv6Name), servers.registrationOrder);
 
@@ -266,6 +264,11 @@ class DnsDiscoveryPluginTest {
 
     @Test
     void rejectsInvalidSettingsBeforeStartingWorker() {
+        DnsDiscoveryPlugin obsoleteCapacity = new DnsDiscoveryPlugin(host -> new InetAddress[0]);
+        assertThrows(IllegalArgumentException.class,
+                () -> obsoleteCapacity.onLoad(context(new FakeServers(),
+                        Map.of("host", "pool.example", "capacity", "10"))));
+
         DnsDiscoveryPlugin missingHost = new DnsDiscoveryPlugin(host -> new InetAddress[0]);
         assertThrows(IllegalArgumentException.class,
                 () -> missingHost.onLoad(context(new FakeServers(), Map.of("port", "25565"))));

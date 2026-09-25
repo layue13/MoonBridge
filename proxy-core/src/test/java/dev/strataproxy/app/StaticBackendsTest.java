@@ -17,11 +17,11 @@ final class StaticBackendsTest {
     void configuredAndPluginServersShareTheCatalog() {
         var catalog = new InMemoryBackendCatalog();
         var configuration = new ProxyConfiguration("127.0.0.1:25577", ProxyConfiguration.Authentication.OFFLINE, List.of(
-                new ProxyConfiguration.Backend("lobby", "127.0.0.1:25565", Map.of("role", "spawn"), 100)));
+                new ProxyConfiguration.Backend("lobby", "127.0.0.1:25565", Map.of("role", "spawn"))));
 
         StaticBackends.register(configuration, catalog);
         catalog.register(new BackendRegistration(new BackendId("island"),
-                new BackendOwner("plugin:islands", 1), URI.create("tcp://127.0.0.1:25566"), 40));
+                new BackendOwner("plugin:islands", 1), URI.create("tcp://127.0.0.1:25566")));
 
         assertEquals(2, catalog.snapshot().size());
         var view = catalog.find(new BackendId("lobby")).orElseThrow();

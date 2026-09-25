@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Plugin-owned configuration for one dynamically registered backend. */
-public record ServerDefinition(String name, URI address, Map<String, String> tags, int capacity,
+public record ServerDefinition(String name, URI address, Map<String, String> tags,
                                Map<String, String> metadata) {
     public ServerDefinition {
         Objects.requireNonNull(name, "name");
@@ -18,9 +18,6 @@ public record ServerDefinition(String name, URI address, Map<String, String> tag
                 || address.getRawUserInfo() != null || (path != null && !path.isEmpty())
                 || address.getRawQuery() != null || address.getRawFragment() != null) {
             throw new IllegalArgumentException("server requires a name and tcp://host:port address");
-        }
-        if (capacity < 0) {
-            throw new IllegalArgumentException("capacity must be non-negative");
         }
     }
 }

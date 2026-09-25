@@ -11,5 +11,4 @@ plugins:
       host: "backends.example.net"
       port: "25565"
       namePrefix: "discovered"
-      capacity: "100"
       refreshSeconds: "30"

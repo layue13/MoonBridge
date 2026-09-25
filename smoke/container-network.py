@@ -117,7 +117,7 @@ def connect(host, port):
     return peer
 
 
-def status_max(host):
+def status_online(host):
     with connect(host, 25577) as peer:
         frame(peer, b"\x00" + varint(5) + string("smoke") + (25565).to_bytes(2, "big") + varint(1))
         frame(peer, b"\x00")
@@ -127,21 +127,21 @@ def status_max(host):
         document, offset = parse_string(response, 1)
         if offset != len(response):
             raise ValueError("trailing status bytes")
-        return json.loads(document)["players"]["max"]
+        return json.loads(document)["players"]["online"]
 
 
-def wait_max(host, expected):
+def wait_online(host, expected):
     deadline = time.monotonic() + 15
     last = None
     while time.monotonic() < deadline:
         try:
-            last = status_max(host)
+            last = status_online(host)
             if last == expected:
                 return
         except (OSError, EOFError, ValueError) as failure:
             last = str(failure)
         time.sleep(0.2)
-    raise AssertionError(f"status max did not become {expected}; last={last}")
+    raise AssertionError(f"status online did not become {expected}; last={last}")
 
 
 def login(host):
@@ -157,6 +157,18 @@ def login(host):
     except BaseException:
         peer.close()
         raise
+
+
+def wait_login(host):
+    deadline = time.monotonic() + 15
+    last = None
+    while time.monotonic() < deadline:
+        try:
+            return login(host)
+        except (OSError, EOFError, ValueError, AssertionError) as failure:
+            last = str(failure)
+        time.sleep(0.2)
+    raise AssertionError(f"discovered backend did not accept login; last={last}")
 
 
 def probe(peer, value):
@@ -182,26 +194,26 @@ def agent_request(host, secret, agent_id, fields):
 
 
 def client(mode, host, backend_host):
-    wait_max(host, 0 if mode == "agent" else 4)
+    wait_online(host, 0)
     if mode == "agent":
         secret = os.environ["STRATAPROXY_AGENT_SECRET"]
         generation = str(uuid.uuid4())
         agent_id = "container-network-smoke"
         status = agent_request(host, secret, agent_id, {
             "action": "register", "generation": generation, "name": "remote",
-            "address": f"tcp://{backend_host}:25565", "capacity": "4", "leaseSeconds": "30"})
+            "address": f"tcp://{backend_host}:25565", "leaseSeconds": "30"})
         if status != 201:
             raise AssertionError(f"agent registration returned {status}")
-        wait_max(host, 4)
-    with login(host) as peer:
+    with wait_login(host) as peer:
         probe(peer, 42)
         if mode == "agent":
             status = agent_request(host, secret, agent_id,
                                    {"action": "unregister", "generation": generation})
             if status != 204:
                 raise AssertionError(f"agent unregister returned {status}")
-            wait_max(host, 1)
+            wait_online(host, 1)
             probe(peer, 43)
+    wait_online(host, 0)
     print(f"CLIENT_OK mode={mode} backend={backend_host} login=1 play_probes={2 if mode == 'agent' else 1}",
           flush=True)
 

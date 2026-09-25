@@ -4,12 +4,11 @@ import java.net.URI;
 import java.util.Map;
 import java.util.Objects;
 
-/** Address and capacity supplied by a registration owner. */
+/** Address and plugin data supplied by a registration owner. */
 public record BackendRegistration(
         BackendId id,
         BackendOwner owner,
         URI address,
-        int capacity,
         Map<String, String> tags,
         Map<String, String> metadata) {
     public BackendRegistration {
@@ -25,12 +24,9 @@ public record BackendRegistration(
                 || address.getRawQuery() != null || address.getRawFragment() != null) {
             throw new IllegalArgumentException("Backend address must be tcp://host:port");
         }
-        if (capacity < 0) {
-            throw new IllegalArgumentException("Capacity must be non-negative");
-        }
     }
 
-    public BackendRegistration(BackendId id, BackendOwner owner, URI address, int capacity) {
-        this(id, owner, address, capacity, Map.of(), Map.of());
+    public BackendRegistration(BackendId id, BackendOwner owner, URI address) {
+        this(id, owner, address, Map.of(), Map.of());
     }
 }

@@ -14,7 +14,6 @@ import dev.strataproxy.core.auth.OnlineModeCrypto;
 import dev.strataproxy.core.auth.VerifiedProfile;
 import dev.strataproxy.core.backend.BackendView;
 import dev.strataproxy.core.backend.BackendId;
-import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.forwarding.BungeeLegacyForwarding;
 import dev.strataproxy.core.protocol.LoginStart;
 import dev.strataproxy.core.protocol.Minecraft1710EntityIds;
@@ -73,7 +72,6 @@ final class Session extends ChannelInboundHandlerAdapter {
     private boolean identityClaimed;
     private volatile PlayerView view;
     private BackendView selected;
-    private CapacityReservation reservation;
     private boolean placementInProgress;
     private CompletableFuture<Optional<PlacementDecision>> placementRequest;
     private boolean loginDisconnectStarted;
@@ -276,11 +274,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void sendStatus() {
         int online = owner.onlineCount();
-        long declaredCapacity = 0;
-        for (BackendView backendView : owner.catalog().snapshot()) {
-            declaredCapacity = Math.min(Integer.MAX_VALUE, declaredCapacity + backendView.capacity());
-        }
-        int max = (int) Math.max(online, declaredCapacity);
+        int max = Math.max(1, online);
         String json = "{\"version\":{\"name\":\"1.7.10\",\"protocol\":5},\"players\":{\"max\":"
                 + max + ",\"online\":" + online
                 + ",\"sample\":[]},\"description\":{\"text\":\"StrataProxy\"}}";
@@ -307,18 +301,13 @@ final class Session extends ChannelInboundHandlerAdapter {
                     .filter(candidate -> candidate.handle().id().value().equals(selectedDecision.backendName()))
                     .findFirst().orElse(null);
         } else {
-            backendView = owner.catalog().snapshot().stream().filter(candidate -> candidate.availableUnits() > 0).findFirst().orElse(null);
+            backendView = owner.catalog().snapshot().stream().findFirst().orElse(null);
         }
         if (backendView == null) {
             disconnectLogin("No server is available.");
             return;
         }
-        reservation = owner.catalog().reserve(backendView.handle(), 1).orElse(null);
-        if (reservation == null) {
-            disconnectLogin("The selected server is full or unavailable.");
-            return;
-        }
-        selected = reservation.backendView();
+        selected = backendView;
         if (!"tcp".equalsIgnoreCase(selected.address().getScheme()) || selected.address().getHost() == null || selected.address().getPort() < 1) {
             closePair();
             return;
@@ -417,10 +406,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         UUID expected = owner.onlineMode() ? verifiedProfile.uuid()
                 : UUID.nameUUIDFromBytes(("OfflinePlayer:" + success.username()).getBytes(StandardCharsets.UTF_8));
         if (!expected.equals(success.playerId())) {
-            closePair();
-            return;
-        }
-        if (reservation == null || !reservation.commit()) {
             closePair();
             return;
         }
@@ -651,12 +636,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
             return;
         }
-        CapacityReservation claim = owner.catalog().reserve(target.handle(), 1).orElse(null);
-        if (claim == null) {
-            result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
-            return;
-        }
-        TransferAttempt attempt = new TransferAttempt(claim.backendView(), claim, result, relay);
+        TransferAttempt attempt = new TransferAttempt(target, result, relay);
         transfer = attempt;
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
@@ -760,7 +740,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 failTransfer(attempt, "client packet was incomplete at the transfer boundary");
                 return;
             }
-            if (!attempt.channel.isActive() || !attempt.claim.commit()) {
+            if (!attempt.channel.isActive()) {
                 failTransfer(attempt, "replacement backend became unavailable");
                 return;
             }
@@ -864,18 +844,15 @@ final class Session extends ChannelInboundHandlerAdapter {
                     return;
                 }
                 Channel oldBackend = backend;
-                CapacityReservation oldReservation = reservation;
                 PlayObservation oldObservation = playObservation;
                 TransferFrameHandler.State oldFrameState = frameState;
                 backend = attempt.channel;
-                reservation = attempt.claim;
                 selected = attempt.target;
                 playObservation = nextObservation;
                 relay = next;
                 frameState = attempt.frameState;
                 view = new PlayerView(identity, view.username(), selected.handle().id().value());
                 oldBackend.close();
-                oldReservation.close();
                 oldObservation.close();
                 if (oldFrameState != null) oldFrameState.close();
                 try {
@@ -979,7 +956,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
         if (attempt.frameState != null) attempt.frameState.close();
-        attempt.claim.close();
         if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
     }
 
@@ -1021,7 +997,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();
-            if (reservation != null) reservation.close();
             if (playObservation != null) playObservation.close();
             if (frameState != null) frameState.close();
             PendingTransfer waiting = pendingTransfer;
@@ -1036,7 +1011,6 @@ final class Session extends ChannelInboundHandlerAdapter {
                 activeTransfer.finished = true;
                 if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
-                activeTransfer.claim.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
                 activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
@@ -1076,7 +1050,6 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private static final class TransferAttempt {
         private final BackendView target;
-        private final CapacityReservation claim;
         private final CompletableFuture<TransferResult> result;
         private final RawRelay.Link oldRelay;
         private TransferCandidate candidate;
@@ -1091,10 +1064,9 @@ final class Session extends ChannelInboundHandlerAdapter {
         private String failureReason;
         private ScheduledFuture<?> cutoverDeadline;
 
-        private TransferAttempt(BackendView target, CapacityReservation claim,
+        private TransferAttempt(BackendView target,
                                 CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {
             this.target = target;
-            this.claim = claim;
             this.result = result;
             this.oldRelay = oldRelay;
         }

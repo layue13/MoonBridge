@@ -23,7 +23,6 @@ public final class StaticBackends {
                     new BackendId(backend.name()),
                     OWNER,
                     URI.create("tcp://" + backend.address().trim()),
-                    backend.capacity(),
                     backend.tags(),
                     java.util.Map.of()));
         }

@@ -32,13 +32,15 @@ public final class UraniumTransferPlugin implements Plugin {
         }
         returnToOld = Boolean.parseBoolean(returnSetting);
         targetRegistration = context.servers().register(new ServerDefinition("new",
-                URI.create("tcp://127.0.0.1:" + port), Map.of(), 10,
+                URI.create("tcp://127.0.0.1:" + port), Map.of(),
                 Map.of("source", "uranium-smoke-plugin")));
         context.logger().info("SMOKE_PLUGIN_REGISTER_PASS name=new port={}", port);
     }
 
     @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
         return Optional.of((player, servers) -> {
+            context.logger().info("SMOKE_PLUGIN_PLACEMENT player={} backends={}", player.username(),
+                    servers.stream().map(server -> server.name()).toList());
             if (servers.stream().noneMatch(server -> server.name().equals("old"))
                     || servers.stream().noneMatch(server -> server.name().equals("new")
                             && "uranium-smoke-plugin".equals(server.metadata().get("source")))) {

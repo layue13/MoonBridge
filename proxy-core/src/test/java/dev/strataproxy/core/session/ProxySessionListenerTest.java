@@ -12,7 +12,6 @@ import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.BackendView;
-import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
 import io.netty.buffer.Unpooled;
@@ -138,7 +137,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("lobby"))));
@@ -156,7 +155,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void initialLoginConnectsToTheEndpointActuallyReservedAfterAnAddressUpdate() throws Exception {
+    void initialLoginUsesCurrentAddressWhenDirectoryUpdatesBeforeSelection() throws Exception {
         String username = "MovedPlayer";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
         var catalog = new InMemoryBackendCatalog();
@@ -166,9 +165,9 @@ final class ProxySessionListenerTest {
             var owner = new BackendOwner("static", 0);
             var id = new BackendId("lobby");
             var original = catalog.register(new BackendRegistration(id, owner,
-                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort()), 1));
+                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort())));
             var moved = new BackendRegistration(id, owner,
-                    URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()), 1);
+                    URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()));
             var updated = new AtomicBoolean();
             BackendCatalog movingCatalog = new BackendCatalog() {
                 @Override public BackendView register(BackendRegistration definition) {
@@ -180,10 +179,9 @@ final class ProxySessionListenerTest {
                 @Override public boolean remove(BackendHandle handle) { return catalog.remove(handle); }
                 @Override public int removeOwner(BackendOwner value) { return catalog.removeOwner(value); }
                 @Override public Optional<BackendView> find(BackendId value) { return catalog.find(value); }
-                @Override public List<BackendView> snapshot() { return catalog.snapshot(); }
-                @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
-                    if (updated.compareAndSet(false, true)) catalog.update(handle, moved).orElseThrow();
-                    return catalog.reserve(handle, units);
+                @Override public List<BackendView> snapshot() {
+                    if (updated.compareAndSet(false, true)) catalog.update(original.handle(), moved).orElseThrow();
+                    return catalog.snapshot();
                 }
             };
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
@@ -207,7 +205,6 @@ final class ProxySessionListenerTest {
                         writeString(success, username);
                         writeFrame(new DataOutputStream(backend.getOutputStream()), success.toByteArray());
                         assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
-                        assertEquals(1, catalog.find(original.handle().id()).orElseThrow().connectedPlayers());
                         assertEquals(moved.address(), catalog.find(original.handle().id()).orElseThrow().address());
                     }
                 }
@@ -215,7 +212,6 @@ final class ProxySessionListenerTest {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
             assertTrue(updated.get());
-            assertEquals(1, catalog.find(original.handle().id()).orElseThrow().availableUnits());
         }
     }
 
@@ -223,7 +219,7 @@ final class ProxySessionListenerTest {
     void closingListenerEndsPendingPlacementAndIgnoresLateDecision() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
-                new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:1"), 1, Map.of(), Map.of()));
+                new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:1"), Map.of(), Map.of()));
         var placementEntered = new CompletableFuture<Void>();
         var decision = new CompletableFuture<Optional<PlacementDecision>>();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
@@ -245,7 +241,6 @@ final class ProxySessionListenerTest {
                 assertTrue(listener.online().isEmpty());
                 assertTrue(listener.allSessions().isEmpty());
                 assertEquals(0, listener.onlineCount());
-                assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
             }
         } finally {
             listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -281,7 +276,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void closingListenerDisconnectsActiveSessionAndReleasesCapacity() throws Exception {
+    void closingListenerDisconnectsActiveSession() throws Exception {
         String username = "ShutdownPlayer";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
         var catalog = new InMemoryBackendCatalog();
@@ -308,7 +303,7 @@ final class ProxySessionListenerTest {
 
             var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
                     new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("lobby"))));
@@ -322,7 +317,6 @@ final class ProxySessionListenerTest {
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                     while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertEquals(1, listener.online().size());
-                    assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().connectedPlayers());
 
                     listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
                     assertEquals(-1, client.getInputStream().read());
@@ -330,7 +324,6 @@ final class ProxySessionListenerTest {
                     assertTrue(listener.online().isEmpty());
                     assertTrue(listener.allSessions().isEmpty());
                     assertEquals(0, listener.onlineCount());
-                    assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
                 }
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -366,7 +359,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://backend.test:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://backend.test:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, null, Duration.ofSeconds(15), Duration.ofSeconds(15), Duration.ofSeconds(15), resolver);
             listener.setPlacement(player -> CompletableFuture.completedFuture(
@@ -447,7 +440,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, null, Duration.ofMillis(300), Duration.ofSeconds(1));
             listener.setPlacement(player -> {
@@ -491,7 +484,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, null, Duration.ofSeconds(1), Duration.ofSeconds(1));
             listener.setPlacement(player -> CompletableFuture.completedFuture(
@@ -515,7 +508,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void stalledInitialPlayHandshakeClosesSessionAndReleasesCapacity() throws Exception {
+    void stalledInitialPlayHandshakeClosesSession() throws Exception {
         String username = "StalledWorld";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
         var catalog = new InMemoryBackendCatalog();
@@ -543,7 +536,7 @@ final class ProxySessionListenerTest {
             backendThread.start();
             var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
                     new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, null, Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
                     Duration.ofMillis(250));
@@ -561,11 +554,10 @@ final class ProxySessionListenerTest {
                 }
                 backendClosed.get(5, TimeUnit.SECONDS);
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while ((!listener.online().isEmpty()
-                        || catalog.find(registered.handle().id()).orElseThrow().availableUnits() != 1)
+                while ((!listener.online().isEmpty() || !listener.allSessions().isEmpty())
                         && System.nanoTime() < deadline) Thread.sleep(5);
                 assertTrue(listener.online().isEmpty());
-                assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
+                assertTrue(listener.allSessions().isEmpty());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
@@ -613,7 +605,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, null, Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
                     Duration.ofMillis(500));
@@ -667,8 +659,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
-                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()),
-                    2, Map.of(), Map.of()));
+                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
             try {
@@ -683,7 +674,6 @@ final class ProxySessionListenerTest {
                     sendLogin(second, username);
                     assertEquals(-1, second.getInputStream().read());
                     assertEquals(1, listener.online().size());
-                    assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().connectedPlayers());
                 }
             } finally {
                 releaseBackend.countDown();
@@ -754,7 +744,7 @@ final class ProxySessionListenerTest {
             backendThread.start();
 
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, (name, hash, ip) -> {
                         assertEquals("Alice", name);
@@ -869,9 +859,9 @@ final class ProxySessionListenerTest {
 
             var owner = new BackendOwner("static", 0);
             catalog.register(new BackendRegistration(new BackendId("old"), owner,
-                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort()), Map.of(), Map.of()));
             catalog.register(new BackendRegistration(new BackendId("new"), owner,
-                    URI.create("tcp://127.0.0.1:" + replacement.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + replacement.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, (name, hash, ip) -> CompletableFuture.completedFuture(
                             Optional.of(new VerifiedProfile(uuid, "Alice", List.of()))));
@@ -1128,7 +1118,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void oversizedVerifiedProfileFailsLoginPromptlyAndReleasesCapacity() throws Exception {
+    void oversizedVerifiedProfileFailsLoginPromptly() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var properties = java.util.List.of(
                 new ProfileProperty("first", "a".repeat(20_000), null),
@@ -1137,7 +1127,7 @@ final class ProxySessionListenerTest {
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
             var registration = catalog.register(new BackendRegistration(new BackendId("lobby"),
                     new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     catalog, (name, hash, ip) -> CompletableFuture.completedFuture(
                             Optional.of(new VerifiedProfile(uuid, name, properties))));
@@ -1177,9 +1167,9 @@ final class ProxySessionListenerTest {
                     assertEquals(-1, encryptedInput.read());
                 }
                 long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (catalog.find(registration.handle().id()).orElseThrow().availableUnits() != 1
+                while (!listener.allSessions().isEmpty()
                         && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
-                assertEquals(1, catalog.find(registration.handle().id()).orElseThrow().availableUnits());
+                assertTrue(listener.allSessions().isEmpty());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
@@ -1222,7 +1212,7 @@ final class ProxySessionListenerTest {
         }
         var catalog = new InMemoryBackendCatalog();
         catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                URI.create("tcp://127.0.0.1:" + unavailablePort), 1));
+                URI.create("tcp://127.0.0.1:" + unavailablePort)));
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
         try {
@@ -1272,7 +1262,7 @@ final class ProxySessionListenerTest {
             backendThread.start();
 
             catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort())));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
             var heldContext = new AtomicReference<ChannelHandlerContext>();
@@ -1320,9 +1310,9 @@ final class ProxySessionListenerTest {
                     }
                     assertEquals(-1, input.read());
                     long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while (catalog.find(new BackendId("lobby")).orElseThrow().reservedCapacity() != 0
+                    while (!listener.allSessions().isEmpty()
                             && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
-                    assertEquals(0, catalog.find(new BackendId("lobby")).orElseThrow().reservedCapacity());
+                    assertTrue(listener.allSessions().isEmpty());
                 }
             } finally {
                 sendDisconnect.complete(null);
@@ -1373,7 +1363,7 @@ final class ProxySessionListenerTest {
 
             var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
                     new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
             var heldContext = new AtomicReference<ChannelHandlerContext>();
@@ -1435,9 +1425,9 @@ final class ProxySessionListenerTest {
                     }
                     assertEquals(-1, input.read());
                     long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while (catalog.find(backend.handle().id()).orElseThrow().connectedPlayers() != 0
+                    while (!listener.allSessions().isEmpty()
                             && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
-                    assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().connectedPlayers());
+                    assertTrue(listener.allSessions().isEmpty());
                 }
             } finally {
                 sendDisconnect.complete(null);
@@ -1449,7 +1439,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void fragmentsLoginRelaysOrdinaryFramesAndReleasesCapacityOnBackendClose() throws Exception {
+    void fragmentsLoginRelaysOrdinaryFramesAndClosesSessionOnBackendClose() throws Exception {
         String username = "ForgePlayer";
         byte[] largePlay = new byte[4097];
         largePlay[0] = 0x03;
@@ -1498,7 +1488,7 @@ final class ProxySessionListenerTest {
             backendThread.start();
 
             var backend = catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
             try {
@@ -1537,7 +1527,6 @@ final class ProxySessionListenerTest {
                     while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertEquals(1, listener.online().size());
                     assertEquals("lobby", listener.online().get(0).currentServer().orElseThrow());
-                    assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
                     var occupiedStatus = requestStatus(listenPort);
                     assertEquals(1, occupiedStatus.path("players").path("online").asInt());
                     assertEquals(1, occupiedStatus.path("players").path("max").asInt());
@@ -1553,9 +1542,6 @@ final class ProxySessionListenerTest {
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                 assertTrue(listener.online().isEmpty());
-                while (catalog.find(backend.handle().id()).orElseThrow().availableUnits() != 1
-                        && System.nanoTime() < deadline) Thread.sleep(5);
-                assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
                 while (listener.onlineCount() != 0 && System.nanoTime() < deadline) Thread.sleep(5);
                 assertEquals(0, requestStatus(listenPort).path("players").path("online").asInt());
             } finally {
@@ -1578,7 +1564,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             var backend = catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
             try {
@@ -1598,9 +1584,9 @@ final class ProxySessionListenerTest {
                 }
                 assertTrue(listener.online().isEmpty());
                 long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                while (catalog.find(backend.handle().id()).orElseThrow().availableUnits() != 1
+                while (!listener.allSessions().isEmpty()
                         && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
-                assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
+                assertTrue(listener.allSessions().isEmpty());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
@@ -1630,8 +1616,7 @@ final class ProxySessionListenerTest {
             backendThread.setDaemon(true);
             backendThread.start();
             var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
-                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()),
-                    1, Map.of(), Map.of()));
+                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             listener.setPlacement(player -> CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("lobby"))));
@@ -1641,13 +1626,11 @@ final class ProxySessionListenerTest {
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
                     sendLogin(client, "LeftAtLogin");
                     backendReceivedLogin.get(5, TimeUnit.SECONDS);
-                    assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
                 }
                 backendClosed.get(5, TimeUnit.SECONDS);
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                 assertTrue(listener.allSessions().isEmpty());
-                assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }

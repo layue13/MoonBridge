@@ -17,5 +17,4 @@ public interface BackendCatalog {
 
     List<BackendView> snapshot();
 
-    Optional<CapacityReservation> reserve(BackendHandle handle, int units);
 }

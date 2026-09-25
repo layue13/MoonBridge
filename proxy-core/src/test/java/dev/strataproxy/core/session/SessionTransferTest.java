@@ -8,7 +8,6 @@ import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.BackendView;
-import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -447,15 +446,13 @@ final class SessionTransferTest {
                     assertEquals(-1, input.read());
                     oldClosed.get(5, TimeUnit.SECONDS);
                     newClosed.get(5, TimeUnit.SECONDS);
-                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
     }
 
     @Test
-    void transfersVanillaPlayConnectionWithoutSecondLoginAndReleasesOldCapacity() throws Exception {
+    void transfersVanillaPlayConnectionWithoutSecondLogin() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
@@ -520,15 +517,13 @@ final class SessionTransferTest {
                     var current = listener.find(player.identity()).orElseThrow();
                     assertEquals("new", current.currentServer().orElseThrow());
                     assertEquals(current, listener.online().get(0));
-                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(0, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
     }
 
     @Test
-    void transferConnectsToTheEndpointActuallyReservedAfterAnAddressUpdate() throws Exception {
+    void transferUsesCurrentAddressWhenDirectoryUpdatesBeforeLookup() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket staleTarget = server();
              ServerSocket movedTarget = server()) {
@@ -546,7 +541,7 @@ final class SessionTransferTest {
             register(catalog, "old", oldServer);
             BackendHandle targetHandle = register(catalog, "new", staleTarget);
             var moved = new BackendRegistration(targetHandle.id(), new BackendOwner("static", 0),
-                    URI.create("tcp://127.0.0.1:" + movedTarget.getLocalPort()), 1);
+                    URI.create("tcp://127.0.0.1:" + movedTarget.getLocalPort()));
             var updated = new AtomicBoolean();
             BackendCatalog movingCatalog = new BackendCatalog() {
                 @Override public BackendView register(BackendRegistration definition) {
@@ -558,16 +553,12 @@ final class SessionTransferTest {
                 @Override public boolean remove(BackendHandle handle) { return catalog.remove(handle); }
                 @Override public int removeOwner(BackendOwner value) { return catalog.removeOwner(value); }
                 @Override public Optional<BackendView> find(BackendId id) {
-                    Optional<BackendView> snapshot = catalog.find(id);
                     if (id.equals(targetHandle.id()) && updated.compareAndSet(false, true)) {
                         catalog.update(targetHandle, moved).orElseThrow();
                     }
-                    return snapshot;
+                    return catalog.find(id);
                 }
                 @Override public List<BackendView> snapshot() { return catalog.snapshot(); }
-                @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
-                    return catalog.reserve(handle, units);
-                }
             };
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                     movingCatalog);
@@ -598,13 +589,11 @@ final class SessionTransferTest {
                         assertEquals(7, packetId(readFrame(input)));
                         assertEquals(8, packetId(readFrame(input)));
                         assertEquals(moved.address(), catalog.find(targetHandle.id()).orElseThrow().address());
-                        assertEquals(1, catalog.find(targetHandle.id()).orElseThrow().connectedPlayers());
                     }
                 }
                 oldClosed.get(5, TimeUnit.SECONDS);
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
             assertTrue(updated.get());
-            assertEquals(1, catalog.find(targetHandle.id()).orElseThrow().availableUnits());
         }
     }
 
@@ -652,7 +641,7 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input)));
                     var player = awaitPlayer(listener);
                     var moved = new BackendRegistration(handle.id(), new BackendOwner("static", 0),
-                            URI.create("tcp://replacement.test:" + newServer.getLocalPort()), 1);
+                            URI.create("tcp://replacement.test:" + newServer.getLocalPort()));
                     catalog.update(handle, moved).orElseThrow();
 
                     var transferFuture = listener.transfer(player.identity(), "same").toCompletableFuture();
@@ -792,8 +781,6 @@ final class SessionTransferTest {
                     assertEquals(TransferStatus.FAILED, result.status());
                     newClosed.get(5, TimeUnit.SECONDS);
                     assertEquals("old", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
-                    assertEquals(0, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                     writeFrame(output, new byte[]{0x01, 0x55});
                     assertArrayEquals(new byte[]{0x03, 0x66}, readFrame(input));
                     oldRelayed.get(5, TimeUnit.SECONDS);
@@ -803,7 +790,7 @@ final class SessionTransferTest {
     }
 
     @Test
-    void failedCandidateLoginKeepsOldBackendUsableAndReleasesCandidateCapacity() throws Exception {
+    void failedCandidateLoginKeepsOldBackendUsable() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldRelayed = new CompletableFuture<Void>();
@@ -846,8 +833,6 @@ final class SessionTransferTest {
                     assertEquals(TransferStatus.FAILED, result.status());
                     newClosed.get(5, TimeUnit.SECONDS);
                     assertEquals("old", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
-                    assertEquals(0, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                     writeFrame(output, new byte[]{0x01, 0x55});
                     assertArrayEquals(new byte[]{0x03, 0x66}, readFrame(input));
                     oldRelayed.get(5, TimeUnit.SECONDS);
@@ -1109,8 +1094,6 @@ final class SessionTransferTest {
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                     while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertTrue(listener.allSessions().isEmpty());
-                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
@@ -1263,8 +1246,6 @@ final class SessionTransferTest {
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                     while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertTrue(listener.online().isEmpty());
-                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 } finally { client.close(); }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
@@ -1366,8 +1347,6 @@ final class SessionTransferTest {
                     while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertTrue(listener.online().isEmpty());
                     candidateClosed.get(5, TimeUnit.SECONDS);
-                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
-                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 } finally { client.close(); }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
@@ -1390,7 +1369,7 @@ final class SessionTransferTest {
     private static BackendHandle register(InMemoryBackendCatalog catalog,
                                                               String name, ServerSocket socket) {
         return catalog.register(new BackendRegistration(new BackendId(name), new BackendOwner("static", 0),
-                URI.create("tcp://127.0.0.1:" + socket.getLocalPort()), 1, Map.of(), Map.of())).handle();
+                URI.create("tcp://127.0.0.1:" + socket.getLocalPort()), Map.of(), Map.of())).handle();
     }
 
     private static void acceptLogin(DataInputStream input, DataOutputStream output, int dimension) throws Exception {

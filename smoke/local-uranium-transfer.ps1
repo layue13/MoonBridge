@@ -173,7 +173,6 @@ plugins:
 backends:
   - name: old
     address: "127.0.0.1:$oldPort"
-    capacity: 10
 "@ | Set-Content -LiteralPath $config -Encoding utf8
         $java = (Get-Command java.exe -ErrorAction Stop).Source
         $proxyLog = Join-Path $runDir 'proxy.stdout.log'

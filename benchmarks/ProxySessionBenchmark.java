@@ -66,10 +66,10 @@ public final class ProxySessionBenchmark {
             if (replacement != null) replacement.start();
             InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
             catalog.register(new BackendRegistration(new BackendId("bench"), new BackendOwner("synthetic", 0),
-                    URI.create("tcp://127.0.0.1:" + backend.port()), connections, Map.of(), Map.of()));
+                    URI.create("tcp://127.0.0.1:" + backend.port()), Map.of(), Map.of()));
             if (replacement != null) {
                 catalog.register(new BackendRegistration(new BackendId("replacement"), new BackendOwner("synthetic", 0),
-                        URI.create("tcp://127.0.0.1:" + replacement.port()), connections, Map.of(), Map.of()));
+                        URI.create("tcp://127.0.0.1:" + replacement.port()), Map.of(), Map.of()));
             }
             ProxySessionListener proxy = new ProxySessionListener(
                     new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);

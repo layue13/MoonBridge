@@ -41,9 +41,9 @@ public final class UraniumTransferProbe {
         var catalog = new InMemoryBackendCatalog();
         var owner = new BackendOwner("uranium-smoke", 1);
         catalog.register(new BackendRegistration(new BackendId("old"), owner,
-                URI.create("tcp://127.0.0.1:" + oldPort), 10, Map.of(), Map.of()));
+                URI.create("tcp://127.0.0.1:" + oldPort), Map.of(), Map.of()));
         catalog.register(new BackendRegistration(new BackendId("new"), owner,
-                URI.create("tcp://127.0.0.1:" + newPort), 10, Map.of(), Map.of()));
+                URI.create("tcp://127.0.0.1:" + newPort), Map.of(), Map.of()));
         var proxy = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         proxy.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
         try {

@@ -62,7 +62,6 @@ try {
 backends:
   - name: remote
     address: "${backend}:25565"
-    capacity: 4
 "@
         } else { 'backends: []' }
         $enabled = switch ($mode) {
@@ -73,7 +72,6 @@ backends:
     dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
       host: "$backend"
       port: "25565"
-      capacity: "4"
       refreshSeconds: "1"
 "@
             }

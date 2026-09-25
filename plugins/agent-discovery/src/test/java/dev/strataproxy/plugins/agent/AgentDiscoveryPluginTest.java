@@ -129,7 +129,7 @@ class AgentDiscoveryPluginTest {
         plugin.onEnable();
         try {
             String body = "action=register&generation=" + UUID.randomUUID()
-                    + "&name=game-http&address=tcp%3A%2F%2F127.0.0.1%3A25565&capacity=10&leaseSeconds=30";
+                    + "&name=game-http&address=tcp%3A%2F%2F127.0.0.1%3A25565&leaseSeconds=30";
             String agent = "agent-http";
             String timestamp = Long.toString(System.currentTimeMillis() / 1000);
             String nonce = "abcdefghijklmnopqrstuvwx";
@@ -163,7 +163,7 @@ class AgentDiscoveryPluginTest {
             var client = new AgentRegistrationClient(
                     URI.create("http://127.0.0.1:" + port + AgentDiscoveryPlugin.PATH),
                     "agent-recovery", UUID.randomUUID(), SECRET, "game-recovery",
-                    URI.create("tcp://127.0.0.1:25565"), 10, 5);
+                    URI.create("tcp://127.0.0.1:25565"), 5);
             client.registerOrHeartbeat();
             String firstGeneration = servers.definitions.get("game-recovery")
                     .metadata().get("agent.generation");
@@ -218,7 +218,7 @@ class AgentDiscoveryPluginTest {
     }
 
     private static ServerDefinition definition(String name) {
-        return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), 50, Map.of());
+        return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), Map.of());
     }
 
     private static final class RecordingServers implements Servers {

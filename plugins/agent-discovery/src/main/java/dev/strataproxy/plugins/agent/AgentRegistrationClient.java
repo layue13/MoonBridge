@@ -23,18 +23,16 @@ public final class AgentRegistrationClient {
     private final byte[] secret;
     private final String backendName;
     private final URI backendAddress;
-    private final int capacity;
     private final int leaseSeconds;
 
     public AgentRegistrationClient(URI endpoint, String agentId, UUID generation, byte[] secret,
-                                   String backendName, URI backendAddress, int capacity, int leaseSeconds) {
+                                   String backendName, URI backendAddress, int leaseSeconds) {
         this.endpoint = endpoint;
         this.agentId = agentId;
         this.generation = generation;
         this.secret = secret.clone();
         this.backendName = backendName;
         this.backendAddress = backendAddress;
-        this.capacity = capacity;
         this.leaseSeconds = leaseSeconds;
     }
 
@@ -53,7 +51,7 @@ public final class AgentRegistrationClient {
     private String registrationBody(UUID currentGeneration) {
         return "action=register&generation=" + encode(currentGeneration.toString())
                 + "&name=" + encode(backendName) + "&address=" + encode(backendAddress.toString())
-                + "&capacity=" + capacity + "&leaseSeconds=" + leaseSeconds;
+                + "&leaseSeconds=" + leaseSeconds;
     }
 
     public synchronized void unregister() throws IOException, InterruptedException {

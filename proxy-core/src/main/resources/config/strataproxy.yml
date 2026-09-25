@@ -9,4 +9,3 @@ backends:
     address: "127.0.0.1:25565"
     tags:
       role: "lobby"
-    capacity: 500

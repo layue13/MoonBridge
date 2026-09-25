@@ -355,8 +355,7 @@ public final class PluginHost implements AutoCloseable {
     }
 
     private static ServerView toServerView(BackendView view) {
-        return new ServerView(view.handle().id().value(), view.address(), view.tags(), view.metadata(),
-                view.capacity(), view.connectedPlayers(), view.reservedCapacity());
+        return new ServerView(view.handle().id().value(), view.address(), view.tags(), view.metadata());
     }
 
     private void requireState(State expected) {
@@ -488,7 +487,7 @@ public final class PluginHost implements AutoCloseable {
                 Objects.requireNonNull(definition, "definition");
                 BackendId id = new BackendId(definition.name());
                 BackendRegistration registration = new BackendRegistration(id, owner, definition.address(),
-                        definition.capacity(), definition.tags(), definition.metadata());
+                        definition.tags(), definition.metadata());
                 BackendView view = catalog.register(registration);
                 return new PluginServerRegistration(view.handle());
             }
@@ -510,7 +509,7 @@ public final class PluginHost implements AutoCloseable {
                     throw new IllegalArgumentException("An update must keep backend name " + handle.id().value());
                 }
                 BackendRegistration next = new BackendRegistration(handle.id(), owner, replacement.address(),
-                        replacement.capacity(), replacement.tags(), replacement.metadata());
+                        replacement.tags(), replacement.metadata());
                 if (catalog.update(handle, next).isEmpty()) {
                     active = false;
                     throw new IllegalStateException("Backend registration is stale: " + handle.id().value());

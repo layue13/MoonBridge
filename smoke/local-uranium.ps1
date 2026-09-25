@@ -112,7 +112,6 @@ plugins:
 backends:
   - name: uranium
     address: "127.0.0.1:$serverPort"
-    capacity: 10
 "@ | Set-Content -LiteralPath $config -Encoding utf8
     $java = (Get-Command java.exe -ErrorAction Stop).Source
     $classpath = Join-Path $proxyLib '*'

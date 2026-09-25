@@ -191,16 +191,15 @@ public final class AgentDiscoveryPlugin implements Plugin {
             return 204;
         }
         if (!action.equals("register")) throw new BadRequest("invalid action");
-        requireKeys(input, Set.of("action", "generation", "name", "address", "capacity", "leaseSeconds"));
+        requireKeys(input, Set.of("action", "generation", "name", "address", "leaseSeconds"));
         String name = required(input, "name");
         URI address;
         try { address = URI.create(required(input, "address")); }
         catch (IllegalArgumentException invalid) { throw new BadRequest("invalid address"); }
-        int capacity = integer(input, "capacity", 0, Integer.MAX_VALUE);
         int leaseSeconds = integer(input, "leaseSeconds", 5, configuration.maxLeaseSeconds());
         ServerDefinition definition;
         try {
-            definition = new ServerDefinition(name, address, Map.of("discovery", "agent"), capacity,
+            definition = new ServerDefinition(name, address, Map.of("discovery", "agent"),
                     Map.of("agent.id", agentId, "agent.generation", generation.toString()));
         } catch (IllegalArgumentException invalid) { throw new BadRequest("invalid server definition"); }
         return leases.register(agentId, generation, definition, leaseSeconds, System.currentTimeMillis());

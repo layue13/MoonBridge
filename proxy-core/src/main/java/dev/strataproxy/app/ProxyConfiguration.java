@@ -61,7 +61,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         return new InetSocketAddress(host, port);
     }
 
-    public record Backend(String name, String address, Map<String, String> tags, int capacity) {
+    public record Backend(String name, String address, Map<String, String> tags) {
         public Backend {
             if (name == null || name.isBlank()) {
                 throw new IllegalArgumentException("backend name is required");
@@ -71,9 +71,6 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                 throw new IllegalArgumentException("backend port must be positive");
             }
             tags = tags == null ? Map.of() : Map.copyOf(tags);
-            if (capacity < 0) {
-                throw new IllegalArgumentException("backend capacity must be non-negative");
-            }
         }
 
         public InetSocketAddress socketAddress() {
