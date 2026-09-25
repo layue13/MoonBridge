@@ -30,7 +30,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 /** Optional authenticated HTTP registration endpoint for external instance agents. */
 public final class AgentDiscoveryPlugin implements Plugin {
-    static final String PATH = "/v1/registration";
+    static final String PATH = "/registration";
     private static final int ABSOLUTE_BODY_LIMIT = 8192;
     private static final int MAX_NONCES = 4096;
     private static final int SIGNATURE_WINDOW_SECONDS = 60;

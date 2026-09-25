@@ -17,6 +17,7 @@ dependencies {
     implementation(libs.findLibrary("netty-transport-classes-epoll").get())
     implementation(libs.findLibrary("netty-transport-classes-kqueue").get())
     implementation(libs.findLibrary("netty-handler").get())
+    implementation(libs.findLibrary("netty-resolver-dns").get())
     runtimeOnly("io.netty:netty-transport-native-epoll:$nettyVersion:linux-x86_64")
     runtimeOnly("io.netty:netty-transport-native-epoll:$nettyVersion:linux-aarch_64")
     runtimeOnly("io.netty:netty-transport-native-kqueue:$nettyVersion:osx-x86_64")

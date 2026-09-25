@@ -17,7 +17,12 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.resolver.AddressResolverGroup;
+import io.netty.resolver.dns.DnsAddressResolverGroup;
+import io.netty.resolver.dns.DnsNameResolverBuilder;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -49,6 +54,7 @@ public final class ProxySessionListener implements Players {
     private final SecureRandom random = new SecureRandom();
     private final EventLoopGroup boss = new NioEventLoopGroup(1, namedFactory("strataproxy-session-accept"));
     private final EventLoopGroup workers = new NioEventLoopGroup(0, namedFactory("strataproxy-session-io"));
+    private final AddressResolverGroup<InetSocketAddress> backendResolver;
     private final ConcurrentHashMap<UUID, Session> sessionsByPlayerId = new ConcurrentHashMap<>();
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextConnectionId = new AtomicLong();
@@ -80,9 +86,18 @@ public final class ProxySessionListener implements Players {
 
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout) {
+        this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
+                new DnsAddressResolverGroup(new DnsNameResolverBuilder()
+                        .datagramChannelType(NioDatagramChannel.class).queryTimeoutMillis(3000)));
+    }
+
+    ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                         Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
+                         AddressResolverGroup<InetSocketAddress> backendResolver) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.verifier = verifier;
+        this.backendResolver = Objects.requireNonNull(backendResolver, "backendResolver");
         this.loginStageTimeout = Objects.requireNonNull(loginStageTimeout, "loginStageTimeout");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         this.transferCutoverTimeout = Objects.requireNonNull(transferCutoverTimeout, "transferCutoverTimeout");
@@ -180,6 +195,7 @@ public final class ProxySessionListener implements Players {
         Channel current = listener;
         if (current != null) current.close();
         allSessions.forEach(Session::closePair);
+        backendResolver.close();
         shutdown = new CompletableFuture<>();
         boss.shutdownGracefully().addListener(first -> workers.shutdownGracefully().addListener(second -> {
             if (first.isSuccess() && second.isSuccess()) shutdown.complete(null);
@@ -187,6 +203,8 @@ public final class ProxySessionListener implements Players {
         }));
         return shutdown;
     }
+
+    AddressResolverGroup<InetSocketAddress> backendResolver() { return backendResolver; }
 
     private long nextConnectionId() {
         long id = nextConnectionId.getAndUpdate(value -> {

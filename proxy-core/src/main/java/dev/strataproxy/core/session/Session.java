@@ -285,14 +285,17 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         resetLoginDeadline(owner.loginStageTimeout());
         Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
+                .resolver(owner.backendResolver())
                 .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                 .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel channel) {
                         installCodecs(channel.pipeline());
                         channel.pipeline().addLast("initial-session", Session.this);
                     }
                 });
-        ChannelFuture connect = bootstrap.connect(new InetSocketAddress(selected.address().getHost(), selected.address().getPort()));
+        ChannelFuture connect = bootstrap.connect(InetSocketAddress.createUnresolved(
+                selected.address().getHost(), selected.address().getPort()));
         backend = connect.channel();
         connect.addListener(future -> {
             if (closed.get()) {
@@ -568,6 +571,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         });
         try {
             Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
+                    .resolver(owner.backendResolver())
                     .option(ChannelOption.TCP_NODELAY, true)
                     .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                     .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
@@ -579,8 +583,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                             channel.pipeline().addLast("transfer-candidate", attempt.candidate);
                         }
                     });
-            ChannelFuture connect = bootstrap.connect(new InetSocketAddress(target.address().getHost(),
-                    target.address().getPort()));
+            ChannelFuture connect = bootstrap.connect(InetSocketAddress.createUnresolved(
+                    target.address().getHost(), target.address().getPort()));
             attempt.channel = connect.channel();
             connect.addListener(future -> {
                 if (attempt.finished || closed.get()) { connect.channel().close(); return; }

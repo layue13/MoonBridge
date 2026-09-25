@@ -225,7 +225,9 @@ final class SessionTransferTest {
                 } catch (Throwable failure) { newConnected.completeExceptionally(failure); }
             });
             BackendHandle handle = register(catalog, "same", oldServer);
-            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            var resolver = new DeferredBackendResolver("replacement.test");
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(15), Duration.ofSeconds(15), Duration.ofSeconds(15), resolver);
             listener.setPlacement(ignored -> CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("same"))));
             try {
@@ -240,11 +242,15 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input)));
                     var player = awaitPlayer(listener);
                     var moved = new BackendRegistration(handle.id(), new BackendOwner("static", 0),
-                            URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()), 1);
+                            URI.create("tcp://replacement.test:" + newServer.getLocalPort()), 1);
                     catalog.update(handle, moved).orElseThrow();
 
-                    var transfer = listener.transfer(player.identity(), "same").toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
+                    var transferFuture = listener.transfer(player.identity(), "same").toCompletableFuture();
+                    var resolution = resolver.pending().get(5, TimeUnit.SECONDS);
+                    resolution.executor().submit(() -> { }).get(1, TimeUnit.SECONDS);
+                    assertTrue(!transferFuture.isDone(), "transfer waits for DNS without blocking the event loop");
+                    resolution.release();
+                    var transfer = transferFuture.get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
                     newConnected.get(5, TimeUnit.SECONDS);
                     assertEquals(7, packetId(readFrame(input)));
