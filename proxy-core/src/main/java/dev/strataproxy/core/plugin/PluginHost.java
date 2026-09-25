@@ -31,11 +31,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -55,6 +58,7 @@ public final class PluginHost implements AutoCloseable {
     private final ScheduledExecutorService timer;
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
+    private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
     private State state = State.LOADING;
     private InitialPlacementHandler placementHandler;
 
@@ -173,26 +177,37 @@ public final class PluginHost implements AutoCloseable {
     public CompletionStage<Optional<PlacementDecision>> placeInitial(PlayerView player) {
         Objects.requireNonNull(player, "player");
         final InitialPlacementHandler handler;
+        final CompletableFuture<Optional<PlacementDecision>> result;
+        final AtomicBoolean decided;
+        final PendingPlacement request;
+        final ScheduledFuture<?> timeoutTask;
         synchronized (this) {
             if (state != State.ENABLED) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
             }
             handler = placementHandler;
+            if (handler == null) {
+                return CompletableFuture.completedFuture(Optional.empty());
+            }
+            result = new CompletableFuture<>();
+            decided = new AtomicBoolean();
+            request = new PendingPlacement(result, decided);
+            pendingPlacements.add(request);
+            try {
+                timeoutTask = timer.schedule(
+                        () -> {
+                            if (!decided.compareAndSet(false, true)) return;
+                            result.completeExceptionally(new PlacementTimeoutException(placementTimeout));
+                        }, placementTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            } catch (RuntimeException failure) {
+                pendingPlacements.remove(request);
+                return CompletableFuture.failedFuture(failure);
+            }
         }
-        if (handler == null) {
-            return CompletableFuture.completedFuture(Optional.empty());
-        }
-
-        CompletableFuture<Optional<PlacementDecision>> result = new CompletableFuture<>();
-        AtomicBoolean decided = new AtomicBoolean();
-        var timeoutTask = timer.schedule(
-                () -> {
-                    if (!decided.compareAndSet(false, true)) return;
-                    PlacementTimeoutException timeout = new PlacementTimeoutException(placementTimeout);
-                    result.completeExceptionally(timeout);
-                },
-                placementTimeout.toNanos(), TimeUnit.NANOSECONDS);
-        result.whenComplete((ignored, failure) -> timeoutTask.cancel(false));
+        result.whenComplete((ignored, failure) -> {
+            timeoutTask.cancel(false);
+            pendingPlacements.remove(request);
+        });
         try {
             callbacks.execute(() -> {
                 if (decided.get()) {
@@ -232,6 +247,10 @@ public final class PluginHost implements AutoCloseable {
             return;
         }
         state = State.CLOSED;
+        for (PendingPlacement request : pendingPlacements) {
+            request.decided().set(true);
+            request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
+        }
         for (int index = plugins.size() - 1; index >= 0; index--) {
             LoadedPlugin loaded = plugins.get(index);
             if (loaded.enabled) {
@@ -301,6 +320,9 @@ public final class PluginHost implements AutoCloseable {
     }
 
     private enum State { LOADING, ENABLED, CLOSED }
+
+    private record PendingPlacement(CompletableFuture<Optional<PlacementDecision>> result,
+                                    AtomicBoolean decided) { }
 
     private static final class LoadedPlugin {
         private final Plugin plugin;

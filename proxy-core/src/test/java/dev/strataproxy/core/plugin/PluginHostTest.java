@@ -131,6 +131,23 @@ class PluginHostTest {
     }
 
     @Test
+    void closingHostCompletesPendingPlacementAndIgnoresLatePluginDecision() throws Exception {
+        PendingPlacementPlugin plugin = new PendingPlacementPlugin();
+        PluginHost host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(30));
+        host.load(List.of(plugin));
+        host.enable();
+        CompletableFuture<Optional<PlacementDecision>> placement = host.placeInitial(PLAYER).toCompletableFuture();
+        assertTrue(plugin.invoked.await(5, TimeUnit.SECONDS));
+
+        host.close();
+        var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> placement.get(1, TimeUnit.SECONDS));
+        assertInstanceOf(IllegalStateException.class, failure.getCause());
+        plugin.decision.complete(PlacementDecision.select("late"));
+        assertTrue(placement.isCompletedExceptionally());
+    }
+
+    @Test
     void onlyOneInitialPlacementHandlerCanBeInstalled() {
         PluginHost host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
         assertThrows(IllegalStateException.class, () -> {
@@ -202,6 +219,20 @@ class PluginHostTest {
         }
 
         @Override public void onDisable() { disableCount.incrementAndGet(); }
+    }
+
+    private static final class PendingPlacementPlugin implements Plugin {
+        private final CountDownLatch invoked = new CountDownLatch(1);
+        private final CompletableFuture<PlacementDecision> decision = new CompletableFuture<>();
+
+        @Override public void onLoad(PluginContext context) { }
+
+        @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
+            return Optional.of((player, servers) -> {
+                invoked.countDown();
+                return decision;
+            });
+        }
     }
 
     private static final class BlockingCatalog implements BackendCatalog {
