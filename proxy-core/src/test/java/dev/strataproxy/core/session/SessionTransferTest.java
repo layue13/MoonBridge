@@ -466,6 +466,71 @@ final class SessionTransferTest {
     }
 
     @Test
+    void forgeToVanillaTransferDoesNotLeaveClientWaitingForAnotherForgeHandshake() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newRelayed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(5));
+                    writeFrame(output, serverForgeAck());
+                    assertArrayEquals(clientForgeAck(), readFrame(input));
+                    sendJoinGame(output, 0, 100);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0, 200);
+                    assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    writeFrame(output, new byte[]{0x03, 0x44});
+                    newRelayed.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { newRelayed.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertArrayEquals(serverForgeHello(5), readFrame(input));
+                    assertArrayEquals(serverForgeAck(), readFrame(input));
+                    writeFrame(output, clientForgeAck());
+                    assertEquals(1, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
+                    assertEquals(-1, respawnDimension(readFrame(input))); // No FML Reset before the vanilla world.
+                    assertEquals(0, respawnDimension(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    writeFrame(output, new byte[]{0x01, 0x33});
+                    assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
+                    newRelayed.get(5, TimeUnit.SECONDS);
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void clientDisconnectDuringCandidateLoginCompletesTransferAndReleasesBothReservations() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {

@@ -775,7 +775,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf output = frontend.alloc().buffer();
         List<ByteBuf> queued = attempt.candidate.takeQueuedPackets();
         try {
-            if (playObservation.forgeSeen() || attempt.candidate.observation().forgeSeen()) {
+            if (attempt.candidate.observation().forgeSeen()) {
                 ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
                 try { output.writeBytes(reset); } finally { reset.release(); }
             }
