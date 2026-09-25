@@ -113,7 +113,8 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        fail(ctx, "replacement backend failed");
+        if (state == State.HANDED_OFF) ctx.close();
+        else fail(ctx, "replacement backend failed");
     }
 
     Minecraft1710PlayPackets.JoinGame joinGame() { return joinGame; }

@@ -93,6 +93,8 @@ plugins:
 
 当前提交的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](benchmarks/results/2026-09-25-session-after-lifecycle.md)。之前提交的测量见 [原会话基准记录](benchmarks/results/2026-09-25-current-session-benchmark.md)。这些是代理自身的合成流量性能验证，不是后端负载观测。
 
+当前会话路径的 [JFR 采样记录](benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
+
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
 
 原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
