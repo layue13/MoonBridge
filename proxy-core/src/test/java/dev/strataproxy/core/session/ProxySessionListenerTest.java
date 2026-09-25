@@ -814,6 +814,52 @@ final class ProxySessionListenerTest {
     }
 
     @Test
+    void disconnectDuringOnlineVerificationCancelsThePendingRequest() throws Exception {
+        var pendingVerification = new CompletableFuture<Optional<VerifiedProfile>>();
+        var verificationStarted = new java.util.concurrent.CountDownLatch(1);
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                new InMemoryBackendCatalog(), (name, hash, ip) -> {
+                    verificationStarted.countDown();
+                    return pendingVerification;
+                });
+        listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                client.setSoTimeout(5000);
+                sendLogin(client, "Alice");
+                var requestBytes = Unpooled.wrappedBuffer(readFrame(new DataInputStream(client.getInputStream())));
+                MinecraftEncryptionRequest request;
+                try { request = MinecraftEncryptionRequest.decode(requestBytes); }
+                finally { requestBytes.release(); }
+                byte[] secret = new byte[16];
+                java.util.Arrays.fill(secret, (byte) 0x42);
+                var publicKey = KeyFactory.getInstance("RSA").generatePublic(
+                        new X509EncodedKeySpec(request.publicKey()));
+                Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+                rsa.init(Cipher.ENCRYPT_MODE, publicKey);
+                var response = new MinecraftEncryptionResponse(
+                        rsa.doFinal(secret), rsa.doFinal(request.verifyToken()));
+                var encoded = response.encode(UnpooledByteBufAllocator.DEFAULT);
+                try {
+                    byte[] payload = new byte[encoded.readableBytes()];
+                    encoded.readBytes(payload);
+                    writeFrame(new DataOutputStream(client.getOutputStream()), payload);
+                } finally { encoded.release(); }
+                assertTrue(verificationStarted.await(5, TimeUnit.SECONDS));
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while ((!pendingVerification.isCancelled() || !listener.allSessions().isEmpty())
+                    && System.nanoTime() < deadline) Thread.sleep(5);
+            assertTrue(pendingVerification.isCancelled());
+            assertTrue(listener.allSessions().isEmpty());
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void oversizedVerifiedProfileFailsLoginPromptlyAndReleasesCapacity() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var properties = java.util.List.of(

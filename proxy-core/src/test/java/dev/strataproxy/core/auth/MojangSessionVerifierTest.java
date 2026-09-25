@@ -16,12 +16,83 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class MojangSessionVerifierTest {
+    @Test
+    void boundsConcurrentRequestsAndReleasesSlotsAfterCompletionAndCancellation() throws Exception {
+        CountDownLatch firstRequestEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondRequestEntered = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        AtomicInteger requests = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            int requestNumber = requests.incrementAndGet();
+            if (requestNumber == 1) {
+                firstRequestEntered.countDown();
+                try {
+                    if (!releaseFirst.await(5, TimeUnit.SECONDS)) throw new IOException("test request was not released");
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("test request interrupted", interrupted);
+                }
+            } else if (requestNumber == 2) {
+                secondRequestEntered.countDown();
+                try {
+                    if (!releaseSecond.await(5, TimeUnit.SECONDS)) throw new IOException("test request was not released");
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("test request interrupted", interrupted);
+                }
+            }
+            byte[] body = "{\"id\":\"853c80ef3c3749fdaa49938b674adae6\",\"name\":\"Player\"}"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (var output = exchange.getResponseBody()) { output.write(body); }
+        });
+        server.start();
+        ExecutorService parser = Executors.newSingleThreadExecutor();
+        try {
+            var verifier = new MojangSessionVerifier(HttpClient.newHttpClient(),
+                    URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"),
+                    Duration.ofSeconds(10), parser, 1);
+            var first = verifier.verify("Player", "hash", null).toCompletableFuture();
+            assertTrue(firstRequestEntered.await(5, TimeUnit.SECONDS));
+            var rejected = verifier.verify("Player", "hash", null).toCompletableFuture();
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> rejected.get(1, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof RejectedExecutionException);
+            assertEquals(1, requests.get());
+
+            releaseFirst.countDown();
+            assertTrue(first.get(5, TimeUnit.SECONDS).isPresent());
+            var cancelled = verifier.verify("Player", "hash", null).toCompletableFuture();
+            assertTrue(secondRequestEntered.await(5, TimeUnit.SECONDS));
+            assertTrue(cancelled.cancel(true));
+            releaseSecond.countDown();
+            java.util.concurrent.CompletableFuture<Optional<VerifiedProfile>> afterCancellation = null;
+            for (int attempt = 0; attempt < 500 && afterCancellation == null; attempt++) {
+                var next = verifier.verify("Player", "hash", null).toCompletableFuture();
+                if (!next.isCompletedExceptionally()) afterCancellation = next;
+                else Thread.sleep(10);
+            }
+            assertTrue(afterCancellation != null, "cancelling a request must free its verification slot");
+            assertTrue(afterCancellation.get(5, TimeUnit.SECONDS).isPresent());
+            assertEquals(3, requests.get());
+        } finally {
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            server.stop(0);
+            parser.shutdownNow();
+        }
+    }
+
     @Test
     void oversizedResponseBodyIsRejectedBeforeParsing() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

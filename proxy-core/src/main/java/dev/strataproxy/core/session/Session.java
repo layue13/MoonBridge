@@ -64,6 +64,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private LoginStart loginStart;
     private MinecraftEncryptionRequest encryptionRequest;
     private VerifiedProfile verifiedProfile;
+    private CompletableFuture<Optional<VerifiedProfile>> verification;
     private boolean verifyingIdentity;
     private PlayerIdentity identity;
     private boolean identityClaimed;
@@ -205,8 +206,9 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         observeWaitingClient();
         String clientIp = ((InetSocketAddress) frontend.remoteAddress()).getAddress().getHostAddress();
-        owner.verifier().verify(loginStart.username(), serverHash, clientIp)
-                .whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
+        verification = owner.verifier().verify(loginStart.username(), serverHash, clientIp).toCompletableFuture();
+        verification.whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
+                    verification = null;
                     if (closed.get()) return;
                     if (failure != null || profile == null || profile.isEmpty()) {
                         closePair();
@@ -960,6 +962,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         Runnable cleanup = () -> {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
+            if (verification != null) verification.cancel(true);
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();

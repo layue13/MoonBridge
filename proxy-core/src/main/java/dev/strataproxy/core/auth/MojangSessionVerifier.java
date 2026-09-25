@@ -17,6 +17,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -24,11 +26,13 @@ import java.util.concurrent.TimeoutException;
 public final class MojangSessionVerifier implements SessionVerifier {
     public static final URI DEFAULT_ENDPOINT = URI.create("https://sessionserver.mojang.com/session/minecraft/hasJoined");
     private static final int MAX_RESPONSE_BYTES = 64 * 1024;
+    private static final int MAX_PENDING_VERIFICATIONS = 256;
     private static final ObjectMapper JSON = new ObjectMapper();
     private final HttpClient client;
     private final URI endpoint;
     private final Duration timeout;
     private final Executor parseExecutor;
+    private final Semaphore pendingVerifications;
 
     public MojangSessionVerifier(Duration timeout, Executor parseExecutor) {
         this(HttpClient.newBuilder().connectTimeout(timeout).build(), DEFAULT_ENDPOINT, timeout, parseExecutor);
@@ -36,9 +40,15 @@ public final class MojangSessionVerifier implements SessionVerifier {
 
     /** Injectable endpoint and client support private session services and deterministic tests. */
     public MojangSessionVerifier(HttpClient client, URI endpoint, Duration timeout, Executor parseExecutor) {
+        this(client, endpoint, timeout, parseExecutor, MAX_PENDING_VERIFICATIONS);
+    }
+
+    MojangSessionVerifier(HttpClient client, URI endpoint, Duration timeout, Executor parseExecutor,
+                          int maxPendingVerifications) {
         if (client == null || endpoint == null || timeout == null || timeout.isZero() || timeout.isNegative()
-                || parseExecutor == null) {
-            throw new IllegalArgumentException("client, endpoint, positive timeout, and parseExecutor are required");
+                || parseExecutor == null || maxPendingVerifications < 1) {
+            throw new IllegalArgumentException(
+                    "client, endpoint, positive timeout, parseExecutor, and positive request limit are required");
         }
         if (!"http".equalsIgnoreCase(endpoint.getScheme()) && !"https".equalsIgnoreCase(endpoint.getScheme())) {
             throw new IllegalArgumentException("session endpoint must use HTTP or HTTPS");
@@ -50,6 +60,7 @@ public final class MojangSessionVerifier implements SessionVerifier {
         this.endpoint = endpoint;
         this.timeout = timeout;
         this.parseExecutor = parseExecutor;
+        this.pendingVerifications = new Semaphore(maxPendingVerifications);
     }
 
     @Override
@@ -68,14 +79,33 @@ public final class MojangSessionVerifier implements SessionVerifier {
         }
         HttpRequest request = HttpRequest.newBuilder(uri).timeout(timeout).GET()
                 .header("Accept", "application/json").build();
-        CompletableFuture<HttpResponse<byte[]>> pending = client.sendAsync(request,
-                HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), MAX_RESPONSE_BYTES));
-        CompletableFuture<HttpResponse<byte[]>> deadline = pending.copy()
-                .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
-        deadline.whenComplete((ignored, failure) -> {
-            if (failure instanceof TimeoutException) pending.cancel(true);
-        });
-        return deadline.thenApplyAsync(response -> parseResponse(username, response), parseExecutor);
+        if (!pendingVerifications.tryAcquire()) {
+            return CompletableFuture.failedFuture(new RejectedExecutionException("too many pending session verifications"));
+        }
+        try {
+            CompletableFuture<HttpResponse<byte[]>> pending = client.sendAsync(request,
+                    HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), MAX_RESPONSE_BYTES));
+            CompletableFuture<HttpResponse<byte[]>> deadline = pending.copy()
+                    .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            deadline.whenComplete((ignored, failure) -> {
+                if (failure instanceof TimeoutException) pending.cancel(true);
+            });
+            CompletableFuture<Optional<VerifiedProfile>> parsed = deadline.thenApplyAsync(
+                    response -> parseResponse(username, response), parseExecutor);
+            CompletableFuture<Optional<VerifiedProfile>> result = new CompletableFuture<>();
+            parsed.whenComplete((profile, failure) -> {
+                pendingVerifications.release();
+                if (failure == null) result.complete(profile);
+                else result.completeExceptionally(failure);
+            });
+            result.whenComplete((ignored, failure) -> {
+                if (result.isCancelled()) pending.cancel(true);
+            });
+            return result;
+        } catch (RuntimeException | Error failure) {
+            pendingVerifications.release();
+            throw failure;
+        }
     }
 
     private static Optional<VerifiedProfile> parseResponse(String requestedName, HttpResponse<byte[]> response) {
