@@ -18,56 +18,63 @@ public final class Minecraft1710EntityIds {
         int packetId = ProtocolVarInt.read(input);
         int firstField = input.readerIndex();
         ByteBuf current = frame;
-        if (varIntFirst(packetId, clientbound)) {
-            int entityId = ProtocolVarInt.read(input);
-            int replacement = swapped(entityId, serverEntityId, clientEntityId);
-            if (replacement != entityId) {
-                int oldEntityBytes = input.readerIndex() - firstField;
-                int newBodyBytes = length - oldEntityBytes + ProtocolVarInt.encodedSize(replacement);
-                ByteBuf changed = allocator.buffer(ProtocolVarInt.encodedSize(newBodyBytes) + newBodyBytes);
-                try {
-                    ProtocolVarInt.write(changed, newBodyBytes);
-                    changed.writeBytes(frame, bodyStart, firstField - bodyStart);
-                    ProtocolVarInt.write(changed, replacement);
-                    changed.writeBytes(frame, input.readerIndex(), frame.writerIndex() - input.readerIndex());
-                    current = changed;
-                } catch (RuntimeException failure) {
-                    changed.release();
-                    throw failure;
+        try {
+            if (varIntFirst(packetId, clientbound)) {
+                int entityId = ProtocolVarInt.read(input);
+                int replacement = swapped(entityId, serverEntityId, clientEntityId);
+                if (replacement != entityId) {
+                    int oldEntityBytes = input.readerIndex() - firstField;
+                    int newBodyBytes = length - oldEntityBytes + ProtocolVarInt.encodedSize(replacement);
+                    ByteBuf changed = allocator.buffer(ProtocolVarInt.encodedSize(newBodyBytes) + newBodyBytes);
+                    try {
+                        ProtocolVarInt.write(changed, newBodyBytes);
+                        changed.writeBytes(frame, bodyStart, firstField - bodyStart);
+                        ProtocolVarInt.write(changed, replacement);
+                        changed.writeBytes(frame, input.readerIndex(), frame.writerIndex() - input.readerIndex());
+                        current = changed;
+                    } catch (RuntimeException | Error failure) {
+                        changed.release();
+                        throw failure;
+                    }
+                }
+            } else if (intFirst(packetId, clientbound)) {
+                current = rewriteInt(allocator, current, firstField, serverEntityId, clientEntityId);
+            }
+            if (clientbound) {
+                if (packetId == 0x0D || packetId == 0x1B) {
+                    int secondField = current.readerIndex() + firstField + 4 - frame.readerIndex();
+                    current = rewriteInt(allocator, current, secondField, serverEntityId, clientEntityId);
+                } else if (packetId == 0x13) {
+                    ByteBuf body = current.duplicate();
+                    ProtocolVarInt.read(body);
+                    ProtocolVarInt.read(body);
+                    if (!body.isReadable()) throw new ProtocolException("missing Destroy Entities count");
+                    int count = body.readUnsignedByte();
+                    if (body.readableBytes() < count * 4) throw new ProtocolException("truncated Destroy Entities");
+                    int firstEntityOffset = body.readerIndex() - current.readerIndex();
+                    for (int i = 0; i < count; i++) {
+                        current = rewriteInt(allocator, current, current.readerIndex() + firstEntityOffset + i * 4,
+                                serverEntityId, clientEntityId);
+                    }
+                } else if (packetId == 0x0E) {
+                    ByteBuf body = current.duplicate();
+                    ProtocolVarInt.read(body);
+                    ProtocolVarInt.read(body);
+                    ProtocolVarInt.read(body); // Object entity ID.
+                    if (body.readableBytes() < 18) throw new ProtocolException("truncated Spawn Object");
+                    int type = body.readUnsignedByte();
+                    if (type == 60 || type == 63 || type == 64 || type == 66 || type == 90) {
+                        int objectDataOffset = body.readerIndex() + 14;
+                        current = rewriteInt(allocator, current, objectDataOffset,
+                                serverEntityId, clientEntityId);
+                    }
                 }
             }
-        } else if (intFirst(packetId, clientbound)) {
-            current = rewriteInt(allocator, current, firstField, serverEntityId, clientEntityId);
+            return current;
+        } catch (RuntimeException | Error failure) {
+            if (current != frame) current.release();
+            throw failure;
         }
-        if (clientbound) {
-            if (packetId == 0x0D || packetId == 0x1B) {
-                current = rewriteInt(allocator, current, firstField + 4, serverEntityId, clientEntityId);
-            } else if (packetId == 0x13) {
-                ByteBuf body = current.duplicate();
-                ProtocolVarInt.read(body);
-                ProtocolVarInt.read(body);
-                if (!body.isReadable()) throw new ProtocolException("missing Destroy Entities count");
-                int count = body.readUnsignedByte();
-                if (body.readableBytes() < count * 4) throw new ProtocolException("truncated Destroy Entities");
-                for (int i = 0; i < count; i++) {
-                    current = rewriteInt(allocator, current, body.readerIndex() + i * 4,
-                            serverEntityId, clientEntityId);
-                }
-            } else if (packetId == 0x0E) {
-                ByteBuf body = current.duplicate();
-                ProtocolVarInt.read(body);
-                ProtocolVarInt.read(body);
-                ProtocolVarInt.read(body); // Object entity ID.
-                if (body.readableBytes() < 18) throw new ProtocolException("truncated Spawn Object");
-                int type = body.readUnsignedByte();
-                if (type == 60 || type == 63 || type == 64 || type == 66 || type == 90) {
-                    int objectDataOffset = body.readerIndex() + 14;
-                    current = rewriteInt(allocator, current, objectDataOffset,
-                            serverEntityId, clientEntityId);
-                }
-            }
-        }
-        return current;
     }
 
     private static boolean intFirst(int packetId, boolean clientbound) {
@@ -102,11 +109,16 @@ public final class Minecraft1710EntityIds {
         int replacement = swapped(original, serverEntityId, clientEntityId);
         if (replacement == original) return frame;
         if (frame.isReadOnly()) {
-            int originalReaderIndex = frame.readerIndex();
+            int copyOffset = offset - frame.readerIndex();
             ByteBuf copy = allocator.buffer(frame.readableBytes());
-            copy.writeBytes(frame, frame.readerIndex(), frame.readableBytes());
-            frame = copy;
-            offset -= originalReaderIndex;
+            try {
+                copy.writeBytes(frame, frame.readerIndex(), frame.readableBytes());
+                copy.setInt(copyOffset, replacement);
+                return copy;
+            } catch (RuntimeException | Error failure) {
+                copy.release();
+                throw failure;
+            }
         }
         frame.setInt(offset, replacement);
         return frame;

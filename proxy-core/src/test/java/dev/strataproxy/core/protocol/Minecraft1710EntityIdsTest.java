@@ -1,15 +1,108 @@
 package dev.strataproxy.core.protocol;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.AbstractByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class Minecraft1710EntityIdsTest {
+    @Test
+    void releasesReadOnlyReplacementWhenLaterEntityFieldIsTruncated() {
+        var allocator = new TrackingAllocator();
+        ByteBuf frame = Unpooled.buffer();
+        ProtocolVarInt.write(frame, 5);
+        ProtocolVarInt.write(frame, 0x1B);
+        frame.writeInt(200);
+        try {
+            assertThrows(ProtocolException.class, () -> Minecraft1710EntityIds.rewrite(
+                    allocator, frame.asReadOnly(), true, 200, 100));
+            assertEquals(1, allocator.buffers.size());
+            assertEquals(0, allocator.buffers.get(0).refCnt());
+        } finally {
+            for (ByteBuf buffer : allocator.buffers) {
+                if (buffer.refCnt() > 0) buffer.release(buffer.refCnt());
+            }
+            frame.release();
+        }
+    }
+
+    @Test
+    void releasesVarIntReplacementWhenLaterSpawnObjectFieldsAreTruncated() {
+        var allocator = new TrackingAllocator();
+        ByteBuf frame = Unpooled.buffer();
+        ProtocolVarInt.write(frame, 3);
+        ProtocolVarInt.write(frame, 0x0E);
+        ProtocolVarInt.write(frame, 200);
+        try {
+            assertThrows(ProtocolException.class, () -> Minecraft1710EntityIds.rewrite(
+                    allocator, frame, true, 200, 100));
+            assertEquals(1, allocator.buffers.size());
+            assertEquals(0, allocator.buffers.get(0).refCnt());
+        } finally {
+            for (ByteBuf buffer : allocator.buffers) {
+                if (buffer.refCnt() > 0) buffer.release(buffer.refCnt());
+            }
+            frame.release();
+        }
+    }
+
+    @Test
+    void readOnlyFrameWithNonzeroReaderIndexSwapsBothEntityFields() {
+        ByteBuf frame = Unpooled.buffer();
+        frame.writeByte(0x7f);
+        ProtocolVarInt.write(frame, 9);
+        ProtocolVarInt.write(frame, 0x1B);
+        frame.writeInt(200).writeInt(100);
+        frame.readerIndex(1);
+        ByteBuf rewritten = null;
+        try {
+            rewritten = Minecraft1710EntityIds.rewrite(UnpooledByteBufAllocator.DEFAULT,
+                    frame.asReadOnly(), true, 200, 100);
+            ByteBuf body = rewritten.duplicate();
+            assertEquals(9, ProtocolVarInt.read(body));
+            assertEquals(0x1B, ProtocolVarInt.read(body));
+            assertEquals(100, body.readInt());
+            assertEquals(200, body.readInt());
+        } finally {
+            if (rewritten != null && rewritten != frame) rewritten.release();
+            frame.release();
+        }
+    }
+
+    @Test
+    void readOnlyDestroyEntitiesFrameKeepsOffsetsAfterFirstCopy() {
+        ByteBuf frame = Unpooled.buffer();
+        frame.writeByte(0x7f);
+        ProtocolVarInt.write(frame, 14);
+        ProtocolVarInt.write(frame, 0x13);
+        frame.writeByte(3).writeInt(200).writeInt(100).writeInt(300);
+        frame.readerIndex(1);
+        ByteBuf rewritten = null;
+        try {
+            rewritten = Minecraft1710EntityIds.rewrite(UnpooledByteBufAllocator.DEFAULT,
+                    frame.asReadOnly(), true, 200, 100);
+            ByteBuf body = rewritten.duplicate();
+            assertEquals(14, ProtocolVarInt.read(body));
+            assertEquals(0x13, ProtocolVarInt.read(body));
+            assertEquals(3, body.readUnsignedByte());
+            assertEquals(100, body.readInt());
+            assertEquals(200, body.readInt());
+            assertEquals(300, body.readInt());
+        } finally {
+            if (rewritten != null && rewritten != frame) rewritten.release();
+            frame.release();
+        }
+    }
+
     @Test
     void swapsFixedWidthIdsInBothDirectionsAndLeavesUnrelatedFramesUntouched() {
         ByteBuf clientbound = frame(0x1A, 200, 1);
@@ -155,5 +248,25 @@ final class Minecraft1710EntityIdsTest {
         ProtocolVarInt.read(decoded);
         ProtocolVarInt.read(decoded);
         return decoded.readInt();
+    }
+
+    private static final class TrackingAllocator extends AbstractByteBufAllocator {
+        private final List<ByteBuf> buffers = new ArrayList<>();
+
+        private TrackingAllocator() { super(false); }
+
+        @Override public boolean isDirectBufferPooled() { return false; }
+
+        @Override protected ByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
+            ByteBuf buffer = Unpooled.buffer(initialCapacity, maxCapacity);
+            buffers.add(buffer);
+            return buffer;
+        }
+
+        @Override protected ByteBuf newDirectBuffer(int initialCapacity, int maxCapacity) {
+            ByteBuf buffer = Unpooled.directBuffer(initialCapacity, maxCapacity);
+            buffers.add(buffer);
+            return buffer;
+        }
     }
 }
