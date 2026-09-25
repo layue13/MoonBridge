@@ -31,11 +31,14 @@ class InMemoryBackendCatalogTest {
                 URI.create("tcp://127.0.0.1:25566"), 3, Map.of("stage", "game"), Map.of("region", "local"));
         BackendView updated = catalog.update(first.handle(), changed).orElseThrow();
         assertEquals(first.handle(), updated.handle());
-        assertEquals(2, updated.connectedPlayers());
+        assertEquals(0, updated.connectedPlayers());
 
         BackendView replacement = catalog.register(registration(new BackendOwner("plugin:test", 1), 3));
 
         assertNotEquals(first.handle(), replacement.handle());
+        assertEquals(2, replacement.connectedPlayers());
+        assertEquals(1, replacement.availableUnits());
+        assertTrue(catalog.reserve(replacement.handle(), 2).isEmpty());
         assertTrue(catalog.update(first.handle(), changed).isEmpty());
         assertFalse(oldReservation.commit());
         assertFalse(catalog.remove(first.handle()));
@@ -48,6 +51,63 @@ class InMemoryBackendCatalogTest {
         assertEquals(3, catalog.find(ID).orElseThrow().availableUnits());
         assertTrue(catalog.update(first.handle(), new BackendRegistration(ID,
                 new BackendOwner("someone-else", 1), URI.create("tcp://127.0.0.1:25567"), 1)).isEmpty());
+    }
+
+    @Test
+    void removingAndReregisteringTheSameEndpointKeepsExistingOccupancy() {
+        InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
+        BackendOwner owner = new BackendOwner("plugin:test", 1);
+        BackendView first = catalog.register(registration(owner, 1));
+        CapacityReservation connected = catalog.reserve(first.handle(), 1).orElseThrow();
+        assertTrue(connected.commit());
+
+        assertTrue(catalog.remove(first.handle()));
+        BackendView replacement = catalog.register(registration(owner, 1));
+        assertEquals(1, replacement.connectedPlayers());
+        assertTrue(catalog.reserve(replacement.handle(), 1).isEmpty());
+
+        connected.close();
+        assertEquals(0, catalog.find(ID).orElseThrow().connectedPlayers());
+        assertEquals(1, catalog.find(ID).orElseThrow().availableUnits());
+    }
+
+    @Test
+    void changingEndpointSeparatesOldConnectionsAndInvalidatesPendingClaims() {
+        InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
+        BackendOwner owner = new BackendOwner("plugin:test", 1);
+        BackendView first = catalog.register(registration(owner, 1));
+        CapacityReservation connectedToOld = catalog.reserve(first.handle(), 1).orElseThrow();
+        assertTrue(connectedToOld.commit());
+        BackendRegistration moved = new BackendRegistration(ID, owner,
+                URI.create("tcp://127.0.0.1:25566"), 1);
+        BackendView updated = catalog.update(first.handle(), moved).orElseThrow();
+        assertEquals(0, updated.connectedPlayers());
+        CapacityReservation pendingOnNew = catalog.reserve(updated.handle(), 1).orElseThrow();
+
+        BackendView movedBack = catalog.update(first.handle(), registration(owner, 1)).orElseThrow();
+        assertFalse(pendingOnNew.commit());
+        assertEquals(1, movedBack.connectedPlayers());
+        assertEquals(0, movedBack.reservedCapacity());
+        assertTrue(catalog.reserve(movedBack.handle(), 1).isEmpty());
+
+        connectedToOld.close();
+        assertEquals(1, catalog.find(ID).orElseThrow().availableUnits());
+        pendingOnNew.close();
+    }
+
+    @Test
+    void capacityReductionInvalidatesAnOversizedPendingClaim() {
+        InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
+        BackendOwner owner = new BackendOwner("plugin:test", 1);
+        BackendView first = catalog.register(registration(owner, 2));
+        CapacityReservation pending = catalog.reserve(first.handle(), 2).orElseThrow();
+
+        BackendView reduced = catalog.update(first.handle(), registration(owner, 1)).orElseThrow();
+        assertEquals(1, reduced.capacity());
+        assertFalse(pending.commit());
+        assertEquals(0, catalog.find(ID).orElseThrow().connectedPlayers());
+        assertEquals(0, catalog.find(ID).orElseThrow().reservedCapacity());
+        assertEquals(1, catalog.find(ID).orElseThrow().availableUnits());
     }
 
     @Test

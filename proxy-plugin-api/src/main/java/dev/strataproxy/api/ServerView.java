@@ -6,8 +6,9 @@ import java.util.Map;
 
 /**
  * Immutable directory snapshot. Player counts describe sessions attached through this proxy
- * instance and this registration generation; they do not measure backend CPU, TPS, memory,
- * or players connected through other proxies.
+ * instance to this name and address, including earlier registration generations that still
+ * have live connections. They do not measure backend CPU, TPS, memory, or players connected
+ * through other proxies.
  */
 public record ServerView(String name, URI address, Map<String, String> tags, Map<String, String> metadata,
                          int capacity, int connectedPlayers, int reservedCapacity) {
