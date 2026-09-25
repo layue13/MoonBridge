@@ -17,6 +17,8 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 
 **验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括切换前失败回退、候选服 Join Game 后立即断开时保留旧会话、切换后 Forge 握手拒绝、维度变化后再转服、Forge 到普通后端的切换、握手后 Join Game、维度覆盖、玩家实体 ID 映射和中途断线清理。从 Forge 切换到普通后端会发送一次 FML 重置以恢复客户端注册表；随后进入 Forge 时不会重复发送重置。转服固定发送中间维度和目标维度两次 Respawn，避免依赖已经过期的客户端维度记录；交接期间客户端与旧后端的帧分别进入有上限的缓冲区。成功时，客户端帧在世界切换包写出后转发，旧后端帧丢弃；切换前失败恢复旧链路后，两侧暂存的帧都会回放。这些时序已通过合成 TCP 测试。在线认证及其加密连接上的 Forge 转服已通过注入会话校验器的合成 TCP 测试，尚未调用真实 Mojang 会话服务。最小 Uranium 1.7.10 后端已通过代理完成协议探针登录和保持连接，两台 Uranium 间的 Forge 转服探针也已通过。Prism 中的真实 Minecraft 1.7.10 + Forge 10.13.4.1614 客户端已通过最小 Uranium 的首次登录与两台 Uranium 间的插件触发转服，见 [真实客户端联机记录](smoke/results/2026-09-25-prism-forge-client.md)。目标 1.7.10 整合包、Mojang 在线认证、跨主机部署和目标流量下的性能验收仍未验证；当前不能宣称生产可用或目标整合包实服兼容。
 
+真实 Prism Forge 客户端在同一版本下完成过旧服→新服→旧服往返，但也出现过候选 Uranium 登录帧写出后 15 秒无回包的失败。现阶段只证明转服路径可运行，尚未通过稳定性验收；调查记录见 [Uranium 登录停滞](smoke/results/2026-09-26-uranium-login-stalls.md)，服务端线索已提交 [Uranium#585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
+
 ## 配置与运行
 
 默认配置：`proxy-core/src/main/resources/config/strataproxy.yml`。安装包包含静态后端示例和 `strataproxy-dns.example.yml`；后者通过 `plugins.enabled` 启用 DNS 插件，`backends: []` 表示不使用静态后端。相对插件目录从配置文件所在目录解析；安装包示例中的 `../plugins` 指向同一安装包的插件目录。`ONLINE_BUNGEE` 只能连接已启用旧版 Bungee 身份转发、且限制直连的可信后端。
