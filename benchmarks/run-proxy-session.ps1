@@ -2,8 +2,9 @@ param(
     [ValidateRange(1, 32)][int]$Connections = 4,
     [ValidateRange(1, 100000)][int]$Messages = 1000,
     [ValidateRange(0, 10000)][int]$Warmup = 100,
-    [ValidateRange(1, 1048576)][int]$Payload = 1024,
-    [ValidateRange(1, 10)][int]$Repeats = 2
+    [ValidateRange(5, 1048576)][int]$Payload = 1024,
+    [ValidateRange(1, 10)][int]$Repeats = 2,
+    [ValidateRange(1, 1024)][int]$Window = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +22,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
 
     & java -cp "$classes;$installLib\*" dev.strataproxy.core.session.ProxySessionBenchmark `
-        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats
+        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats `
+        --window $Window
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location

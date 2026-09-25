@@ -58,9 +58,10 @@ plugins:
 ```powershell
 .\gradlew.bat check
 .\gradlew.bat :proxy-core:installedDistSmokeTest
+.\smoke\installed-discovery.ps1
 ```
 
-定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。真实客户端和服务端整合包尚未提供；合成测试不替代实服验证。
+`installed-discovery.ps1` 在 Windows PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它通过协议状态查询核对发现后的声明容量，并验证 Agent 注册与注销。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。真实客户端和服务端整合包尚未提供；合成测试不替代实服验证。
 
 ## 合成 relay 基准
 
@@ -78,10 +79,12 @@ plugins:
 
 ## 合成会话基准
 
-`benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。每个回声都会校验，轮次交替执行直连与代理。
+`benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。`-Window` 设置每个客户端允许的在途请求数，默认 `1`（stop-and-wait）；大于 `1` 时客户端最多连续发送 Window 个帧，再按 TCP 顺序读取回声并逐条校验，每收到一条便补发一条。预热和计时阶段、直连和代理都使用相同的发送算法。测得的单条延迟从该请求写出前计时到其回声读完；延迟样本和在途时间戳都使用有界数组，受 `Connections`、`Messages` 和 Window 上限约束。出现错误回声或阶段超时时基准以失败退出。
 
 ```powershell
-.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2
+.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1
 ```
 
-本地试跑的参数与结果见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`。这是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
+将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
+
+原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
