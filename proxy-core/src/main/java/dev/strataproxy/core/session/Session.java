@@ -49,6 +49,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -567,9 +568,22 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     CompletionStage<TransferResult> transferTo(String backendName) {
         CompletableFuture<TransferResult> result = new CompletableFuture<>();
-        Runnable command = () -> beginTransfer(backendName, result);
+        Runnable command = () -> {
+            try {
+                beginTransfer(backendName, result);
+            } catch (RuntimeException failure) {
+                result.completeExceptionally(failure);
+                closePair();
+            }
+        };
         if (frontend.eventLoop().inEventLoop()) command.run();
-        else frontend.eventLoop().execute(command);
+        else {
+            try {
+                frontend.eventLoop().execute(command);
+            } catch (RejectedExecutionException shutdown) {
+                result.complete(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
+            }
+        }
         return result;
     }
 
