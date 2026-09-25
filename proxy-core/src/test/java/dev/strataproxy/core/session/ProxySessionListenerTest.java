@@ -42,6 +42,97 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
     @Test
+    void closingListenerEndsPendingPlacementAndIgnoresLateDecision() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:1"), 1, Map.of(), Map.of()));
+        var placementEntered = new CompletableFuture<Void>();
+        var decision = new CompletableFuture<Optional<PlacementDecision>>();
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+        listener.setPlacement(player -> {
+            placementEntered.complete(null);
+            return decision;
+        });
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                client.setSoTimeout(5000);
+                sendLogin(client, "PendingPlacement");
+                placementEntered.get(5, TimeUnit.SECONDS);
+
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(-1, client.getInputStream().read());
+                decision.complete(Optional.of(PlacementDecision.select("lobby")));
+                assertTrue(listener.online().isEmpty());
+                assertTrue(listener.allSessions().isEmpty());
+                assertEquals(0, listener.onlineCount());
+                assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void closingListenerDisconnectsActiveSessionAndReleasesCapacity() throws Exception {
+        String username = "ShutdownPlayer";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var backendClosed = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    ByteArrayOutputStream success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertEquals(-1, input.read());
+                    backendClosed.complete(null);
+                } catch (Throwable failure) { backendClosed.completeExceptionally(failure); }
+            }, "fake-shutdown-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+
+            var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+                    assertEquals(1, listener.online().size());
+                    assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().connectedPlayers());
+
+                    listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    assertEquals(-1, client.getInputStream().read());
+                    backendClosed.get(5, TimeUnit.SECONDS);
+                    assertTrue(listener.online().isEmpty());
+                    assertTrue(listener.allSessions().isEmpty());
+                    assertEquals(0, listener.onlineCount());
+                    assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void initialHostnameResolutionDoesNotBlockPlayerEventLoop() throws Exception {
         String username = "DnsPlayer";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
