@@ -3,6 +3,7 @@ package dev.strataproxy.core.backend;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -19,6 +20,12 @@ import org.junit.jupiter.api.Test;
 
 class InMemoryBackendCatalogTest {
     private static final BackendId ID = new BackendId("lobby");
+    @Test
+    void backendRegistrationRejectsAnIgnoredUriPath() {
+        assertThrows(IllegalArgumentException.class, () -> new BackendRegistration(ID,
+                new BackendOwner("plugin:test", 1), URI.create("tcp://127.0.0.1:25565/world"), 4));
+    }
+
     @Test
     void everyRegistrationCreatesGenerationAndUpdateRequiresCurrentHandle() {
         InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();

@@ -21,6 +21,8 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 
 默认配置：`proxy-core/src/main/resources/config/strataproxy.yml`。安装包包含静态后端示例和 `strataproxy-dns.example.yml`；后者通过 `plugins.enabled` 启用 DNS 插件，`backends: []` 表示不使用静态后端。相对插件目录从配置文件所在目录解析；安装包示例中的 `../plugins` 指向同一安装包的插件目录。`ONLINE_BUNGEE` 只能连接已启用旧版 Bungee 身份转发、且限制直连的可信后端。
 
+`--validate-config` 检查核心配置和静态后端注册；启用插件的自定义设置由插件在启动时检查。
+
 `plugins.initialPlacementTimeoutSeconds` 控制初始选服回调的等待时间，默认 15 秒，可配置为 1–120 秒。握手与身份验证、后端连接与登录各有独立的 15 秒期限；选服阶段不会消耗这两个阶段的时间。后端 Login Success 后，客户端必须在 2 分钟内完成初次 PLAY/Forge 握手，否则代理断开会话并释放名额。插件可以异步查询或准备后端；超过时限的当前玩家登录会失败，后续玩家仍可调用该插件。客户端和后端自身也可能提前断开等待中的连接。
 
 未认证客户端的单帧上限为 4 KiB；后端确认 Login Success 后恢复协议 5 的 PLAY 帧上限。在线模式若已验证的玩家资料无法编码为后端转发握手，会立即结束本次登录并释放预留容量。

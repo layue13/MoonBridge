@@ -33,6 +33,24 @@ final class ProxyConfigurationTest {
     }
 
     @Test
+    void validateConfigChecksStaticBackendEndpoints() throws Exception {
+        var config = Files.createTempFile("strataproxy-invalid-backend", ".yml");
+        try {
+            Files.writeString(config, """
+                    listen: "127.0.0.1:25577"
+                    authentication: OFFLINE
+                    backends:
+                      - name: lobby
+                        address: "operator@127.0.0.1:25565"
+                        capacity: 100
+                    """);
+            assertEquals(1, ProxyMain.run(new String[]{"--validate-config", config.toString()}));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
     void rejectsDuplicateStaticNames() {
         var first = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25565", null, 100);
         var second = new ProxyConfiguration.Backend("lobby", "127.0.0.1:25566", null, 100);

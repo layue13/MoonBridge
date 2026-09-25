@@ -28,6 +28,16 @@ class ApiValueTypesTest {
     }
 
     @Test
+    void serverDefinitionRequiresAnUnambiguousTcpEndpoint() {
+        for (String address : new String[] {
+                "tcp://operator@127.0.0.1:25565", "tcp://127.0.0.1:25565/world",
+                "tcp://127.0.0.1:25565?mode=play", "tcp://127.0.0.1:25565#backend"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> new ServerDefinition("game-1", URI.create(address), Map.of(), 100, Map.of()), address);
+        }
+    }
+
+    @Test
     void playerIdentityIncludesConnectionGeneration() {
         var id = UUID.randomUUID();
 

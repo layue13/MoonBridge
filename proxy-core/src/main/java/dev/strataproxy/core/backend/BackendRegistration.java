@@ -18,8 +18,11 @@ public record BackendRegistration(
         Objects.requireNonNull(address, "address");
         tags = Map.copyOf(Objects.requireNonNull(tags, "tags"));
         metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
+        String path = address.getRawPath();
         if (!"tcp".equalsIgnoreCase(address.getScheme()) || address.getHost() == null
-                || address.getPort() < 1 || address.getPort() > 65535) {
+                || address.getPort() < 1 || address.getPort() > 65535
+                || address.getRawUserInfo() != null || (path != null && !path.isEmpty())
+                || address.getRawQuery() != null || address.getRawFragment() != null) {
             throw new IllegalArgumentException("Backend address must be tcp://host:port");
         }
         if (capacity < 0) {

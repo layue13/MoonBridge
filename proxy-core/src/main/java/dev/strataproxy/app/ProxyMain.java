@@ -37,7 +37,9 @@ public final class ProxyMain {
             }
             if (arguments.length == 2 && arguments[0].equals("--validate-config")) {
                 var configuration = new ProxyConfigurationLoader().load(Path.of(arguments[1]));
-                System.out.println("Valid configuration: " + configuration.listen());
+                StaticBackends.register(configuration, new InMemoryBackendCatalog());
+                System.out.println("Valid core configuration and static backends: " + configuration.listen()
+                        + " (enabled plugin settings are checked at startup)");
                 return 0;
             }
             Path configPath;

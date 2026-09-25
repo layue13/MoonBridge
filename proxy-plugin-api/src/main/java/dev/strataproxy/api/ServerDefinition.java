@@ -12,8 +12,11 @@ public record ServerDefinition(String name, URI address, Map<String, String> tag
         Objects.requireNonNull(address, "address");
         tags = Map.copyOf(Objects.requireNonNull(tags, "tags"));
         metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata"));
+        String path = address.getRawPath();
         if (name.isBlank() || !"tcp".equalsIgnoreCase(address.getScheme())
-                || address.getHost() == null || address.getPort() < 1 || address.getPort() > 65535) {
+                || address.getHost() == null || address.getPort() < 1 || address.getPort() > 65535
+                || address.getRawUserInfo() != null || (path != null && !path.isEmpty())
+                || address.getRawQuery() != null || address.getRawFragment() != null) {
             throw new IllegalArgumentException("server requires a name and tcp://host:port address");
         }
         if (capacity < 0) {
