@@ -190,7 +190,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         String serverHash = OnlineModeCrypto.serverHash(encryptionRequest.serverId(), secret,
                 encryptionRequest.publicKey());
         verifyingIdentity = true;
-        frontend.config().setAutoRead(false);
         ChannelPipeline pipeline = frontend.pipeline();
         try {
             pipeline.addAfter("minecraft-frame-decoder", "minecraft-cipher-decoder", new MinecraftCipherDecoder(secret));
@@ -201,6 +200,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         } finally {
             java.util.Arrays.fill(secret, (byte) 0);
         }
+        observeWaitingClient();
         String clientIp = ((InetSocketAddress) frontend.remoteAddress()).getAddress().getHostAddress();
         owner.verifier().verify(loginStart.username(), serverHash, clientIp)
                 .whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
@@ -227,7 +227,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         placementInProgress = true;
-        frontend.config().setAutoRead(false);
+        observeWaitingClient();
         resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
         CompletionStage<Optional<PlacementDecision>> stage = owner.placement().apply(view);
         stage.whenComplete((decision, failure) -> frontend.eventLoop().execute(() -> {
@@ -241,6 +241,19 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private boolean statusRequest;
+
+    private void observeWaitingClient() {
+        ChannelPipeline pipeline = frontend.pipeline();
+        if (pipeline.get("login-wait-guard") == null) {
+            pipeline.addFirst("login-wait-guard", new ChannelInboundHandlerAdapter() {
+                @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
+                    ReferenceCountUtil.release(message);
+                    closePair();
+                }
+            });
+        }
+        frontend.config().setAutoRead(true);
+    }
 
     private void sendStatus() {
         int online = owner.onlineCount();
@@ -388,6 +401,9 @@ final class Session extends ChannelInboundHandlerAdapter {
         owner.sessionPublished();
         relayStarting = true;
         frontend.config().setAutoRead(false);
+        if (frontend.pipeline().get("login-wait-guard") != null) {
+            frontend.pipeline().remove("login-wait-guard");
+        }
         backend.config().setAutoRead(false);
         frontend.writeAndFlush(packet.copy()).addListener(write -> {
             if (!write.isSuccess()) { closePair(); return; }

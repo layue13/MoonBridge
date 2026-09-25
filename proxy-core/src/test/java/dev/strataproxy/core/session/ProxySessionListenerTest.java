@@ -110,6 +110,33 @@ final class ProxySessionListenerTest {
     }
 
     @Test
+    void clientDisconnectDuringPendingPlacementReleasesSessionPromptly() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        var placementEntered = new CompletableFuture<Void>();
+        var decision = new CompletableFuture<Optional<PlacementDecision>>();
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+        listener.setPlacement(player -> {
+            placementEntered.complete(null);
+            return decision;
+        });
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                sendLogin(client, "LeavingPlayer");
+                placementEntered.get(5, TimeUnit.SECONDS);
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+            assertTrue(listener.allSessions().isEmpty(), "disconnected player should not occupy a pending session");
+            decision.complete(Optional.of(PlacementDecision.reject("too late")));
+            assertEquals(0, listener.onlineCount());
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void closingListenerDisconnectsActiveSessionAndReleasesCapacity() throws Exception {
         String username = "ShutdownPlayer";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
@@ -728,6 +755,53 @@ final class ProxySessionListenerTest {
                     assertEquals(-1, input.read());
                 }
                 assertTrue(listener.online().isEmpty());
+                assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void clientDisconnectWhileBackendLoginIsPendingReleasesReservation() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var backendReceivedLogin = new CompletableFuture<Void>();
+            var backendClosed = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    backendReceivedLogin.complete(null);
+                    assertEquals(-1, input.read());
+                    backendClosed.complete(null);
+                } catch (Throwable failure) {
+                    backendReceivedLogin.completeExceptionally(failure);
+                    backendClosed.completeExceptionally(failure);
+                }
+            }, "fake-pending-login-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0), URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()),
+                    1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    sendLogin(client, "LeftAtLogin");
+                    backendReceivedLogin.get(5, TimeUnit.SECONDS);
+                    assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
+                }
+                backendClosed.get(5, TimeUnit.SECONDS);
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+                assertTrue(listener.allSessions().isEmpty());
                 assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
