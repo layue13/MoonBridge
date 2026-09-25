@@ -60,7 +60,7 @@ public final class Minecraft1710EntityIds {
                 ProtocolVarInt.read(body); // Object entity ID.
                 if (body.readableBytes() < 18) throw new ProtocolException("truncated Spawn Object");
                 int type = body.readUnsignedByte();
-                if (type == 60 || type == 90) {
+                if (type == 60 || type == 63 || type == 64 || type == 66 || type == 90) {
                     int objectDataOffset = body.readerIndex() + 14;
                     current = rewriteInt(allocator, current, objectDataOffset,
                             serverEntityId, clientEntityId);

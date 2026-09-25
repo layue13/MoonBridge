@@ -102,6 +102,46 @@ final class Minecraft1710EntityIdsTest {
         }
     }
 
+    @Test
+    void rewritesSpawnObjectShooterIdsWithoutChangingOtherObjectData() {
+        for (int type : new int[]{60, 63, 64, 66, 90, 73}) {
+            ByteBuf spawned = spawnObject(type, 200);
+            try {
+                assertSame(spawned, Minecraft1710EntityIds.rewrite(UnpooledByteBufAllocator.DEFAULT,
+                        spawned, true, 200, 100));
+                ByteBuf body = spawned.duplicate();
+                ProtocolVarInt.read(body);
+                assertEquals(0x0E, ProtocolVarInt.read(body));
+                assertEquals(300, ProtocolVarInt.read(body));
+                assertEquals(type, body.readUnsignedByte());
+                body.skipBytes(14); // Position, pitch, and yaw.
+                assertEquals(type == 73 ? 200 : 100, body.readInt());
+            } finally {
+                spawned.release();
+            }
+        }
+    }
+
+    private static ByteBuf spawnObject(int type, int objectData) {
+        ByteBuf body = Unpooled.buffer();
+        ByteBuf frame = Unpooled.buffer();
+        try {
+            ProtocolVarInt.write(body, 0x0E);
+            ProtocolVarInt.write(body, 300);
+            body.writeByte(type).writeInt(1).writeInt(2).writeInt(3);
+            body.writeByte(4).writeByte(5).writeInt(objectData);
+            body.writeShort(0).writeShort(0).writeShort(0);
+            ProtocolVarInt.write(frame, body.readableBytes());
+            frame.writeBytes(body);
+            return frame;
+        } catch (RuntimeException failure) {
+            frame.release();
+            throw failure;
+        } finally {
+            body.release();
+        }
+    }
+
     private static ByteBuf frame(int packetId, int entityId, int trailingByte) {
         ByteBuf frame = Unpooled.buffer();
         ProtocolVarInt.write(frame, 6);
