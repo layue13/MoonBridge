@@ -2,6 +2,7 @@ package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Players;
@@ -23,6 +24,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -69,8 +71,8 @@ class PluginHostTest {
     }
 
     @Test
-    void placementCallbackTimesOut() {
-        CapturingPlugin plugin = new CapturingPlugin("placement", true);
+    void placementFailuresOnlyFailTheirOwnRequest() {
+        RecoveringPlacementPlugin plugin = new RecoveringPlacementPlugin();
         BackendCatalog catalog = new InMemoryBackendCatalog();
         PluginHost host = new PluginHost(catalog, players(), Duration.ofMillis(40));
         host.load(List.of(plugin));
@@ -79,10 +81,13 @@ class PluginHostTest {
         CompletionException failure = assertThrows(CompletionException.class,
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
         assertInstanceOf(PlacementTimeoutException.class, failure.getCause());
-        assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("placement")).isEmpty());
-        CompletionException unavailable = assertThrows(CompletionException.class,
+        assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("placement")).isPresent());
+        CompletionException transientFailure = assertThrows(CompletionException.class,
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
-        assertEquals("Configured initial placement plugin is unavailable", unavailable.getCause().getMessage());
+        assertEquals("temporary lookup failure", transientFailure.getCause().getMessage());
+        assertEquals(Optional.of(PlacementDecision.select("placement")),
+                host.placeInitial(PLAYER).toCompletableFuture().join());
+        assertEquals(0, plugin.disableCount.get());
         host.close();
     }
 
@@ -139,5 +144,24 @@ class PluginHostTest {
         public Optional<InitialPlacementHandler> initialPlacementHandler() {
             return placement ? Optional.of((player, servers) -> new CompletableFuture<>()) : Optional.empty();
         }
+    }
+
+    private static final class RecoveringPlacementPlugin implements Plugin {
+        private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicInteger disableCount = new AtomicInteger();
+
+        @Override public void onLoad(PluginContext context) {
+            context.servers().register(server("placement"));
+        }
+
+        @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
+            return Optional.of((player, servers) -> switch (calls.incrementAndGet()) {
+                case 1 -> new CompletableFuture<>();
+                case 2 -> CompletableFuture.failedFuture(new IllegalStateException("temporary lookup failure"));
+                default -> CompletableFuture.completedFuture(PlacementDecision.select("placement"));
+            });
+        }
+
+        @Override public void onDisable() { disableCount.incrementAndGet(); }
     }
 }

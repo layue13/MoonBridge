@@ -5,6 +5,7 @@ authentication: OFFLINE
 backends: []
 plugins:
   directory: "../plugins"
+  initialPlacementTimeoutSeconds: 15
   enabled:
     dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
       host: "backends.example.net"

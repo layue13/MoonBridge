@@ -57,8 +57,6 @@ public final class PluginHost implements AutoCloseable {
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private State state = State.LOADING;
     private InitialPlacementHandler placementHandler;
-    private LoadedPlugin placementPlugin;
-    private boolean placementConfigured;
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
         this(catalog, players, placementTimeout, Math.max(2, Runtime.getRuntime().availableProcessors()), 128);
@@ -158,8 +156,6 @@ public final class PluginHost implements AutoCloseable {
                                 + loaded.owner.id());
                     }
                     placementHandler = candidate.get();
-                    placementPlugin = loaded;
-                    placementConfigured = true;
                 }
             }
             for (LoadedPlugin loaded : plugins) {
@@ -177,17 +173,11 @@ public final class PluginHost implements AutoCloseable {
     public CompletionStage<Optional<PlacementDecision>> placeInitial(PlayerView player) {
         Objects.requireNonNull(player, "player");
         final InitialPlacementHandler handler;
-        final LoadedPlugin handlerPlugin;
         synchronized (this) {
             if (state != State.ENABLED) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
             }
             handler = placementHandler;
-            handlerPlugin = placementPlugin;
-            if (handler == null && placementConfigured) {
-                return CompletableFuture.failedFuture(new IllegalStateException(
-                        "Configured initial placement plugin is unavailable"));
-            }
         }
         if (handler == null) {
             return CompletableFuture.completedFuture(Optional.empty());
@@ -199,7 +189,6 @@ public final class PluginHost implements AutoCloseable {
                 () -> {
                     if (!decided.compareAndSet(false, true)) return;
                     PlacementTimeoutException timeout = new PlacementTimeoutException(placementTimeout);
-                    failPlacementPlugin(handlerPlugin, timeout);
                     result.completeExceptionally(timeout);
                 },
                 placementTimeout.toNanos(), TimeUnit.NANOSECONDS);
@@ -215,12 +204,10 @@ public final class PluginHost implements AutoCloseable {
                     stage.whenComplete((decision, failure) -> {
                         if (failure != null) {
                             if (!decided.compareAndSet(false, true)) return;
-                            failPlacementPlugin(handlerPlugin, failure);
                             result.completeExceptionally(failure);
                         } else if (decision == null) {
                             if (!decided.compareAndSet(false, true)) return;
                             IllegalStateException invalid = new IllegalStateException("Placement handler returned null");
-                            failPlacementPlugin(handlerPlugin, invalid);
                             result.completeExceptionally(invalid);
                         } else {
                             if (decided.compareAndSet(false, true)) result.complete(Optional.of(decision));
@@ -228,7 +215,6 @@ public final class PluginHost implements AutoCloseable {
                     });
                 } catch (Throwable failure) {
                     if (!decided.compareAndSet(false, true)) return;
-                    failPlacementPlugin(handlerPlugin, failure);
                     result.completeExceptionally(failure);
                 }
             });
@@ -238,33 +224,6 @@ public final class PluginHost implements AutoCloseable {
             }
         }
         return result;
-    }
-
-    private void failPlacementPlugin(LoadedPlugin loaded, Throwable cause) {
-        synchronized (this) {
-            if (state == State.CLOSED || !loaded.enabled) {
-                return;
-            }
-            loaded.enabled = false;
-            loaded.context.deactivate();
-            catalog.removeOwner(loaded.owner);
-            if (placementPlugin == loaded) {
-                placementPlugin = null;
-                placementHandler = null;
-            }
-        }
-        try {
-            callbacks.execute(() -> {
-                try {
-                    loaded.plugin.onDisable();
-                } catch (Throwable disableFailure) {
-                    LOGGER.warn("Plugin {} failed during onDisable after placement failure",
-                            loaded.owner.id(), disableFailure);
-                }
-            });
-        } catch (RejectedExecutionException overloaded) {
-            LOGGER.warn("Could not schedule onDisable for failed plugin {}", loaded.owner.id(), cause);
-        }
     }
 
     @Override
@@ -296,7 +255,6 @@ public final class PluginHost implements AutoCloseable {
         }
         classLoaders.clear();
         placementHandler = null;
-        placementPlugin = null;
     }
 
     private void loadOne(Plugin plugin, String id, Map<String, String> settings) {

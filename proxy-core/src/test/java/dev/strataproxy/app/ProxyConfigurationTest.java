@@ -57,10 +57,29 @@ final class ProxyConfigurationTest {
                     """);
             var plugins = new ProxyConfigurationLoader().load(config).plugins();
             assertEquals("extensions", plugins.directory());
+            assertEquals(15, plugins.initialPlacementTimeoutSeconds());
             assertEquals("_minecraft._tcp.example.net",
                     plugins.enabled().get("dev.example.DnsPlugin").get("record"));
             assertThrows(UnsupportedOperationException.class,
                     () -> plugins.enabled().get("dev.example.DnsPlugin").put("record", "changed"));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
+    void readsAndBoundsInitialPlacementTimeout() throws Exception {
+        var config = Files.createTempFile("strataproxy-timeout", ".yml");
+        try {
+            String prefix = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nplugins:\n"
+                    + "  directory: plugins\n  initialPlacementTimeoutSeconds: ";
+            Files.writeString(config, prefix + "30\n");
+            assertEquals(30, new ProxyConfigurationLoader().load(config).plugins().initialPlacementTimeoutSeconds());
+            for (int invalid : new int[]{0, 121}) {
+                Files.writeString(config, prefix + invalid + "\n");
+                assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                        () -> new ProxyConfigurationLoader().load(config));
+            }
         } finally {
             Files.deleteIfExists(config);
         }

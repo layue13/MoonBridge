@@ -71,7 +71,8 @@ public final class ProxyMain {
                 ? new ProxySessionListener(configuration.listenAddress(), catalog)
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers));
-        try (var plugins = new PluginHost(catalog, listener, Duration.ofSeconds(3))) {
+        try (var plugins = new PluginHost(catalog, listener,
+                Duration.ofSeconds(configuration.plugins().initialPlacementTimeoutSeconds()))) {
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();

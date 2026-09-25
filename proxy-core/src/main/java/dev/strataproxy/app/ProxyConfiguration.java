@@ -17,7 +17,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             throw new IllegalArgumentException("authentication is required: OFFLINE or ONLINE_BUNGEE");
         }
         backends = backends == null ? List.of() : List.copyOf(backends);
-        plugins = plugins == null ? new Plugins("plugins", Map.of()) : plugins;
+        plugins = plugins == null ? new Plugins("plugins", Map.of(), null) : plugins;
         var names = new java.util.HashSet<String>();
         for (var backend : backends) {
             if (!names.add(backend.name())) {
@@ -81,10 +81,16 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         }
     }
 
-    public record Plugins(String directory, Map<String, Map<String, String>> enabled) {
+    public record Plugins(String directory, Map<String, Map<String, String>> enabled,
+                          Integer initialPlacementTimeoutSeconds) {
         public Plugins {
             if (directory == null || directory.isBlank()) {
                 throw new IllegalArgumentException("plugin directory is required");
+            }
+            initialPlacementTimeoutSeconds = initialPlacementTimeoutSeconds == null
+                    ? 15 : initialPlacementTimeoutSeconds;
+            if (initialPlacementTimeoutSeconds < 1 || initialPlacementTimeoutSeconds > 120) {
+                throw new IllegalArgumentException("initialPlacementTimeoutSeconds must be between 1 and 120");
             }
             enabled = enabled == null ? Map.of() : enabled.entrySet().stream().collect(
                     java.util.stream.Collectors.toUnmodifiableMap(
