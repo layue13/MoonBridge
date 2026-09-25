@@ -124,6 +124,13 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void receiveFrontend(ByteBuf packet) {
         if (handshake == null) {
             handshake = MinecraftHandshake.decode(packet, ProtocolProfile.minecraft1710());
+            if (handshake.nextState() == MinecraftHandshake.NextState.LOGIN) {
+                int separator = handshake.serverAddress().indexOf('\0');
+                if (separator >= 0) {
+                    handshake = new MinecraftHandshake(handshake.protocolVersion(),
+                            handshake.serverAddress().substring(0, separator), handshake.serverPort(), handshake.nextState());
+                }
+            }
             if (handshake.protocolVersion() != ProtocolProfile.PROTOCOL_1_7_10) {
                 closePair();
                 return;

@@ -13,9 +13,6 @@ public record MinecraftHandshake(int protocolVersion, String serverAddress, int 
         if (nextState == null) throw new IllegalArgumentException("nextState is required");
     }
 
-    /** True when the legacy virtual host contains Forge's NUL-delimited client marker. */
-    public boolean hasLegacyForgeMarker() { return serverAddress.contains("\0FML\0"); }
-
     public static MinecraftHandshake decode(ByteBuf packet, ProtocolProfile profile) {
         ByteBuf input = packet.duplicate();
         if (ProtocolVarInt.read(input) != 0) throw new ProtocolException("expected Handshake packet id 0");

@@ -69,11 +69,11 @@ class MinecraftProtocolTest {
         try { assertEquals(login, LoginStart.decode(encodedLogin, profile)); }
         finally { encodedLogin.release(); }
 
-        MinecraftHandshake forge = new MinecraftHandshake(5, "play.example\0FML\0", 25565, MinecraftHandshake.NextState.LOGIN);
-        assertTrue(forge.hasLegacyForgeMarker());
-        ByteBuf forgeBody = forge.encode(UnpooledByteBufAllocator.DEFAULT, profile);
-        try { assertEquals(forge, MinecraftHandshake.decode(forgeBody, profile)); }
-        finally { forgeBody.release(); }
+        MinecraftHandshake segmented = new MinecraftHandshake(5, "play.example\0extra", 25565,
+                MinecraftHandshake.NextState.LOGIN);
+        ByteBuf segmentedBody = segmented.encode(UnpooledByteBufAllocator.DEFAULT, profile);
+        try { assertEquals(segmented, MinecraftHandshake.decode(segmentedBody, profile)); }
+        finally { segmentedBody.release(); }
     }
 
     @Test void rejectsMalformedHandshakeAndOversizedLoginName() {

@@ -42,6 +42,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
     @Test
+    void offlineBackendDoesNotReceiveClientSuppliedIdentitySegments() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var forwardedHost = new CompletableFuture<String>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var handshake = new java.io.ByteArrayInputStream(
+                            readFrame(new DataInputStream(socket.getInputStream())));
+                    assertEquals(0, readVarInt(handshake));
+                    assertEquals(5, readVarInt(handshake));
+                    forwardedHost.complete(readString(handshake, 255));
+                } catch (Throwable failure) { forwardedHost.completeExceptionally(failure); }
+            }, "fake-host-check-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    sendLogin(client, "HostCheck", "play.example\0spoofed-ip\0spoofed-uuid\0[]");
+                    assertEquals("play.example", forwardedHost.get(5, TimeUnit.SECONDS));
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void closingListenerEndsPendingPlacementAndIgnoresLateDecision() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
@@ -364,11 +399,15 @@ final class ProxySessionListenerTest {
     }
 
     private static void sendLogin(Socket client, String username) throws Exception {
+        sendLogin(client, username, "localhost");
+    }
+
+    private static void sendLogin(Socket client, String username, String host) throws Exception {
         DataOutputStream output = new DataOutputStream(client.getOutputStream());
         ByteArrayOutputStream hello = new ByteArrayOutputStream();
         writeVarInt(hello, 0);
         writeVarInt(hello, 5);
-        writeString(hello, "localhost");
+        writeString(hello, host);
         hello.write(0); hello.write(1);
         writeVarInt(hello, 2);
         writeFrame(output, hello.toByteArray());
