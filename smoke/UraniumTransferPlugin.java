@@ -6,8 +6,12 @@ import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Plugin;
 import dev.strataproxy.api.PluginContext;
+import dev.strataproxy.api.ServerDefinition;
+import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.TransferStatus;
 
+import java.net.URI;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -15,16 +19,23 @@ import java.util.concurrent.TimeUnit;
 /** Minimal external plugin used only by the installed Uranium transfer smoke. */
 public final class UraniumTransferPlugin implements Plugin {
     private PluginContext context;
+    private ServerRegistration targetRegistration;
     private volatile Thread worker;
 
     @Override public void onLoad(PluginContext loadedContext) {
         context = loadedContext;
+        int port = Integer.parseInt(context.settings().get("newPort"));
+        targetRegistration = context.servers().register(new ServerDefinition("new",
+                URI.create("tcp://127.0.0.1:" + port), Map.of(), 10,
+                Map.of("source", "uranium-smoke-plugin")));
+        context.logger().info("SMOKE_PLUGIN_REGISTER_PASS name=new port={}", port);
     }
 
     @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
         return Optional.of((player, servers) -> {
             if (servers.stream().noneMatch(server -> server.name().equals("old"))
-                    || servers.stream().noneMatch(server -> server.name().equals("new"))) {
+                    || servers.stream().noneMatch(server -> server.name().equals("new")
+                            && "uranium-smoke-plugin".equals(server.metadata().get("source")))) {
                 return CompletableFuture.completedFuture(PlacementDecision.reject("Missing Uranium smoke backend"));
             }
             worker = Thread.ofVirtual().name("uranium-transfer-smoke").start(() -> transferWhenConnected(player.identity()));
@@ -63,5 +74,6 @@ public final class UraniumTransferPlugin implements Plugin {
     @Override public void onDisable() {
         Thread current = worker;
         if (current != null) current.interrupt();
+        if (targetRegistration != null) targetRegistration.unregister();
     }
 }

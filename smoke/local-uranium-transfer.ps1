@@ -146,13 +146,11 @@ authentication: OFFLINE
 plugins:
   directory: "$pluginDirYaml"
   enabled:
-    dev.strataproxy.smoke.UraniumTransferPlugin: {}
+    dev.strataproxy.smoke.UraniumTransferPlugin:
+      newPort: "$newPort"
 backends:
   - name: old
     address: "127.0.0.1:$oldPort"
-    capacity: 10
-  - name: new
-    address: "127.0.0.1:$newPort"
     capacity: 10
 "@ | Set-Content -LiteralPath $config -Encoding utf8
         $java = (Get-Command java.exe -ErrorAction Stop).Source
@@ -165,8 +163,9 @@ backends:
         WaitForPort $proxyPort $proxy
         & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe --external $proxyPort
         if ($LASTEXITCODE -ne 0) { throw "Installed-plugin transfer probe failed: $LASTEXITCODE" }
+        WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new'
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
-        Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
+        Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
     } else {
         & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $oldPort $newPort
     }
