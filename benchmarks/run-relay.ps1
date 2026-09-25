@@ -2,7 +2,8 @@ param(
     [int]$Connections = 4,
     [int]$Messages = 1000,
     [int]$Warmup = 100,
-    [int]$Payload = 1024
+    [int]$Payload = 1024,
+    [int]$Repeats = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,11 +17,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "installDist failed with exit code $LASTEXITCODE" }
 
     New-Item -ItemType Directory -Path $classes -Force | Out-Null
-    & javac -cp "$installLib\*" -d $classes (Join-Path $PSScriptRoot "RawRelayBenchmark.java")
+    & javac -cp "$installLib\*" -d $classes (Join-Path $PSScriptRoot "RelayBenchmark.java")
     if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
 
-    & java -cp "$classes;$installLib\*" RawRelayBenchmark `
-        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload
+    & java -cp "$classes;$installLib\*" RelayBenchmark `
+        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
 }
 finally {

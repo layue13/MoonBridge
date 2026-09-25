@@ -60,10 +60,10 @@ plugins:
 
 ## 合成 relay 基准
 
-`benchmarks/run-raw-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连基线与当前 `RawRelay` TCP 转发。每个连接先预热，再重复发送固定长度字节块并读取同样长度的回声；连接数、每连接消息数、预热数和负载字节数均可配置。输出往返吞吐、按单向负载字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
+`benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay 和当前会话使用的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数和重复轮数均可配置。基准在轮次间交替执行两种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
 
 ```powershell
-.\benchmarks\run-raw-relay.ps1 -Connections 8 -Messages 2000 -Warmup 200 -Payload 4096
+.\benchmarks\run-relay.ps1 -Connections 8 -Messages 2000 -Warmup 200 -Payload 4096
 ```
 
-该基准只覆盖本机 TCP 回声和原始 relay 数据路径。负载是合成字节块，不含 Minecraft 帧、登录、Forge 握手、模组流量或真实客户端/后端行为；结果不代表 1.7.10 整合包等价性能，也不设 CI 性能门槛。堆变化是阶段前后的粗略观测，不是分配速率；请在目标机器、JDK 和连接规模上多轮运行并记录环境，避免把单次结果当成容量承诺。
+该基准只覆盖本机 TCP 回声、原始 relay 和按帧 relay 数据路径。负载是合成帧，不含登录、Forge 握手、模组流量或真实客户端/后端行为；结果不代表 1.7.10 整合包等价性能，也不设 CI 性能门槛。堆变化是阶段前后的粗略观测，不是分配速率；请在目标机器、JDK 和连接规模上多轮运行并记录环境，避免把单次结果当成容量承诺。

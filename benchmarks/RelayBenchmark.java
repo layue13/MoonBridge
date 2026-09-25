@@ -1,3 +1,6 @@
+import dev.strataproxy.core.protocol.MinecraftFrameDecoder;
+import dev.strataproxy.core.protocol.ProtocolProfile;
+import dev.strataproxy.core.protocol.ProtocolVarInt;
 import dev.strataproxy.core.relay.RawRelay;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
@@ -28,36 +31,47 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 
-/** Synthetic loopback echo benchmark for the current raw TCP relay. */
-public final class RawRelayBenchmark {
+/** Synthetic loopback echo benchmark for direct, byte-stream, and framed paths. */
+public final class RelayBenchmark {
     private static final AtomicLong RELAYED = new AtomicLong();
     private final EventLoopGroup acceptors = new NioEventLoopGroup(1);
     private final EventLoopGroup io = new NioEventLoopGroup();
     private final List<Channel> listeners = new ArrayList<>();
-    private final int payloadBytes;
-
-    private RawRelayBenchmark(int payloadBytes) { this.payloadBytes = payloadBytes; }
+    private RelayBenchmark() { }
 
     public static void main(String[] args) throws Exception {
         int connections = intArg(args, "connections", 4);
         int messages = intArg(args, "messages", 1000);
         int warmup = intArg(args, "warmup", 100);
         int payload = intArg(args, "payload", 1024);
-        if (connections < 1 || messages < 1 || warmup < 0 || payload < 1 || payload > 1_048_576)
-            throw new IllegalArgumentException("connections/messages/payload must be positive; warmup nonnegative; payload <= 1048576");
+        int repeats = intArg(args, "repeats", 2);
+        if (connections < 1 || messages < 1 || warmup < 0 || payload < 1 || payload > 1_048_576
+                || repeats < 1 || repeats > 10)
+            throw new IllegalArgumentException("connections/messages/payload must be positive; warmup nonnegative; payload <= 1048576; repeats 1..10");
 
-        var benchmark = new RawRelayBenchmark(payload);
+        var benchmark = new RelayBenchmark();
         try {
             int backendPort = benchmark.startBackend();
-            int relayPort = benchmark.startRelay(backendPort);
-            byte[] body = new byte[payload];
-            for (int i = 0; i < body.length; i++) body[i] = (byte) (i * 31 + 7);
-            System.out.printf("Synthetic loopback TCP echo; payload=%d bytes connections=%d measured_messages_per_connection=%d warmup_per_connection=%d%n",
-                    payload, connections, messages, warmup);
-            System.out.println("Comparison: direct-to-echo baseline vs StrataProxy RawRelay; connect/setup time excluded.");
-            benchmark.run("baseline", backendPort, connections, messages, warmup, body);
-            benchmark.run("raw-relay", relayPort, connections, messages, warmup, body);
-            System.out.printf("backend_received_payload_bytes_both_phases=%d%n", RELAYED.get());
+            int rawPort = benchmark.startRelay(backendPort, false);
+            int framedPort = benchmark.startRelay(backendPort, true);
+            byte[] body = frame(payload);
+            System.out.printf("Synthetic loopback TCP echo; frame_payload=%d bytes wire_frame=%d bytes connections=%d measured_messages_per_connection=%d warmup_per_connection=%d repeats=%d%n",
+                    payload, body.length, connections, messages, warmup, repeats);
+            System.out.println("Comparison: direct echo, byte-stream RawRelay, and Session-style framed RawRelay; connect/setup time excluded.");
+            benchmark.run("baseline-start", backendPort, connections, messages, warmup, body);
+            for (int round = 1; round <= repeats; round++) {
+                if ((round & 1) == 1) {
+                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, body);
+                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, body);
+                } else {
+                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, body);
+                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, body);
+                }
+            }
+            benchmark.run("baseline-end", backendPort, connections, messages, warmup, body);
+            long expectedBytes = (long) connections * (messages + warmup) * body.length * (2 + 2L * repeats);
+            if (RELAYED.get() != expectedBytes) throw new IllegalStateException("backend byte count mismatch");
+            System.out.printf("backend_received_wire_bytes_all_phases=%d%n", RELAYED.get());
         } finally {
             benchmark.close();
         }
@@ -80,16 +94,21 @@ public final class RawRelayBenchmark {
         return ((InetSocketAddress) bound.channel().localAddress()).getPort();
     }
 
-    private int startRelay(int backendPort) throws Exception {
+    private int startRelay(int backendPort, boolean framed) throws Exception {
         ChannelFuture bound = new ServerBootstrap().group(acceptors, io).channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel front) {
                         front.config().setAutoRead(false);
+                        if (framed) front.pipeline().addLast(new MinecraftFrameDecoder(
+                                ProtocolProfile.minecraft1710(), true));
                         new Bootstrap().group(io).channel(NioSocketChannel.class)
                                 .option(ChannelOption.TCP_NODELAY, true)
                                 .handler(new ChannelInitializer<SocketChannel>() {
-                                    @Override protected void initChannel(SocketChannel ch) { }
+                                    @Override protected void initChannel(SocketChannel ch) {
+                                        if (framed) ch.pipeline().addLast(new MinecraftFrameDecoder(
+                                                ProtocolProfile.minecraft1710(), true));
+                                    }
                                 }).connect("127.0.0.1", backendPort).addListener(connect -> {
                                     if (!connect.isSuccess()) { front.close(); return; }
                                     Channel back = ((ChannelFuture) connect).channel();
@@ -105,6 +124,20 @@ public final class RawRelayBenchmark {
                 }).bind("127.0.0.1", 0).sync();
         listeners.add(bound.channel());
         return ((InetSocketAddress) bound.channel().localAddress()).getPort();
+    }
+
+    private static byte[] frame(int payloadBytes) {
+        byte[] bytes = new byte[ProtocolVarInt.encodedSize(payloadBytes) + payloadBytes];
+        int value = payloadBytes;
+        int offset = 0;
+        do {
+            int part = value & 0x7f;
+            value >>>= 7;
+            bytes[offset++] = (byte) (value == 0 ? part : part | 0x80);
+        } while (value != 0);
+        bytes[offset] = 0x03;
+        for (int i = offset + 1; i < bytes.length; i++) bytes[i] = (byte) (i * 31 + 7);
+        return bytes;
     }
 
     private void run(String label, int port, int connections, int messages, int warmup, byte[] body) throws Exception {
@@ -135,7 +168,7 @@ public final class RawRelayBenchmark {
         long ops = (long) connections * messages;
         double seconds = elapsed / 1_000_000_000.0;
         double mibps = (ops * (double) body.length / (1024 * 1024)) / seconds;
-        System.out.printf("%s: %.1f roundtrips/s, %.2f MiB/s one-way-payload, latency_ms p50=%.3f p95=%.3f p99=%.3f, gc_collections=%d gc_time_ms=%d heap_used_delta_bytes=%d%n",
+        System.out.printf("%s: %.1f roundtrips/s, %.2f MiB/s one-way-wire-bytes, latency_ms p50=%.3f p95=%.3f p99=%.3f, gc_collections=%d gc_time_ms=%d heap_used_delta_bytes=%d%n",
                 label, ops / seconds, mibps, percentile(samples, .50) / 1e6, percentile(samples, .95) / 1e6,
                 percentile(samples, .99) / 1e6, gcAfter[0] - gcBefore[0], gcAfter[1] - gcBefore[1], heapAfter - heapBefore);
     }

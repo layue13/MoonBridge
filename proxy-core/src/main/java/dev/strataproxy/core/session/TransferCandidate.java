@@ -24,6 +24,7 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     }
 
     private static final int MAX_QUEUED_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
+    private static final int MAX_QUEUED_PACKETS = 1024;
     private final UUID expectedId;
     private final String username;
     private final Listener listener;
@@ -78,8 +79,9 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
                     joinGame = login.get();
                 } else {
                     int bytes = packet.readableBytes();
-                    if (bytes > MAX_QUEUED_BYTES - queuedBytes) {
-                        throw new IllegalArgumentException("backend sent too much data before transfer");
+                    if (queued.size() >= MAX_QUEUED_PACKETS || bytes > MAX_QUEUED_BYTES - queuedBytes) {
+                        fail(ctx, "backend sent too much data before transfer");
+                        return;
                     }
                     queued.addLast(packet.retainedDuplicate());
                     queuedBytes += bytes;
