@@ -53,6 +53,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/** Mutable session control state is confined to the frontend event loop. */
 @io.netty.channel.ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
@@ -316,6 +317,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                 .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel channel) {
+                        requireSessionEventLoop(channel);
                         installCodecs(channel.pipeline());
                         channel.pipeline().addLast("initial-session", Session.this);
                     }
@@ -631,6 +633,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                     .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
                         @Override protected void initChannel(SocketChannel channel) {
+                            requireSessionEventLoop(channel);
                             channel.pipeline().addLast("minecraft-frame-decoder",
                                     new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                                             ProtocolProfile.minecraft1710(), true));
@@ -678,6 +681,12 @@ final class Session extends ChannelInboundHandlerAdapter {
             host = host.substring(1, host.length() - 1);
         }
         return InetSocketAddress.createUnresolved(host, address.getPort());
+    }
+
+    private void requireSessionEventLoop(Channel channel) {
+        if (channel.eventLoop() != frontend.eventLoop()) {
+            throw new IllegalStateException("backend channel must share the player session event loop");
+        }
     }
 
     private void candidateReady(TransferAttempt attempt) {
