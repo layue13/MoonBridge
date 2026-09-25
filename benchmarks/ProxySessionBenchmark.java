@@ -1,6 +1,8 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.PlayerView;
+import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
@@ -44,6 +46,8 @@ public final class ProxySessionBenchmark {
         int payload = intArg(args, "payload", 1024);
         int repeats = intArg(args, "repeats", 2);
         int window = intArg(args, "window", 1);
+        String mode = modeArg(args);
+        boolean afterTransfer = mode.equals("post-transfer");
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
                 || repeats < 1 || repeats > 10 || window < 1 || window > 1024) {
@@ -56,11 +60,17 @@ public final class ProxySessionBenchmark {
         for (int i = 1; i < payload; i++) playPayload[i] = (byte) (i * 31 + 7);
         byte[] playFrame = frame(playPayload);
 
-        try (FakeBackend backend = new FakeBackend(connections)) {
+        try (FakeBackend backend = new FakeBackend(connections, 42);
+             FakeBackend replacement = afterTransfer ? new FakeBackend(connections, 99) : null) {
             backend.start();
+            if (replacement != null) replacement.start();
             InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
             catalog.register(new BackendRegistration(new BackendId("bench"), new BackendOwner("synthetic", 0),
                     URI.create("tcp://127.0.0.1:" + backend.port()), connections, Map.of(), Map.of()));
+            if (replacement != null) {
+                catalog.register(new BackendRegistration(new BackendId("replacement"), new BackendOwner("synthetic", 0),
+                        URI.create("tcp://127.0.0.1:" + replacement.port()), connections, Map.of(), Map.of()));
+            }
             ProxySessionListener proxy = new ProxySessionListener(
                     new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
             proxy.setPlacement(player -> java.util.concurrent.CompletableFuture.completedFuture(
@@ -68,22 +78,29 @@ public final class ProxySessionBenchmark {
             try {
                 int proxyPort = ((InetSocketAddress) proxy.start().toCompletableFuture()
                         .get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS).localAddress()).getPort();
-                System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; payload=%d bytes frame=%d bytes "
+                System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
                                 + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
                                 + "window_per_connection=%d repeats=%d%n",
-                        playPayload.length, playFrame.length, connections, messages, warmup, window, repeats);
+                        mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats);
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
                         + "connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.");
+                if (afterTransfer) System.out.println("Proxy clients switch from bench to replacement before warmup; "
+                        + "direct clients connect to replacement. Transfer is excluded from timing.");
                 System.out.println("No Forge, real pack, or real client is involved.");
 
+                int directPort = replacement == null ? backend.port() : replacement.port();
                 boolean proxyFirst = false;
                 for (int round = 0; round < repeats; round++) {
                     if (proxyFirst) {
-                        runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window, playFrame, playPayload);
-                        runPhase("direct-" + (round + 1), backend.port(), connections, messages, warmup, window, playFrame, playPayload);
+                        runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
+                                playFrame, playPayload, proxy, afterTransfer);
+                        runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
+                                playFrame, playPayload, proxy, afterTransfer);
                     } else {
-                        runPhase("direct-" + (round + 1), backend.port(), connections, messages, warmup, window, playFrame, playPayload);
-                        runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window, playFrame, playPayload);
+                        runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
+                                playFrame, playPayload, proxy, afterTransfer);
+                        runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
+                                playFrame, playPayload, proxy, afterTransfer);
                     }
                     proxyFirst = !proxyFirst;
                 }
@@ -94,14 +111,15 @@ public final class ProxySessionBenchmark {
     }
 
     private static void runPhase(String name, int port, int connections, int messages, int warmup, int window,
-                                 byte[] playFrame, byte[] playPayload) throws Exception {
+                                 byte[] playFrame, byte[] playPayload, ProxySessionListener proxy,
+                                 boolean afterTransfer) throws Exception {
         List<ClientWorker> clients = new ArrayList<>();
         CountDownLatch prepared = new CountDownLatch(connections);
         CountDownLatch begin = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(connections);
         for (int i = 0; i < connections; i++) {
             ClientWorker client = new ClientWorker(name, i, port, messages, warmup, window, playFrame,
-                    playPayload, prepared, begin, finished, clients);
+                    playPayload, prepared, begin, finished, clients, proxy, afterTransfer);
             clients.add(client);
         }
         for (ClientWorker client : clients) {
@@ -159,6 +177,8 @@ public final class ProxySessionBenchmark {
         final byte[] playPayload;
         final CountDownLatch prepared, begin, finished;
         final List<ClientWorker> peers;
+        final ProxySessionListener proxy;
+        final boolean afterTransfer;
         volatile Exception failure;
         volatile Socket socket;
         long[] latencies;
@@ -166,10 +186,11 @@ public final class ProxySessionBenchmark {
 
         ClientWorker(String phase, int index, int port, int messages, int warmup, int window, byte[] playFrame,
                      byte[] playPayload, CountDownLatch prepared, CountDownLatch begin, CountDownLatch finished,
-                     List<ClientWorker> peers) {
+                     List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer) {
             this.phase = phase; this.index = index; this.port = port; this.messages = messages;
             this.warmup = warmup; this.window = window; this.playFrame = playFrame.clone(); this.playPayload = playPayload;
             this.prepared = prepared; this.begin = begin; this.finished = finished; this.peers = peers;
+            this.proxy = proxy; this.afterTransfer = afterTransfer;
         }
 
         @Override public void run() {
@@ -185,6 +206,20 @@ public final class ProxySessionBenchmark {
                 readLoginSuccess(input, username);
                 if (packetId(readFrame(input)) != 1) throw new IOException("expected Join Game before PLAY");
                 if (packetId(readFrame(input)) != 8) throw new IOException("expected Position and Look before PLAY");
+                if (afterTransfer && phase.startsWith("proxy")) {
+                    PlayerView player = awaitPlayer(proxy, username);
+                    var transfer = proxy.transfer(player.identity(), "replacement").toCompletableFuture();
+                    if (packetId(readFrame(input)) != 7 || packetId(readFrame(input)) != 7)
+                        throw new IOException("expected two Respawns from replacement backend");
+                    if (packetId(readFrame(input)) != 8)
+                        throw new IOException("expected Position and Look from replacement backend");
+                    var result = transfer.get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    if (result.status() != TransferStatus.NETWORK_READY)
+                        throw new IOException("replacement transfer failed: " + result.status()
+                                + " " + result.detail().orElse(""));
+                    if (!proxy.find(player.identity()).flatMap(PlayerView::currentServer).orElse("")
+                            .equals("replacement")) throw new IOException("replacement player view missing");
+                }
                 exchange(output, input, warmup, null, 0);
                 echoes = 0; correct = 0; errors = 0; // Warmup is validated, then omitted from reported phase counts.
                 latencies = new long[messages];
@@ -234,6 +269,17 @@ public final class ProxySessionBenchmark {
         }
     }
 
+    private static PlayerView awaitPlayer(ProxySessionListener proxy, String username) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(SETUP_TIMEOUT_SECONDS);
+        while (System.nanoTime() < deadline) {
+            for (PlayerView player : proxy.online()) {
+                if (player.username().equals(username)) return player;
+            }
+            Thread.sleep(5);
+        }
+        throw new IOException("proxy did not publish " + username);
+    }
+
     private static void writeSequence(byte[] frame, int bodyOffset, int sequence) {
         // A fixed-width, big-endian sequence field follows the PLAY packet ID in each body.
         frame[bodyOffset + 1] = (byte) (sequence >>> 24);
@@ -258,11 +304,13 @@ public final class ProxySessionBenchmark {
     private static final class FakeBackend implements AutoCloseable {
         private final ServerSocket server = new ServerSocket();
         private final ExecutorService clients;
+        private final int entityId;
         private final List<Socket> active = java.util.Collections.synchronizedList(new ArrayList<>());
         private volatile boolean closed;
         private Thread acceptThread;
 
-        FakeBackend(int concurrency) throws IOException {
+        FakeBackend(int concurrency, int entityId) throws IOException {
+            this.entityId = entityId;
             clients = Executors.newFixedThreadPool(concurrency);
             server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), concurrency * 2);
         }
@@ -298,7 +346,7 @@ public final class ProxySessionBenchmark {
                 writeString(success, id.toString());
                 writeString(success, username);
                 writeFrame(output, success.toByteArray());
-                writeFrame(output, joinGame());
+                writeFrame(output, joinGame(entityId));
                 writeFrame(output, positionAndLook());
                 while (!closed && !socket.isClosed()) {
                     byte[] body = readFrame(input);
@@ -320,11 +368,11 @@ public final class ProxySessionBenchmark {
         }
     }
 
-    private static byte[] joinGame() throws IOException {
+    private static byte[] joinGame(int entityId) throws IOException {
         ByteArrayOutputStream packet = new ByteArrayOutputStream();
         writeVarInt(packet, 1);
         DataOutputStream out = new DataOutputStream(packet);
-        out.writeInt(42); out.writeByte(0); out.writeByte(0); out.writeByte(0); out.writeByte(20);
+        out.writeInt(entityId); out.writeByte(0); out.writeByte(0); out.writeByte(0); out.writeByte(20);
         writeString(packet, "default");
         return packet.toByteArray();
     }
@@ -414,7 +462,7 @@ public final class ProxySessionBenchmark {
     private static int intArg(String[] args, String key, int fallback) {
         int found = fallback;
         boolean seen = false;
-        List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window");
+        List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window", "mode");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);
@@ -428,5 +476,20 @@ public final class ProxySessionBenchmark {
             }
         }
         return found;
+    }
+
+    private static String modeArg(String[] args) {
+        String mode = "initial";
+        boolean seen = false;
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--mode")) {
+                if (seen || i + 1 >= args.length) throw new IllegalArgumentException("missing or duplicate --mode");
+                mode = args[++i];
+                seen = true;
+            } else if (args[i].startsWith("--")) i++;
+        }
+        if (!mode.equals("initial") && !mode.equals("post-transfer"))
+            throw new IllegalArgumentException("mode must be initial or post-transfer");
+        return mode;
     }
 }

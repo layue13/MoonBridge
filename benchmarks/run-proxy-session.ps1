@@ -4,7 +4,8 @@ param(
     [ValidateRange(0, 10000)][int]$Warmup = 100,
     [ValidateRange(5, 1048576)][int]$Payload = 1024,
     [ValidateRange(1, 10)][int]$Repeats = 2,
-    [ValidateRange(1, 1024)][int]$Window = 1
+    [ValidateRange(1, 1024)][int]$Window = 1,
+    [ValidateSet('initial', 'post-transfer')][string]$Mode = 'initial'
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +24,7 @@ try {
 
     & java -cp "$classes;$installLib\*" dev.strataproxy.core.session.ProxySessionBenchmark `
         --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats `
-        --window $Window
+        --window $Window --mode $Mode
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location

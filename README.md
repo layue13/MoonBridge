@@ -93,9 +93,12 @@ plugins:
 
 ```powershell
 .\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1
+.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1 -Mode post-transfer
 ```
 
 当前提交的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](benchmarks/results/2026-09-25-session-after-lifecycle.md)。之前提交的测量见 [原会话基准记录](benchmarks/results/2026-09-25-current-session-benchmark.md)。这些是代理自身的合成流量性能验证，不是后端负载观测。
+
+`-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
 
 当前会话路径的 [JFR 采样记录](benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
 
