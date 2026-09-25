@@ -78,6 +78,8 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 `smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
+安装包转服烟测可加 `-DebugSession`，将当前运行的会话失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。一次间歇性初始登录 EOF 的复现实验和验证边界见 [运行记录](smoke/results/2026-09-26-initial-login-repeat.md)。
+
 ## 合成 relay 基准
 
 `benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。

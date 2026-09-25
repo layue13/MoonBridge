@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$BundlePath,
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
     [switch]$InstalledPlugin,
+    [switch]$DebugSession,
     [switch]$PrismClient,
     [switch]$ReturnToOld,
     [string]$PrismInstance = '1.7.10',
@@ -12,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
+if ($DebugSession -and -not $InstalledPlugin) { throw '-DebugSession requires -InstalledPlugin' }
 if ($ReturnToOld -and -not $InstalledPlugin) {
     throw '-ReturnToOld requires -InstalledPlugin'
 }
@@ -176,7 +178,22 @@ backends:
 "@ | Set-Content -LiteralPath $config -Encoding utf8
         $java = (Get-Command java.exe -ErrorAction Stop).Source
         $proxyLog = Join-Path $runDir 'proxy.stdout.log'
+        $debugJvmArgs = @()
+        if ($DebugSession) {
+            $logbackConfig = Join-Path $runDir 'logback-debug.xml'
+            @'
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern></encoder>
+    </appender>
+    <logger name="dev.strataproxy.core.session.Session" level="DEBUG" />
+    <root level="INFO"><appender-ref ref="CONSOLE" /></root>
+</configuration>
+'@ | Set-Content -LiteralPath $logbackConfig -Encoding utf8
+            $debugJvmArgs = @(('"-Dlogback.configurationFile={0}"' -f $logbackConfig.Replace('\', '/')))
+        }
         $proxy = Start-Process -FilePath $java -ArgumentList @(
+            $debugJvmArgs
             '-cp', ('"{0}"' -f $classpath), 'dev.strataproxy.app.ProxyMain',
             '--config', ('"{0}"' -f $config)
         ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $proxyLog `

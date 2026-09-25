@@ -35,6 +35,8 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.ReferenceCountUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -56,6 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Mutable session control state is confined to the frontend event loop. */
 @io.netty.channel.ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
+    private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
@@ -122,6 +125,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (ctx.channel() == frontend) receiveFrontend(body);
             else receiveBackend(body);
         } catch (RuntimeException failure) {
+            LOGGER.debug("Closing session after {} frame handling failed",
+                    ctx.channel() == frontend ? "client" : "backend", failure);
             closePair();
         } finally {
             packet.release();
@@ -332,6 +337,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             if (!future.isSuccess()) {
+                LOGGER.debug("Backend connection failed for player {} to {}", view.username(), selected.address(),
+                        future.cause());
                 disconnectLogin("Could not connect to the selected server.");
                 return;
             }
@@ -361,6 +368,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void disconnectLogin(String reason) {
         if (closed.get() || loginDisconnectStarted) return;
+        LOGGER.debug("Login disconnect for player {}: {}", view == null ? "<unknown>" : view.username(), reason);
         loginDisconnectStarted = true;
         frontend.config().setAutoRead(false);
         resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
@@ -375,7 +383,12 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void resetLoginDeadline(Duration timeout) {
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
-        initialLoginDeadline = frontend.eventLoop().schedule(this::closePair,
+        initialLoginDeadline = frontend.eventLoop().schedule(() -> {
+                    LOGGER.debug("Login phase deadline expired for player {} with backend {}; disconnect started={}",
+                            view == null ? "<unknown>" : view.username(),
+                            selected == null ? "<none>" : selected.handle().id().value(), loginDisconnectStarted);
+                    closePair();
+                },
                 timeout.toNanos(), TimeUnit.NANOSECONDS);
     }
 
@@ -384,6 +397,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf input = packet.duplicate();
         int id = ProtocolVarInt.read(input);
         if (id == 1) { // Encryption Request means backend is not in offline mode.
+            LOGGER.debug("Backend requested encryption for player {}", view.username());
             closePair();
             return;
         }
@@ -395,17 +409,20 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         if (id != 2 || published) {
+            LOGGER.debug("Unexpected backend login packet {} for player {}", id, view.username());
             closePair();
             return;
         }
         MinecraftLoginSuccess success = MinecraftLoginSuccess.decode(packet);
         if (!success.username().equals(view.username())) {
+            LOGGER.debug("Backend login name mismatch for player {}: {}", view.username(), success.username());
             closePair();
             return;
         }
         UUID expected = owner.onlineMode() ? verifiedProfile.uuid()
                 : UUID.nameUUIDFromBytes(("OfflinePlayer:" + success.username()).getBytes(StandardCharsets.UTF_8));
         if (!expected.equals(success.playerId())) {
+            LOGGER.debug("Backend login UUID mismatch for player {}", view.username());
             closePair();
             return;
         }
@@ -1035,10 +1052,17 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void channelInactive(ChannelHandlerContext ctx) {
+        if (!published && loginStart != null) {
+            LOGGER.debug("{} channel closed during initial login for player {} with backend {}",
+                    ctx.channel() == frontend ? "Client" : "Backend", loginStart.username(),
+                    selected == null ? "<none>" : selected.handle().id().value());
+        }
         if (ctx.channel() != backend || !loginDisconnectStarted) closePair();
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        LOGGER.debug("{} channel exception for player {}", ctx.channel() == frontend ? "Client" : "Backend",
+                view == null ? "<unknown>" : view.username(), cause);
         if (ctx.channel() == backend && loginDisconnectStarted) ctx.close();
         else closePair();
     }
