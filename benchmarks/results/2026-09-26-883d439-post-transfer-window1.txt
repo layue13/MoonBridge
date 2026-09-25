@@ -1,0 +1,38 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+Reusing configuration cache.
+> Task :proxy-plugin-api:processResources NO-SOURCE
+> Task :dns-discovery:processResources UP-TO-DATE
+> Task :proxy-core:processResources UP-TO-DATE
+> Task :agent-discovery:processResources UP-TO-DATE
+> Task :proxy-plugin-api:compileJava UP-TO-DATE
+> Task :proxy-plugin-api:classes UP-TO-DATE
+> Task :proxy-plugin-api:jar UP-TO-DATE
+> Task :agent-discovery:compileJava UP-TO-DATE
+> Task :agent-discovery:classes UP-TO-DATE
+> Task :dns-discovery:compileJava UP-TO-DATE
+> Task :dns-discovery:classes UP-TO-DATE
+> Task :agent-discovery:jar UP-TO-DATE
+> Task :dns-discovery:jar UP-TO-DATE
+> Task :proxy-core:compileJava UP-TO-DATE
+> Task :proxy-core:classes UP-TO-DATE
+> Task :proxy-core:jar UP-TO-DATE
+> Task :proxy-core:startScripts UP-TO-DATE
+> Task :proxy-core:installDist UP-TO-DATE
+
+BUILD SUCCESSFUL in 37s
+13 actionable tasks: 13 up-to-date
+Configuration cache entry reused.
+Offline synthetic Minecraft 1.7.10 PLAY echo; mode=post-transfer payload=4096 bytes frame=4098 bytes connections=4 measured_roundtrips_per_connection=10000 warmup_per_connection=1000 window_per_connection=1 repeats=5
+Direct and proxy phases use the same JVM, fake backend, client code, framed payload, connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.
+Proxy clients switch from bench to replacement before warmup; direct clients connect to replacement. Transfer is excluded from timing.
+No Forge, real pack, or real client is involved.
+direct-1: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=50300.6 warmup_roundtrips=4000 window=1 one_way_MiB/s=196.49 latency_ms_p50=0.071 p95=0.117 p99=0.140 elapsed_ms=795.220
+proxy-1: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=28167.7 warmup_roundtrips=4000 window=1 one_way_MiB/s=110.03 latency_ms_p50=0.129 p95=0.194 p99=0.313 elapsed_ms=1420.065
+proxy-2: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=25543.3 warmup_roundtrips=4000 window=1 one_way_MiB/s=99.78 latency_ms_p50=0.143 p95=0.203 p99=0.338 elapsed_ms=1565.967
+direct-2: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=40910.3 warmup_roundtrips=4000 window=1 one_way_MiB/s=159.81 latency_ms_p50=0.082 p95=0.137 p99=0.281 elapsed_ms=977.749
+direct-3: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=29297.7 warmup_roundtrips=4000 window=1 one_way_MiB/s=114.44 latency_ms_p50=0.082 p95=0.163 p99=0.732 elapsed_ms=1365.297
+proxy-3: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=26350.4 warmup_roundtrips=4000 window=1 one_way_MiB/s=102.93 latency_ms_p50=0.130 p95=0.206 p99=0.307 elapsed_ms=1518.003
+proxy-4: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=25262.0 warmup_roundtrips=4000 window=1 one_way_MiB/s=98.68 latency_ms_p50=0.150 p95=0.200 p99=0.254 elapsed_ms=1583.406
+direct-4: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=45658.8 warmup_roundtrips=4000 window=1 one_way_MiB/s=178.35 latency_ms_p50=0.074 p95=0.110 p99=0.211 elapsed_ms=876.064
+direct-5: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=48946.6 warmup_roundtrips=4000 window=1 one_way_MiB/s=191.20 latency_ms_p50=0.074 p95=0.106 p99=0.134 elapsed_ms=817.218
+proxy-5: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=29451.9 warmup_roundtrips=4000 window=1 one_way_MiB/s=115.05 latency_ms_p50=0.126 p95=0.172 p99=0.214 elapsed_ms=1358.147
