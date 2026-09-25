@@ -202,7 +202,10 @@ function LoginThroughProxy([int]$port) {
         $login.AddRange($name)
         WriteFrame $stream ($login.ToArray())
         $success = ReadExactly $stream (ReadVarInt $stream)
-        if ($success[0] -ne 2) { throw "Expected Login Success, got packet $($success[0])" }
+        if ($success[0] -ne 2) {
+            $reason = [System.Text.Encoding]::UTF8.GetString($success)
+            throw "Expected Login Success, got packet $($success[0]): $reason"
+        }
         $join = ReadExactly $stream (ReadVarInt $stream)
         if ($join[0] -ne 1) { throw "Expected Join Game, got packet $($join[0])" }
         WriteFrame $stream ([byte[]]@(3, 42))
@@ -236,9 +239,11 @@ $stdout = Join-Path $temporary "$prefix.stdout.log"
 $stderr = Join-Path $temporary "$prefix.stderr.log"
 $dns = $null
 $agent = $null
-$backend = $null
+$dnsBackend = $null
+$agentBackend = $null
 try {
     $pluginPath = $plugins.Replace('\', '/')
+    $dnsBackend = StartFakeBackend
     $dnsPort = FreePort
     @"
 listen: "127.0.0.1:$dnsPort"
@@ -249,7 +254,7 @@ plugins:
   enabled:
     dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
       host: localhost
-      port: "25565"
+      port: "$($dnsBackend.Port)"
       capacity: "17"
       refreshSeconds: "1"
 "@ | Set-Content -LiteralPath $dnsConfig -Encoding utf8
@@ -257,10 +262,15 @@ plugins:
     $dnsAddresses = [System.Net.Dns]::GetHostAddresses('localhost').Length
     WaitForMax $dnsPort (17 * $dnsAddresses)
     Write-Output "DNS plugin: $dnsAddresses address(es), status max=$(StatusMax $dnsPort)"
+    LoginThroughProxy $dnsPort
+    $null = Wait-Job -Job $dnsBackend.Job -Timeout 10
+    if ($dnsBackend.Job.State -ne 'Completed') { throw "DNS fake backend job state=$($dnsBackend.Job.State)" }
+    Receive-Job -Job $dnsBackend.Job -ErrorAction Stop | Out-Null
+    Write-Output 'DNS plugin: discovered backend completed Login Success, Join Game, and PLAY relay'
     StopProxy $dns
     $dns = $null
 
-    $backend = StartFakeBackend
+    $agentBackend = StartFakeBackend
     $proxyPort = FreePort
     $agentPort = FreePort
     while ($agentPort -eq $proxyPort) { $agentPort = FreePort }
@@ -296,15 +306,15 @@ plugins:
             'X-Signature' = $signature
         } -TimeoutSec 5
     }
-    $registerBody = "action=register&generation=$generation&name=installed-smoke-backend&address=tcp%3A%2F%2F127.0.0.1%3A$($backend.Port)&capacity=19&leaseSeconds=30"
+    $registerBody = "action=register&generation=$generation&name=installed-smoke-backend&address=tcp%3A%2F%2F127.0.0.1%3A$($agentBackend.Port)&capacity=19&leaseSeconds=30"
     $registered = SendAgent $registerBody
     if ($registered.StatusCode -ne 201) { throw "Agent registration returned $($registered.StatusCode)" }
     WaitForMax $proxyPort 19
     Write-Output "Agent plugin: registration status=$($registered.StatusCode), status max=$(StatusMax $proxyPort)"
     LoginThroughProxy $proxyPort
-    $null = Wait-Job -Job $backend.Job -Timeout 10
-    if ($backend.Job.State -ne 'Completed') { throw "Fake backend job state=$($backend.Job.State)" }
-    Receive-Job -Job $backend.Job -ErrorAction Stop | Out-Null
+    $null = Wait-Job -Job $agentBackend.Job -Timeout 10
+    if ($agentBackend.Job.State -ne 'Completed') { throw "Agent fake backend job state=$($agentBackend.Job.State)" }
+    Receive-Job -Job $agentBackend.Job -ErrorAction Stop | Out-Null
     Write-Output 'Agent plugin: discovered backend completed Login Success, Join Game, and PLAY relay'
     $nonce = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
     $unregistered = SendAgent "action=unregister&generation=$generation"
@@ -312,18 +322,22 @@ plugins:
     WaitForMax $proxyPort 0
     Write-Output 'Agent plugin: unregister status=204, status max=0'
 } catch {
-    if ($backend) {
-        Write-Warning "Fake backend job state=$($backend.Job.State)"
-        Receive-Job -Job $backend.Job -Keep -ErrorAction Continue | Write-Warning
+    foreach ($backend in @($dnsBackend, $agentBackend)) {
+        if ($backend) {
+            Write-Warning "Fake backend job state=$($backend.Job.State)"
+            Receive-Job -Job $backend.Job -Keep -ErrorAction Continue | Write-Warning
+        }
     }
     throw
 } finally {
     StopProxy $dns
     StopProxy $agent
-    if ($backend) {
-        $backend.Listener.Stop()
-        Stop-Job -Job $backend.Job -ErrorAction SilentlyContinue
-        Remove-Job -Job $backend.Job -Force -ErrorAction SilentlyContinue
+    foreach ($backend in @($dnsBackend, $agentBackend)) {
+        if ($backend) {
+            $backend.Listener.Stop()
+            Stop-Job -Job $backend.Job -ErrorAction SilentlyContinue
+            Remove-Job -Job $backend.Job -Force -ErrorAction SilentlyContinue
+        }
     }
     Remove-Item -LiteralPath $dnsConfig, $agentConfig, $stdout, $stderr -ErrorAction SilentlyContinue
     $secret = $null

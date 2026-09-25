@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 
 import java.net.IDN;
 import java.net.InetAddress;
+import java.net.Inet4Address;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Arrays;
@@ -204,7 +205,8 @@ public final class DnsDiscoveryPlugin implements Plugin {
         Map<String, InetAddress> unique = new LinkedHashMap<>();
         Arrays.stream(addresses)
                 .map(address -> Objects.requireNonNull(address, "DNS answer address"))
-                .sorted(Comparator.comparing(address -> HexFormat.of().formatHex(address.getAddress())))
+                .sorted(Comparator.comparingInt((InetAddress address) -> address instanceof Inet4Address ? 0 : 1)
+                        .thenComparing(address -> HexFormat.of().formatHex(address.getAddress())))
                 .forEach(address -> unique.putIfAbsent(HexFormat.of().formatHex(address.getAddress()), address));
 
         Map<String, ServerDefinition> result = new LinkedHashMap<>();

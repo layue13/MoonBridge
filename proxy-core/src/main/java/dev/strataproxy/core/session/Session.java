@@ -38,6 +38,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.ReferenceCountUtil;
 
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -301,8 +302,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                         channel.pipeline().addLast("initial-session", Session.this);
                     }
                 });
-        ChannelFuture connect = bootstrap.connect(InetSocketAddress.createUnresolved(
-                selected.address().getHost(), selected.address().getPort()));
+        ChannelFuture connect = bootstrap.connect(backendSocketAddress(selected.address()));
         backend = connect.channel();
         connect.addListener(future -> {
             if (closed.get()) {
@@ -590,8 +590,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                             channel.pipeline().addLast("transfer-candidate", attempt.candidate);
                         }
                     });
-            ChannelFuture connect = bootstrap.connect(InetSocketAddress.createUnresolved(
-                    target.address().getHost(), target.address().getPort()));
+            ChannelFuture connect = bootstrap.connect(backendSocketAddress(target.address()));
             attempt.channel = connect.channel();
             connect.addListener(future -> {
                 if (attempt.finished || closed.get()) { connect.channel().close(); return; }
@@ -623,6 +622,14 @@ final class Session extends ChannelInboundHandlerAdapter {
                 failTransfer(transfer, "could not write replacement backend login");
             }
         });
+    }
+
+    private static InetSocketAddress backendSocketAddress(URI address) {
+        String host = address.getHost();
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        return InetSocketAddress.createUnresolved(host, address.getPort());
     }
 
     private void candidateReady(TransferAttempt attempt) {
