@@ -339,6 +339,55 @@ final class ProxySessionListenerTest {
         }
     }
 
+    @Test
+    void onlinePlacementRejectionIsEncryptedAndDelivered() throws Exception {
+        UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
+        String reason = "Your island is starting";
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                new InMemoryBackendCatalog(), (name, hash, ip) -> CompletableFuture.completedFuture(
+                        Optional.of(new VerifiedProfile(uuid, name, java.util.List.of()))));
+        listener.setPlacement(player -> CompletableFuture.completedFuture(
+                Optional.of(PlacementDecision.reject(reason))));
+        try {
+            var bound = listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(),
+                    ((InetSocketAddress) bound.localAddress()).getPort())) {
+                client.setSoTimeout(5000);
+                DataInputStream clearInput = new DataInputStream(client.getInputStream());
+                DataOutputStream clearOutput = new DataOutputStream(client.getOutputStream());
+                sendLogin(client, "Alice");
+
+                var requestBytes = Unpooled.wrappedBuffer(readFrame(clearInput));
+                MinecraftEncryptionRequest request;
+                try { request = MinecraftEncryptionRequest.decode(requestBytes); }
+                finally { requestBytes.release(); }
+                byte[] secret = new byte[16];
+                java.util.Arrays.fill(secret, (byte) 0x42);
+                var publicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(request.publicKey()));
+                Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+                rsa.init(Cipher.ENCRYPT_MODE, publicKey);
+                var response = new MinecraftEncryptionResponse(rsa.doFinal(secret), rsa.doFinal(request.verifyToken()));
+                var encoded = response.encode(UnpooledByteBufAllocator.DEFAULT);
+                try {
+                    byte[] payload = new byte[encoded.readableBytes()];
+                    encoded.readBytes(payload);
+                    writeFrame(clearOutput, payload);
+                } finally { encoded.release(); }
+
+                DataInputStream encryptedInput = new DataInputStream(decryptingInput(client.getInputStream(),
+                        aes(secret, Cipher.DECRYPT_MODE)));
+                var packet = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                assertEquals(0, readVarInt(packet));
+                assertEquals(reason, new ObjectMapper().readTree(readString(packet, 32767)).path("text").asText());
+                assertEquals(0, packet.available());
+                assertEquals(-1, encryptedInput.read());
+            }
+            assertTrue(listener.online().isEmpty());
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
     private static Cipher aes(byte[] secret, int mode) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/CFB8/NoPadding");
         cipher.init(mode, new SecretKeySpec(secret, "AES"), new IvParameterSpec(secret));
@@ -408,6 +457,9 @@ final class ProxySessionListenerTest {
             try {
                 var bound = listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 int listenPort = ((InetSocketAddress) bound.localAddress()).getPort();
+                var emptyStatus = requestStatus(listenPort);
+                assertEquals(0, emptyStatus.path("players").path("online").asInt());
+                assertEquals(1, emptyStatus.path("players").path("max").asInt());
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(), listenPort)) {
                     client.setSoTimeout(5000);
                     DataOutputStream output = new DataOutputStream(client.getOutputStream());
@@ -439,6 +491,9 @@ final class ProxySessionListenerTest {
                     assertEquals(1, listener.online().size());
                     assertEquals("lobby", listener.online().get(0).currentServer().orElseThrow());
                     assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
+                    var occupiedStatus = requestStatus(listenPort);
+                    assertEquals(1, occupiedStatus.path("players").path("online").asInt());
+                    assertEquals(1, occupiedStatus.path("players").path("max").asInt());
 
                     writeFrame(output, new byte[] {0x01, 0x22, 0x33, 0x44});
                     output.flush();
@@ -450,6 +505,8 @@ final class ProxySessionListenerTest {
                 while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                 assertTrue(listener.online().isEmpty());
                 assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
+                while (listener.onlineCount() != 0 && System.nanoTime() < deadline) Thread.sleep(5);
+                assertEquals(0, requestStatus(listenPort).path("players").path("online").asInt());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
@@ -493,6 +550,25 @@ final class ProxySessionListenerTest {
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
+        }
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode requestStatus(int port) throws Exception {
+        try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+            client.setSoTimeout(5000);
+            DataOutputStream output = new DataOutputStream(client.getOutputStream());
+            ByteArrayOutputStream handshake = new ByteArrayOutputStream();
+            writeVarInt(handshake, 0);
+            writeVarInt(handshake, 5);
+            writeString(handshake, "localhost");
+            handshake.write((port >>> 8) & 0xff);
+            handshake.write(port & 0xff);
+            writeVarInt(handshake, 1);
+            writeFrame(output, handshake.toByteArray());
+            writeFrame(output, new byte[]{0});
+            var response = new java.io.ByteArrayInputStream(readFrame(new DataInputStream(client.getInputStream())));
+            assertEquals(0, readVarInt(response));
+            return new ObjectMapper().readTree(readString(response, 32767));
         }
     }
 

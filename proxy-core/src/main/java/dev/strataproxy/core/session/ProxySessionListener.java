@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.concurrent.ThreadFactory;
 
@@ -50,6 +51,7 @@ public final class ProxySessionListener implements Players {
     private final ConcurrentHashMap<UUID, Session> sessionsByPlayerId = new ConcurrentHashMap<>();
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextConnectionId = new AtomicLong();
+    private final AtomicInteger onlineCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile Channel listener;
     private volatile boolean closed;
@@ -208,4 +210,7 @@ public final class ProxySessionListener implements Players {
     void releaseIdentity(UUID uuid, Session session) { sessionsByPlayerId.remove(uuid, session); }
     Set<Session> allSessions() { return allSessions; }
     long allocateConnectionId() { return nextConnectionId(); }
+    int onlineCount() { return onlineCount.get(); }
+    void sessionPublished() { onlineCount.incrementAndGet(); }
+    void sessionUnpublished() { onlineCount.decrementAndGet(); }
 }

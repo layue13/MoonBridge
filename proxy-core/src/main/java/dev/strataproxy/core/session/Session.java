@@ -233,7 +233,15 @@ final class Session extends ChannelInboundHandlerAdapter {
     private boolean statusRequest;
 
     private void sendStatus() {
-        String json = "{\"version\":{\"name\":\"1.7.10\",\"protocol\":5},\"players\":{\"max\":0,\"online\":0,\"sample\":[]},\"description\":{\"text\":\"StrataProxy\"}}";
+        int online = owner.onlineCount();
+        long declaredCapacity = 0;
+        for (BackendView backendView : owner.catalog().snapshot()) {
+            declaredCapacity = Math.min(Integer.MAX_VALUE, declaredCapacity + backendView.capacity());
+        }
+        int max = (int) Math.max(online, declaredCapacity);
+        String json = "{\"version\":{\"name\":\"1.7.10\",\"protocol\":5},\"players\":{\"max\":"
+                + max + ",\"online\":" + online
+                + ",\"sample\":[]},\"description\":{\"text\":\"StrataProxy\"}}";
         ByteBuf response = frontend.alloc().buffer();
         ProtocolVarInt.write(response, 0);
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
@@ -364,6 +372,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
         view = new PlayerView(identity, view.username(), selected.handle().id().value());
         published = true;
+        owner.sessionPublished();
         relayStarting = true;
         frontend.config().setAutoRead(false);
         backend.config().setAutoRead(false);
@@ -810,6 +819,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
             if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
+            if (published) owner.sessionUnpublished();
             owner.allSessions().remove(this);
             PendingFrame pending;
             while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();
