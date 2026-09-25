@@ -12,6 +12,8 @@ import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -21,6 +23,7 @@ public final class RawRelay {
     // Per direction: allow one maximum protocol 5 frame, including its length prefix.
     static final int MAX_PAUSED_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes() + 3;
     static final int MAX_PAUSED_MESSAGES = 1024;
+    private static final int DRAIN_TIMEOUT_SECONDS = 5;
 
     private RawRelay() {
     }
@@ -115,6 +118,11 @@ public final class RawRelay {
             });
         }
 
+        /** The session can defer backend EOF cleanup until accepted clientbound writes finish. */
+        public boolean hasPendingClientboundWrites() {
+            return !fromBackend.detached && fromBackend.writesInFlight > 0;
+        }
+
         private void maybeStartReads() {
             if (pending.get() == 0 && started.get() && readsStarted.compareAndSet(false, true)) {
                 fromClient.enableReads();
@@ -152,12 +160,14 @@ public final class RawRelay {
         private ChannelHandlerContext context;
         private Side opposite;
         private Link link;
-        private int writesInFlight;
+        private volatile int writesInFlight;
         private int pausedBytes;
         private volatile boolean closed;
         private boolean paused = true;
         private volatile boolean detached;
+        private volatile boolean closingAfterWrites;
         private boolean readsEnabled;
+        private ScheduledFuture<?> closeDeadline;
         private CompletableFuture<Void> pauseComplete;
         private CompletableFuture<Void> resumeComplete;
 
@@ -197,7 +207,8 @@ public final class RawRelay {
                 ctx.executor().execute(this::requestRead);
                 return;
             }
-            if (readsEnabled && !closed && !paused && !detached && writesInFlight == 0
+            if (readsEnabled && !closed && !paused && !detached && !opposite.closingAfterWrites
+                    && writesInFlight == 0
                     && ctx.channel().isActive() && peer.isActive() && peer.isWritable()) {
                 ctx.read();
             }
@@ -316,7 +327,7 @@ public final class RawRelay {
             }
             if (!peer.isActive()) {
                 ReferenceCountUtil.release(message);
-                closePair(ctx);
+                if (!opposite.closingAfterWrites) closePair(ctx);
                 return;
             }
             writesInFlight++;
@@ -331,8 +342,8 @@ public final class RawRelay {
                                 else pauseComplete.completeExceptionally(future.cause());
                                 pauseComplete = null;
                             }
-                            if (future.isSuccess()) requestRead();
-                            else closePair(ctx);
+                            if (!future.isSuccess() || (closingAfterWrites && writesInFlight == 0)) closePair(ctx);
+                            else if (!closingAfterWrites) requestRead();
                         }));
             } catch (RuntimeException failure) {
                 writesInFlight--;
@@ -350,13 +361,25 @@ public final class RawRelay {
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             releasePausedMessages();
-            if (!detached) closePair(ctx);
+            if (!detached) {
+                if (writesInFlight == 0) closePair(ctx);
+                else {
+                    closingAfterWrites = true;
+                    try {
+                        closeDeadline = ctx.executor().schedule(() -> closePair(ctx),
+                                DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    } catch (RuntimeException shutdown) {
+                        closePair(ctx);
+                    }
+                }
+            }
             ctx.fireChannelInactive();
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            closePair(ctx);
+            if (writesInFlight > 0) ctx.close();
+            else closePair(ctx);
         }
 
         private void closePair(ChannelHandlerContext ctx) {
@@ -364,6 +387,7 @@ public final class RawRelay {
                 if (closed) return;
                 closed = true;
             }
+            if (closeDeadline != null) closeDeadline.cancel(false);
             releasePausedMessages();
             if (pauseComplete != null) {
                 pauseComplete.completeExceptionally(new IllegalStateException("relay closed while pausing"));
@@ -405,6 +429,10 @@ public final class RawRelay {
                 peer.writeAndFlush(next).addListener((ChannelFutureListener) future ->
                         context.executor().execute(() -> {
                             writesInFlight--;
+                            if (closingAfterWrites) {
+                                closePair(context);
+                                return;
+                            }
                             if (!future.isSuccess()) {
                                 failResume(future.cause());
                                 return;

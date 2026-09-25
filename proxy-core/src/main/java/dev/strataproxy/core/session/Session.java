@@ -551,12 +551,17 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (pipeline.get("minecraft-frame-encoder") != null) pipeline.remove("minecraft-frame-encoder");
                 if (pipeline.get("session-lifecycle") == null) pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
                     @Override public void channelInactive(ChannelHandlerContext ctx) {
-                        if (ctx.channel() == frontend || ctx.channel() == backend) closePair();
+                        if (ctx.channel() == frontend || (ctx.channel() == backend
+                                && (relay == null || !relay.hasPendingClientboundWrites()))) closePair();
                         ctx.fireChannelInactive();
                     }
 
                     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-                        if (ctx.channel() == frontend || ctx.channel() == backend) closePair();
+                        if (ctx.channel() == backend && relay != null && relay.hasPendingClientboundWrites()) {
+                            ctx.close();
+                        } else if (ctx.channel() == frontend || ctx.channel() == backend) {
+                            closePair();
+                        }
                     }
                 });
                 removed.complete(null);

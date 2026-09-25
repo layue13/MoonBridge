@@ -17,6 +17,11 @@ import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
+import io.netty.util.ReferenceCountUtil;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -43,6 +48,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -976,6 +982,112 @@ final class ProxySessionListenerTest {
                 return decoded[0] & 0xff;
             }
         };
+    }
+
+    @Test
+    void backendReadFailureWaitsForAcceptedDisconnectFrame() throws Exception {
+        String username = "DisconnectPlayer";
+        UUID offlineId = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var sendDisconnect = new CompletableFuture<Void>();
+            var backendDone = new CompletableFuture<Void>();
+            ByteArrayOutputStream disconnectBody = new ByteArrayOutputStream();
+            writeVarInt(disconnectBody, 0x40);
+            writeString(disconnectBody, "{\"text\":\"Server restarting\"}");
+            byte[] disconnect = disconnectBody.toByteArray();
+            var backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    ByteArrayOutputStream success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, offlineId.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertArrayEquals(new byte[]{0x03, 0x22}, readFrame(input));
+                    writeFrame(output, new byte[]{0x03, 0x44});
+                    sendDisconnect.get(5, TimeUnit.SECONDS);
+                    writeFrame(output, disconnect);
+                } catch (Throwable failure) { backendDone.completeExceptionally(failure); return; }
+                backendDone.complete(null);
+            }, "fake-disconnect-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+
+            var backend = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby"))));
+            var heldContext = new AtomicReference<ChannelHandlerContext>();
+            var heldMessage = new AtomicReference<Object>();
+            var heldPromise = new AtomicReference<ChannelPromise>();
+            var heldWrite = new CompletableFuture<Void>();
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    writeFrame(output, new byte[]{0x03, 0x22});
+                    assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
+
+                    Session session = listener.allSessions().iterator().next();
+                    var frontendField = Session.class.getDeclaredField("frontend");
+                    frontendField.setAccessible(true);
+                    Channel frontend = (Channel) frontendField.get(session);
+                    var backendField = Session.class.getDeclaredField("backend");
+                    backendField.setAccessible(true);
+                    Channel backendChannel = (Channel) backendField.get(session);
+                    frontend.eventLoop().submit(() -> frontend.pipeline().addFirst("hold-disconnect-write",
+                            new ChannelOutboundHandlerAdapter() {
+                                @Override public void write(ChannelHandlerContext ctx, Object message,
+                                                            ChannelPromise promise) {
+                                    heldContext.set(ctx);
+                                    heldMessage.set(message);
+                                    heldPromise.set(promise);
+                                    heldWrite.complete(null);
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+
+                    sendDisconnect.complete(null);
+                    heldWrite.get(5, TimeUnit.SECONDS);
+                    backendDone.get(5, TimeUnit.SECONDS);
+                    var relayField = Session.class.getDeclaredField("relay");
+                    relayField.setAccessible(true);
+                    var relay = (dev.strataproxy.core.relay.RawRelay.Link) relayField.get(session);
+                    assertTrue(relay.hasPendingClientboundWrites());
+                    backendChannel.eventLoop().submit(() -> backendChannel.pipeline()
+                            .fireExceptionCaught(new IOException("backend read failed"))).get(5, TimeUnit.SECONDS);
+                    assertTrue(backendChannel.closeFuture().await(5, TimeUnit.SECONDS));
+                    backendChannel.eventLoop().submit(() -> { }).get(5, TimeUnit.SECONDS);
+                    assertTrue(frontend.isOpen(), () -> "backend failure dropped an accepted disconnect frame; "
+                            + "pending=" + relay.hasPendingClientboundWrites()
+                            + " backend=" + backendChannel.pipeline().names()
+                            + " frontend=" + frontend.pipeline().names());
+                    frontend.eventLoop().submit(() -> heldContext.get().writeAndFlush(
+                            heldMessage.getAndSet(null), heldPromise.get())).get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(disconnect, readFrame(input));
+                    assertEquals(-1, input.read());
+                    long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (catalog.find(backend.handle().id()).orElseThrow().connectedPlayers() != 0
+                            && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
+                    assertEquals(0, catalog.find(backend.handle().id()).orElseThrow().connectedPlayers());
+                }
+            } finally {
+                sendDisconnect.complete(null);
+                ReferenceCountUtil.release(heldMessage.getAndSet(null));
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
     }
 
     @Test

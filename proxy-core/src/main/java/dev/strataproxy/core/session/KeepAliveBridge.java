@@ -93,6 +93,7 @@ final class KeepAliveBridge extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        closeSession.run();
+        if (fromFrontend) closeSession.run();
+        else ctx.close();
     }
 }

@@ -128,6 +128,49 @@ final class RawRelayTest {
     }
 
     @Test
+    void backendEofWaitsForItsLastClientWriteBeforeClosingTheClient() {
+        var heldContext = new AtomicReference<ChannelHandlerContext>();
+        var heldMessage = new AtomicReference<Object>();
+        var heldPromise = new AtomicReference<ChannelPromise>();
+        var client = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                heldContext.set(ctx);
+                heldMessage.set(message);
+                heldPromise.set(promise);
+            }
+        });
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend).start();
+            pump(client, backend);
+
+            var disconnect = Unpooled.wrappedBuffer(new byte[]{0x40, 0x00});
+            backend.writeInbound(disconnect);
+            pump(client, backend);
+            assertSame(disconnect, heldMessage.get());
+
+            backend.close();
+            pump(client, backend);
+            assertTrue(client.isOpen(), "backend EOF must let the pending disconnect write finish");
+            var lateClientPacket = Unpooled.wrappedBuffer(new byte[]{7});
+            client.writeInbound(lateClientPacket);
+            pump(client, backend);
+            assertEquals(0, lateClientPacket.refCnt());
+            assertTrue(client.isOpen(), "a late client packet must not interrupt the disconnect write");
+
+            heldContext.get().writeAndFlush(heldMessage.getAndSet(null), heldPromise.get());
+            pump(client, backend);
+            assertSame(disconnect, client.readOutbound());
+            disconnect.release();
+            assertTrue(!client.isOpen());
+        } finally {
+            io.netty.util.ReferenceCountUtil.release(heldMessage.getAndSet(null));
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     void waitsForTargetToBecomeWritableBeforeReadingAgain() {
         var reads = new AtomicInteger();
         var client = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
