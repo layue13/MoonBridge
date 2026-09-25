@@ -1611,7 +1611,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void backendClosingBeforeLoginSuccessClosesClientAndReleasesReservation() throws Exception {
+    void backendClosingBeforeLoginSuccessSendsReasonAndReleasesReservation() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
             Thread backendThread = new Thread(() -> {
@@ -1640,6 +1640,12 @@ final class ProxySessionListenerTest {
                     ByteArrayOutputStream login = new ByteArrayOutputStream();
                     writeVarInt(login, 0); writeString(login, "CloseMe");
                     writeFrame(output, login.toByteArray());
+                    var packet = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0, readVarInt(packet));
+                    String component = readString(packet, 32767);
+                    assertEquals("Selected server closed during login.",
+                            new ObjectMapper().readTree(component).path("text").asText());
+                    assertEquals(0, packet.available());
                     assertEquals(-1, input.read());
                 }
                 assertTrue(listener.online().isEmpty());

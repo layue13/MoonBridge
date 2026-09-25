@@ -66,6 +66,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final ProxySessionListener owner;
     private final Channel frontend;
     private volatile Channel backend;
+    private boolean backendConnected;
     private MinecraftHandshake handshake;
     private LoginStart loginStart;
     private MinecraftEncryptionRequest encryptionRequest;
@@ -343,6 +344,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 disconnectLogin("Could not connect to the selected server.");
                 return;
             }
+            backendConnected = true;
             ByteBuf handshakeBody = null;
             ByteBuf loginBody;
             try {
@@ -1065,6 +1067,11 @@ final class Session extends ChannelInboundHandlerAdapter {
             LOGGER.debug("{} channel closed during initial login for player {} with backend {}",
                     ctx.channel() == frontend ? "Client" : "Backend", loginStart.username(),
                     selected == null ? "<none>" : selected.handle().id().value());
+        }
+        if (ctx.channel() == backend && backendConnected && !published && loginStart != null
+                && !loginDisconnectStarted) {
+            disconnectLogin("Selected server closed during login.");
+            return;
         }
         if (ctx.channel() != backend || !loginDisconnectStarted) closePair();
     }
