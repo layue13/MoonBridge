@@ -32,6 +32,19 @@ class AgentDiscoveryPluginTest {
     private static final byte[] SECRET = "test-secret-with-at-least-32-bytes-long".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     @Test
+    void lateRequestCannotRegisterAfterPluginShutdown() {
+        RecordingServers servers = new RecordingServers();
+        AgentDiscoveryPlugin plugin = plugin(servers);
+        assertEquals(201, plugin.leases.register("agent-a", UUID.randomUUID(), definition("game-1"), 30, 1_000));
+
+        plugin.onDisable();
+        assertTrue(servers.definitions.isEmpty());
+        assertThrows(IllegalStateException.class, () -> plugin.leases.register(
+                "agent-b", UUID.randomUUID(), definition("game-2"), 30, 1_001));
+        assertTrue(servers.definitions.isEmpty());
+    }
+
+    @Test
     void hmacBindsAgentTimestampNonceAndBodyAndReplayIsRejected() {
         String signature = AgentDiscoveryPlugin.sign(SECRET, "agent-a", "123", "abcdefghijklmnop", "action=register");
         assertEquals(signature, AgentDiscoveryPlugin.sign(SECRET, "agent-a", "123", "abcdefghijklmnop", "action=register"));

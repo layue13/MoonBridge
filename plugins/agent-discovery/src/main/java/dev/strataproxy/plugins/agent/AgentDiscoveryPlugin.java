@@ -79,8 +79,8 @@ public final class AgentDiscoveryPlugin implements Plugin {
 
     @Override
     public synchronized void onDisable() {
-        stopServices();
         leases.close();
+        stopServices();
     }
 
     private synchronized void stopServices() {
@@ -291,8 +291,10 @@ public final class AgentDiscoveryPlugin implements Plugin {
         private final Map<String, String> serverOwners = new LinkedHashMap<>();
         private final LinkedHashMap<String, Long> nonces = new LinkedHashMap<>();
         private int retiredGenerationCount;
+        private boolean closed;
 
         synchronized void acceptNonce(String agent, String nonce, long nowSeconds) {
+            requireOpen();
             nonces.entrySet().removeIf(entry -> entry.getValue() < nowSeconds - SIGNATURE_WINDOW_SECONDS);
             String key = agent + ":" + nonce;
             if (nonces.containsKey(key)) throw new Replay();
@@ -301,6 +303,7 @@ public final class AgentDiscoveryPlugin implements Plugin {
         }
 
         synchronized int register(String agent, UUID generation, ServerDefinition definition, int leaseSeconds, long now) {
+            requireOpen();
             expire(now);
             Lease old = active.get(agent);
             if (old != null && !old.generation.equals(generation)) throw new Conflict();
@@ -336,6 +339,7 @@ public final class AgentDiscoveryPlugin implements Plugin {
         }
 
         synchronized void unregister(String agent, UUID generation) {
+            requireOpen();
             Lease lease = active.get(agent);
             if (lease == null) {
                 if (!retiredGenerations.getOrDefault(agent, Map.of()).containsKey(generation)) throw new Conflict();
@@ -349,6 +353,7 @@ public final class AgentDiscoveryPlugin implements Plugin {
         }
 
         synchronized void expire(long now) {
+            if (closed) return;
             for (String id : new ArrayList<>(active.keySet())) {
                 Lease lease = active.get(id);
                 if (lease != null && lease.expiresAtMillis <= now) {
@@ -388,12 +393,18 @@ public final class AgentDiscoveryPlugin implements Plugin {
         }
 
         synchronized void close() {
+            if (closed) return;
+            closed = true;
             for (Map.Entry<String, Lease> entry : new ArrayList<>(active.entrySet())) {
                 try { entry.getValue().registration.unregister(); }
                 catch (RuntimeException failure) { context.logger().warn("Could not remove agent registration {}", entry.getKey(), failure); }
             }
             active.clear();
             serverOwners.clear();
+        }
+
+        private void requireOpen() {
+            if (closed) throw new IllegalStateException("agent discovery is closed");
         }
     }
     private record Lease(UUID generation, String name, ServerDefinition definition, ServerRegistration registration,
