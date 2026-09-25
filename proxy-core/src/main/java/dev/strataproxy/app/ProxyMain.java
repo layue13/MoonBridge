@@ -79,8 +79,17 @@ public final class ProxyMain {
             listener.setPlacement(plugins::placeInitial);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
-            var shutdown = new Thread(() -> listener.close().toCompletableFuture().join(),
-                    "strataproxy-shutdown");
+            var shutdown = new Thread(() -> {
+                try {
+                    listener.close().toCompletableFuture().join();
+                } finally {
+                    try {
+                        plugins.close();
+                    } finally {
+                        if (verifierWorkers != null) verifierWorkers.shutdownNow();
+                    }
+                }
+            }, "strataproxy-shutdown");
             Runtime.getRuntime().addShutdownHook(shutdown);
             try {
                 serverChannel.closeFuture().sync();
