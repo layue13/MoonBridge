@@ -856,6 +856,91 @@ final class SessionTransferTest {
     }
 
     @Test
+    void vanillaToForgeTransferRelaysTheFmlHandshakeInOrder() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newNegotiated = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    acceptLogin(input, new DataOutputStream(socket.getOutputStream()), 0);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeRegistration());
+                    writeFrame(output, serverForgeHello(7));
+                    assertArrayEquals(clientForgeRegistration(), readFrame(input));
+                    assertArrayEquals(clientForgeMessage(new byte[]{1, 2}), readFrame(input));
+                    assertArrayEquals(clientForgeMessage(new byte[]{2, 0}), readFrame(input));
+                    writeFrame(output, serverForgeMessage(new byte[]{2, 0}));
+                    assertArrayEquals(clientForgeAck(2), readFrame(input));
+                    writeFrame(output, serverForgeMessage(new byte[]{3, 0, 0, 0}));
+                    writeFrame(output, serverForgeAck(2));
+                    assertArrayEquals(clientForgeAck(3), readFrame(input));
+                    assertArrayEquals(clientForgeAck(4), readFrame(input));
+                    writeFrame(output, serverForgeAck(3));
+                    assertArrayEquals(clientForgeAck(5), readFrame(input));
+                    sendJoinGame(output, 0, 200);
+                    writeFrame(output, new byte[]{0x08});
+                    newNegotiated.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { newNegotiated.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                var bound = (InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), bound.getPort())) {
+                    client.setSoTimeout(5000);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    byte[] reset = readFrame(input);
+                    assertEquals(0x3f, packetId(reset));
+                    assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertArrayEquals(serverForgeRegistration(), readFrame(input));
+                    assertArrayEquals(serverForgeHello(7), readFrame(input));
+                    writeFrame(output, clientForgeRegistration());
+                    writeFrame(output, clientForgeMessage(new byte[]{1, 2}));
+                    writeFrame(output, clientForgeMessage(new byte[]{2, 0}));
+                    assertArrayEquals(serverForgeMessage(new byte[]{2, 0}), readFrame(input));
+                    writeFrame(output, clientForgeAck(2));
+                    assertArrayEquals(serverForgeMessage(new byte[]{3, 0, 0, 0}), readFrame(input));
+                    assertArrayEquals(serverForgeAck(2), readFrame(input));
+                    writeFrame(output, clientForgeAck(3));
+                    writeFrame(output, clientForgeAck(4));
+                    assertArrayEquals(serverForgeAck(3), readFrame(input));
+                    writeFrame(output, clientForgeAck(5));
+                    assertEquals(-1, respawnDimension(readFrame(input)));
+                    assertEquals(7, respawnDimension(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var result = transfer.get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, result.status(), result.detail().orElse(""));
+                    newNegotiated.get(5, TimeUnit.SECONDS);
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void forgeTransferResetsHandshakeAndUsesServerHelloDimensionOverride() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         byte[] registration = serverForgeRegistration();
@@ -1350,15 +1435,47 @@ final class SessionTransferTest {
         return payload.toByteArray();
     }
 
-    private static byte[] serverForgeAck() throws Exception {
+    private static byte[] clientForgeRegistration() throws Exception {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        var output = new DataOutputStream(payload);
+        byte[] channels = "FML|HS\0FML".getBytes(StandardCharsets.UTF_8);
+        writeVarInt(output, 0x17);
+        writeString(output, "REGISTER");
+        output.writeShort(channels.length);
+        output.write(channels);
+        return payload.toByteArray();
+    }
+
+    private static byte[] serverForgeMessage(byte[] handshake) throws Exception {
         ByteArrayOutputStream payload = new ByteArrayOutputStream();
         var output = new DataOutputStream(payload);
         writeVarInt(output, 0x3f);
         writeString(output, "FML|HS");
-        output.writeShort(2);
-        output.writeByte(0xff);
-        output.writeByte(3);
+        output.writeShort(handshake.length);
+        output.write(handshake);
         return payload.toByteArray();
+    }
+
+    private static byte[] clientForgeMessage(byte[] handshake) throws Exception {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        var output = new DataOutputStream(payload);
+        writeVarInt(output, 0x17);
+        writeString(output, "FML|HS");
+        output.writeShort(handshake.length);
+        output.write(handshake);
+        return payload.toByteArray();
+    }
+
+    private static byte[] serverForgeAck(int phase) throws Exception {
+        return serverForgeMessage(new byte[]{(byte) 0xff, (byte) phase});
+    }
+
+    private static byte[] clientForgeAck(int phase) throws Exception {
+        return clientForgeMessage(new byte[]{(byte) 0xff, (byte) phase});
+    }
+
+    private static byte[] serverForgeAck() throws Exception {
+        return serverForgeAck(3);
     }
 
     private static byte[] serverForgeRegistryData() throws Exception {
@@ -1374,14 +1491,7 @@ final class SessionTransferTest {
     }
 
     private static byte[] clientForgeAck() throws Exception {
-        ByteArrayOutputStream payload = new ByteArrayOutputStream();
-        var output = new DataOutputStream(payload);
-        writeVarInt(output, 0x17);
-        writeString(output, "FML|HS");
-        output.writeShort(2);
-        output.writeByte(0xff);
-        output.writeByte(5);
-        return payload.toByteArray();
+        return clientForgeAck(5);
     }
 
     private static void sendLogin(DataOutputStream output) throws Exception {
