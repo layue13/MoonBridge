@@ -345,6 +345,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             backendConnected = true;
+            LOGGER.debug("Initial backend TCP connection established for player {} to {}",
+                    view.username(), selected.address());
             ByteBuf handshakeBody = null;
             ByteBuf loginBody;
             try {
@@ -359,7 +361,15 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             backend.write(handshakeBody);
-            backend.writeAndFlush(loginBody);
+            backend.writeAndFlush(loginBody).addListener(write -> {
+                if (write.isSuccess()) {
+                    LOGGER.debug("Initial backend login frames flushed for player {} to {}",
+                            view.username(), selected.address());
+                } else {
+                    LOGGER.debug("Initial backend login write failed for player {} to {}",
+                            view.username(), selected.address(), write.cause());
+                }
+            });
         });
     }
 
@@ -662,6 +672,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         TransferAttempt attempt = new TransferAttempt(target, result, relay);
         transfer = attempt;
+        LOGGER.debug("Starting replacement backend connection for player {} to {}",
+                view.username(), target.address());
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
@@ -685,7 +697,14 @@ final class Session extends ChannelInboundHandlerAdapter {
             attempt.channel = connect.channel();
             connect.addListener(future -> {
                 if (attempt.finished || closed.get()) { connect.channel().close(); return; }
-                if (!future.isSuccess()) { failTransfer(attempt, "could not connect to replacement backend"); return; }
+                if (!future.isSuccess()) {
+                    LOGGER.debug("Replacement backend connection failed for player {} to {}",
+                            view.username(), attempt.target.address(), future.cause());
+                    failTransfer(attempt, "could not connect to replacement backend");
+                    return;
+                }
+                LOGGER.debug("Replacement backend TCP connection established for player {} to {}",
+                        view.username(), attempt.target.address());
                 writeBackendLogin(connect.channel());
             });
         } catch (RuntimeException failure) {
@@ -709,6 +728,13 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         channel.write(handshakeBody);
         channel.writeAndFlush(loginBody).addListener(write -> {
+            if (write.isSuccess()) {
+                LOGGER.debug("Replacement backend login frames flushed for player {} to {}",
+                        view.username(), channel.remoteAddress());
+            } else {
+                LOGGER.debug("Replacement backend login write failed for player {}",
+                        view.username(), write.cause());
+            }
             if (!write.isSuccess() && transfer != null && transfer.channel == channel) {
                 failTransfer(transfer, "could not write replacement backend login");
             }
@@ -979,6 +1005,10 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void failTransfer(TransferAttempt attempt, String reason) {
         if (attempt.finished) return;
+        LOGGER.debug("Replacement backend failed for player {} to {}: {}; channel registered={}, active={}",
+                view.username(), attempt.target.address(), reason,
+                attempt.channel != null && attempt.channel.isRegistered(),
+                attempt.channel != null && attempt.channel.isActive());
         attempt.finished = true;
         attempt.failureReason = reason;
         if (attempt.channel != null) attempt.channel.close();

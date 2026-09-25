@@ -69,7 +69,19 @@ public final class UraniumTransferProbe {
                 out.writeByte(0);
                 string(out, "NettyProbe");
             }));
-            require(packetId(read(client)) == 2, "missing LOGIN success");
+            byte[] loginFrame = read(client);
+            int loginPacketId = packetId(loginFrame);
+            if (loginPacketId == 0) {
+                DataInputStream reason = new DataInputStream(new ByteArrayInputStream(loginFrame));
+                varInt(reason);
+                int length = varInt(reason);
+                require(length >= 0 && length <= 32767 && length <= reason.available(),
+                        "invalid LOGIN disconnect reason length " + length);
+                byte[] json = new byte[length];
+                reason.readFully(json);
+                throw new AssertionError("LOGIN disconnected: " + new String(json, StandardCharsets.UTF_8));
+            }
+            require(loginPacketId == 2, "missing LOGIN success; packet id=" + loginPacketId);
 
             int firstHellos = 0;
             while (true) {

@@ -101,6 +101,23 @@ online-mode=false
 level-name=world
 motd=StrataProxy Uranium transfer smoke
 "@ | Set-Content -LiteralPath (Join-Path $directory 'server.properties') -Encoding utf8
+    if ($DebugSession) {
+        $cauldronConfig = Join-Path $directory 'cauldron.yml'
+        if (Test-Path -LiteralPath $cauldronConfig) {
+            $contents = Get-Content -LiteralPath $cauldronConfig -Raw
+            if ($contents -match '(?m)^[ \t]*user-login:[ \t]*(?:true|false)[ \t]*$') {
+                $contents = $contents -replace '(?m)^([ \t]*user-login:[ \t]*)(?:true|false)[ \t]*$', '${1}true'
+            } elseif ($contents -match '(?m)^logging:[ \t]*$') {
+                $contents = $contents -replace '(?m)^logging:[ \t]*$', "logging:`n  user-login: true"
+            } else {
+                $contents += "`nlogging:`n  user-login: true`n"
+            }
+            Set-Content -LiteralPath $cauldronConfig -Value $contents -Encoding utf8
+        } else {
+            "logging:`n  user-login: true" |
+                Set-Content -LiteralPath $cauldronConfig -Encoding utf8
+        }
+    }
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $Java8Path
     $info.WorkingDirectory = $directory

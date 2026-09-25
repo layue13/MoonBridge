@@ -1,0 +1,14 @@
+# Uranium login stalls with early-stage diagnostics
+
+Date: 2026-09-26 (Asia/Shanghai). The installed StrataProxy plugin smoke used two fresh local Uranium instances, `-ReturnToOld`, and `-DebugSession`. The debug option enabled Uranium `logging.user-login` in the copied servers and proxy session DEBUG logs. The source bundle was not changed.
+
+## Observed failures
+
+- In `build/local-uranium-transfer-f05fc625bcb34716bd597807fd159ef9`, the initial login to `old` completed. The plugin's later transfer to `new` failed after 15 seconds with `backend login timed out`. The `new` server had printed `Done` and had `user-login: true`, but its log contained no `Login attempt`. This run predates proxy-side candidate connection and write markers, so it does not show whether the candidate TCP connection completed.
+- In `build/local-uranium-transfer-cd4885b1e7894cd7bd28b2b5e4146556`, the proxy logged an initial TCP connection to `old` at 03:39:45.217 and a successful Netty login-frame write at 03:39:45.220. Uranium had `user-login: true` but printed no `Login attempt`. The proxy's 15-second login deadline then sent `Login timed out.` to the client. Three immediately preceding runs of the same smoke passed. Netty's successful write means the socket write completed; it does not prove that Uranium decoded or processed Login Start.
+
+## Source-based explanation to test
+
+In Uranium's `NetworkSystem.addLanEndpoint`, `networkManagers.add(networkmanager)` runs inside the Netty channel initializer, before the manager is added to the pipeline and before `NetworkManager.channelActive` assigns its `channel`. Concurrently, `NetworkSystem.networkTick` removes any manager for which `isChannelOpen()` is false; that method returns false while `channel` is null. The tick can therefore remove a newly accepted manager before it becomes active. `C00Handshake.hasPriority()` is true, so the handshake can still be handled on Netty I/O, while Login Start is queued for `processReceivedPackets()` on the server tick. If the manager has already been removed from the tick list, Login Start can wait indefinitely without a `Login attempt` line. `NetHandlerHandshakeTCP.onDisconnect` is empty, so an early close may also leave no player-specific log.
+
+This interleaving matches both observed stalls, but no failing run directly recorded removal of a manager before `channelActive`. It is a hypothesis, not a proven root cause. The next discriminating check is a disposable Uranium build that records manager registration, activation, and removal by connection, or registers the manager only after activation and compares repeated runs under the same smoke conditions.
