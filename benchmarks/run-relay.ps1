@@ -21,7 +21,7 @@ try {
     & javac -cp "$installLib\*" -d $classes (Join-Path $PSScriptRoot "RelayBenchmark.java")
     if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
 
-    & java -cp "$classes;$installLib\*" RelayBenchmark `
+    & java -cp "$classes;$installLib\*" dev.strataproxy.core.session.RelayBenchmark `
         --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats --window $Window
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
 }

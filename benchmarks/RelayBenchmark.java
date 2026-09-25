@@ -1,3 +1,5 @@
+package dev.strataproxy.core.session;
+
 import dev.strataproxy.core.protocol.MinecraftFrameDecoder;
 import dev.strataproxy.core.protocol.ProtocolProfile;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
@@ -34,8 +36,9 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 
-/** Synthetic loopback echo benchmark for direct, byte-stream, and framed paths. */
+/** Synthetic loopback echo benchmark for direct and actual relay pipeline variants. */
 public final class RelayBenchmark {
+    private enum RelayMode { RAW, FRAMED, FRAMED_KEEP_ALIVE }
     private static final AtomicLong RELAYED = new AtomicLong();
     private final EventLoopGroup acceptors = new NioEventLoopGroup(1);
     private final EventLoopGroup io = new NioEventLoopGroup();
@@ -56,24 +59,27 @@ public final class RelayBenchmark {
         var benchmark = new RelayBenchmark();
         try {
             int backendPort = benchmark.startBackend();
-            int rawPort = benchmark.startRelay(backendPort, false);
-            int framedPort = benchmark.startRelay(backendPort, true);
+            int rawPort = benchmark.startRelay(backendPort, RelayMode.RAW);
+            int framedPort = benchmark.startRelay(backendPort, RelayMode.FRAMED);
+            int framedKeepAlivePort = benchmark.startRelay(backendPort, RelayMode.FRAMED_KEEP_ALIVE);
             byte[] body = frame(payload);
             System.out.printf("Synthetic loopback TCP echo; frame_payload=%d bytes wire_frame=%d bytes connections=%d measured_messages_per_connection=%d warmup_per_connection=%d repeats=%d window=%d%n",
                     payload, body.length, connections, messages, warmup, repeats, window);
-            System.out.println("Comparison: direct echo, byte-stream RawRelay, and Session-style framed RawRelay; connect/setup time excluded.");
+            System.out.println("Comparison: direct echo, byte-stream RawRelay, framed RawRelay, and framed RawRelay with the real KeepAliveBridge; connect/setup time excluded.");
             benchmark.run("baseline-start", backendPort, connections, messages, warmup, window, body);
             for (int round = 1; round <= repeats; round++) {
                 if ((round & 1) == 1) {
                     benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, window, body);
                     benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, window, body);
+                    benchmark.run("framed-keepalive-" + round, framedKeepAlivePort, connections, messages, warmup, window, body);
                 } else {
+                    benchmark.run("framed-keepalive-" + round, framedKeepAlivePort, connections, messages, warmup, window, body);
                     benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, window, body);
                     benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, window, body);
                 }
             }
             benchmark.run("baseline-end", backendPort, connections, messages, warmup, window, body);
-            long expectedBytes = (long) connections * (messages + warmup) * body.length * (2 + 2L * repeats);
+            long expectedBytes = (long) connections * (messages + warmup) * body.length * (2 + 3L * repeats);
             if (RELAYED.get() != expectedBytes) throw new IllegalStateException("backend byte count mismatch");
             System.out.printf("backend_received_wire_bytes_all_phases=%d%n", RELAYED.get());
         } finally {
@@ -98,25 +104,31 @@ public final class RelayBenchmark {
         return ((InetSocketAddress) bound.channel().localAddress()).getPort();
     }
 
-    private int startRelay(int backendPort, boolean framed) throws Exception {
+    private int startRelay(int backendPort, RelayMode mode) throws Exception {
         ChannelFuture bound = new ServerBootstrap().group(acceptors, io).channel(NioServerSocketChannel.class)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel front) {
                         front.config().setAutoRead(false);
-                        if (framed) front.pipeline().addLast(new MinecraftFrameDecoder(
+                        if (mode != RelayMode.RAW) front.pipeline().addLast(new MinecraftFrameDecoder(
                                 ProtocolProfile.minecraft1710(), true));
-                        new Bootstrap().group(io).channel(NioSocketChannel.class)
+                        KeepAliveBridge.State keepAlives = mode == RelayMode.FRAMED_KEEP_ALIVE
+                                ? new KeepAliveBridge.State() : null;
+                        new Bootstrap().group(front.eventLoop()).channel(NioSocketChannel.class)
                                 .option(ChannelOption.TCP_NODELAY, true)
                                 .handler(new ChannelInitializer<SocketChannel>() {
                                     @Override protected void initChannel(SocketChannel ch) {
-                                        if (framed) ch.pipeline().addLast(new MinecraftFrameDecoder(
+                                        if (mode != RelayMode.RAW) ch.pipeline().addLast(new MinecraftFrameDecoder(
                                                 ProtocolProfile.minecraft1710(), true));
                                     }
                                 }).connect("127.0.0.1", backendPort).addListener(connect -> {
                                     if (!connect.isSuccess()) { front.close(); return; }
                                     Channel back = ((ChannelFuture) connect).channel();
                                     try {
+                                        if (keepAlives != null) {
+                                            front.pipeline().addLast(new KeepAliveBridge(keepAlives, true, front::close));
+                                            back.pipeline().addLast(new KeepAliveBridge(keepAlives, false, back::close));
+                                        }
                                         RawRelay.Link link = RawRelay.attach(front, back);
                                         link.ready().whenComplete((ignored, failure) -> {
                                             if (failure != null) { front.close(); back.close(); }
