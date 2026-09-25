@@ -8,6 +8,8 @@ public record ProtocolProfile(
         int maxLoginNameCharacters) {
 
     public static final int PROTOCOL_1_7_10 = 5;
+    // The largest accepted handshake host and encryption response each fit well below this limit.
+    public static final int MAX_LOGIN_FRAME_BYTES = 4096;
     // 1.7.10's length decoder accepts at most three VarInt bytes.
     private static final ProtocolProfile MINECRAFT_1_7_10 = new ProtocolProfile(5, 0x1FFFFF, 255, 16);
 

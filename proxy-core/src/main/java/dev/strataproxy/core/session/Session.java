@@ -196,7 +196,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             pipeline.addAfter("minecraft-frame-decoder", "minecraft-cipher-decoder", new MinecraftCipherDecoder(secret));
             pipeline.addAfter("minecraft-cipher-decoder", "encrypted-frame-decoder",
-                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true));
+                    new dev.strataproxy.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true,
+                            ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
             pipeline.addBefore("minecraft-frame-encoder", "minecraft-cipher-encoder", new MinecraftCipherEncoder(secret));
             pipeline.remove("minecraft-frame-decoder");
         } finally {
@@ -328,11 +329,19 @@ final class Session extends ChannelInboundHandlerAdapter {
                 disconnectLogin("Could not connect to the selected server.");
                 return;
             }
-            ByteBuf handshakeBody = owner.onlineMode()
-                    ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                            (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
-                    : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
-            ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+            ByteBuf handshakeBody = null;
+            ByteBuf loginBody;
+            try {
+                handshakeBody = owner.onlineMode()
+                        ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
+                                (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
+                        : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+                loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+            } catch (RuntimeException failure) {
+                ReferenceCountUtil.release(handshakeBody);
+                disconnectLogin("Could not prepare backend login.");
+                return;
+            }
             backend.write(handshakeBody);
             backend.writeAndFlush(loginBody);
         });
@@ -393,6 +402,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
+        allowFrontendPlayFrames();
         playObservation = new PlayObservation();
         keepAlives = new KeepAliveBridge.State();
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
@@ -419,6 +429,16 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (!write.isSuccess()) { closePair(); return; }
             frontend.eventLoop().execute(this::startRelay);
         });
+    }
+
+    private void allowFrontendPlayFrames() {
+        ChannelPipeline pipeline = frontend.pipeline();
+        Object decoder = pipeline.get("encrypted-frame-decoder") != null
+                ? pipeline.get("encrypted-frame-decoder") : pipeline.get("minecraft-frame-decoder");
+        if (!(decoder instanceof dev.strataproxy.core.protocol.MinecraftFrameDecoder frames)) {
+            throw new IllegalStateException("client frame decoder missing after login success");
+        }
+        frames.allowPlayFrames();
     }
 
     private void startRelay() {

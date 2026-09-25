@@ -10,14 +10,27 @@ import java.util.List;
 public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
     private final ProtocolProfile profile;
     private final boolean retainLengthPrefix;
+    private int maxFrameBytes;
 
     public MinecraftFrameDecoder(ProtocolProfile profile) { this(profile, false); }
 
     /** Retained-prefix mode yields complete wire frames for a packet-aware relay. */
     public MinecraftFrameDecoder(ProtocolProfile profile, boolean retainLengthPrefix) {
+        this(profile, retainLengthPrefix, profile.maxFrameBytes());
+    }
+
+    /** Starts with a smaller frame limit while the peer is still in the login phase. */
+    public MinecraftFrameDecoder(ProtocolProfile profile, boolean retainLengthPrefix, int initialMaxFrameBytes) {
+        if (initialMaxFrameBytes < 1 || initialMaxFrameBytes > profile.maxFrameBytes()) {
+            throw new IllegalArgumentException("initial frame limit must fit the protocol profile");
+        }
         this.profile = profile;
         this.retainLengthPrefix = retainLengthPrefix;
+        this.maxFrameBytes = initialMaxFrameBytes;
     }
+
+    /** Call on the channel event loop after login success, before accepting PLAY traffic. */
+    public void allowPlayFrames() { maxFrameBytes = profile.maxFrameBytes(); }
 
     /** Call on the channel event loop after reads are paused before moving a session to another backend. */
     public boolean hasPartialFrame() {
@@ -44,7 +57,7 @@ public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
         }
         if (!completePrefix) throw new DecoderException("frame length VarInt exceeds five bytes");
         if (ProtocolVarInt.encodedSize(length) != prefixBytes) throw new DecoderException("non-canonical frame length");
-        if (length < 1 || length > profile.maxFrameBytes()) throw new DecoderException("frame length out of bounds: " + length);
+        if (length < 1 || length > maxFrameBytes) throw new DecoderException("frame length out of bounds: " + length);
         if (readable - prefixBytes < length) return;
         if (retainLengthPrefix) output.add(input.readRetainedSlice(prefixBytes + length));
         else {

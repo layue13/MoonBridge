@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.core.auth.MinecraftEncryptionRequest;
 import dev.strataproxy.core.auth.MinecraftEncryptionResponse;
+import dev.strataproxy.core.auth.ProfileProperty;
 import dev.strataproxy.core.auth.VerifiedProfile;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
@@ -41,6 +42,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
+    @Test
+    void rejectsOversizedFrontendFrameBeforeAuthentication() throws Exception {
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                new InMemoryBackendCatalog());
+        listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                client.setSoTimeout(2000);
+                var prefix = new ByteArrayOutputStream();
+                writeVarInt(prefix, 4097);
+                client.getOutputStream().write(prefix.toByteArray());
+                client.getOutputStream().flush();
+                assertEquals(-1, client.getInputStream().read());
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
     @Test
     void offlineBackendDoesNotReceiveClientSuppliedIdentitySegments() throws Exception {
         var catalog = new InMemoryBackendCatalog();
@@ -721,6 +743,62 @@ final class ProxySessionListenerTest {
         }
     }
 
+    @Test
+    void oversizedVerifiedProfileFailsLoginPromptlyAndReleasesCapacity() throws Exception {
+        UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
+        var properties = java.util.List.of(
+                new ProfileProperty("first", "a".repeat(20_000), null),
+                new ProfileProperty("second", "b".repeat(20_000), null));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var registration = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, (name, hash, ip) -> CompletableFuture.completedFuture(
+                            Optional.of(new VerifiedProfile(uuid, name, properties))));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(2000);
+                    sendLogin(client, "Alice");
+                    var requestBytes = Unpooled.wrappedBuffer(readFrame(new DataInputStream(client.getInputStream())));
+                    MinecraftEncryptionRequest request;
+                    try { request = MinecraftEncryptionRequest.decode(requestBytes); }
+                    finally { requestBytes.release(); }
+                    byte[] secret = new byte[16];
+                    java.util.Arrays.fill(secret, (byte) 0x42);
+                    var publicKey = KeyFactory.getInstance("RSA").generatePublic(
+                            new X509EncodedKeySpec(request.publicKey()));
+                    Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+                    rsa.init(Cipher.ENCRYPT_MODE, publicKey);
+                    var response = new MinecraftEncryptionResponse(
+                            rsa.doFinal(secret), rsa.doFinal(request.verifyToken()));
+                    var encoded = response.encode(UnpooledByteBufAllocator.DEFAULT);
+                    try {
+                        byte[] payload = new byte[encoded.readableBytes()];
+                        encoded.readBytes(payload);
+                        writeFrame(new DataOutputStream(client.getOutputStream()), payload);
+                    } finally { encoded.release(); }
+
+                    DataInputStream encryptedInput = new DataInputStream(decryptingInput(client.getInputStream(),
+                            aes(secret, Cipher.DECRYPT_MODE)));
+                    var packet = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(0, readVarInt(packet));
+                    assertEquals("Could not prepare backend login.",
+                            new ObjectMapper().readTree(readString(packet, 32767)).path("text").asText());
+                    assertEquals(-1, encryptedInput.read());
+                }
+                assertEquals(1, catalog.find(registration.handle().id()).orElseThrow().availableUnits());
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     private static Cipher aes(byte[] secret, int mode) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/CFB8/NoPadding");
         cipher.init(mode, new SecretKeySpec(secret, "AES"), new IvParameterSpec(secret));
@@ -742,6 +820,9 @@ final class ProxySessionListenerTest {
     @Test
     void fragmentsLoginRelaysOrdinaryFramesAndReleasesCapacityOnBackendClose() throws Exception {
         String username = "ForgePlayer";
+        byte[] largePlay = new byte[4097];
+        largePlay[0] = 0x03;
+        java.util.Arrays.fill(largePlay, 1, largePlay.length, (byte) 0x5a);
         UUID offlineId = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
@@ -775,6 +856,8 @@ final class ProxySessionListenerTest {
                     assertArrayEquals(new byte[] {0x01, 0x22, 0x33, 0x44}, c2s);
                     byte[] s2c = new byte[] {0x03, 0x77, 0x66};
                     writeFrame(output, s2c);
+                    assertArrayEquals(largePlay, readFrame(input));
+                    writeFrame(output, largePlay);
                     backendDone.complete(null);
                 } catch (Throwable failure) {
                     backendDone.completeExceptionally(failure);
@@ -831,6 +914,8 @@ final class ProxySessionListenerTest {
                     writeFrame(output, new byte[] {0x01, 0x22, 0x33, 0x44});
                     output.flush();
                     assertArrayEquals(new byte[] {0x03, 0x77, 0x66}, readFrame(input));
+                    writeFrame(output, largePlay);
+                    assertArrayEquals(largePlay, readFrame(input));
                     backendDone.get(5, TimeUnit.SECONDS);
                     assertEquals(-1, input.read());
                 }

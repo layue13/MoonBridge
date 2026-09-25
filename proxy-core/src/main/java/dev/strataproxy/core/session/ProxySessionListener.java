@@ -163,7 +163,8 @@ public final class ProxySessionListener implements Players {
                         Session session = new Session(ProxySessionListener.this, channel);
                         allSessions.add(session);
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
-                                dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true));
+                                dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true,
+                                dev.strataproxy.core.protocol.ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
                         channel.pipeline().addLast("minecraft-frame-encoder", new SessionFrameEncoder());
                         channel.pipeline().addLast("initial-session", session);
                     }
