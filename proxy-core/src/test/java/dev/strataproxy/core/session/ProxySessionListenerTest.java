@@ -986,6 +986,15 @@ final class ProxySessionListenerTest {
 
     @Test
     void backendReadFailureWaitsForAcceptedDisconnectFrame() throws Exception {
+        verifyBackendReadFailureDrain(true);
+    }
+
+    @Test
+    void backendReadFailureClosesStalledClientWriteAfterDeadline() throws Exception {
+        verifyBackendReadFailureDrain(false);
+    }
+
+    private void verifyBackendReadFailureDrain(boolean completeClientWrite) throws Exception {
         String username = "DisconnectPlayer";
         UUID offlineId = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
         var catalog = new InMemoryBackendCatalog();
@@ -1072,9 +1081,14 @@ final class ProxySessionListenerTest {
                             + "pending=" + relay.hasPendingClientboundWrites()
                             + " backend=" + backendChannel.pipeline().names()
                             + " frontend=" + frontend.pipeline().names());
-                    frontend.eventLoop().submit(() -> heldContext.get().writeAndFlush(
-                            heldMessage.getAndSet(null), heldPromise.get())).get(5, TimeUnit.SECONDS);
-                    assertArrayEquals(disconnect, readFrame(input));
+                    if (completeClientWrite) {
+                        frontend.eventLoop().submit(() -> heldContext.get().writeAndFlush(
+                                heldMessage.getAndSet(null), heldPromise.get())).get(5, TimeUnit.SECONDS);
+                        assertArrayEquals(disconnect, readFrame(input));
+                    } else {
+                        assertTrue(frontend.closeFuture().await(7, TimeUnit.SECONDS),
+                                "the stalled client write must not keep the session open forever");
+                    }
                     assertEquals(-1, input.read());
                     long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                     while (catalog.find(backend.handle().id()).orElseThrow().connectedPlayers() != 0
