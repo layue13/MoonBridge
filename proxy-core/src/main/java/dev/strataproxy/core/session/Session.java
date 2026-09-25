@@ -410,8 +410,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             frontend.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, true, this::closePair));
             target.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, false, this::closePair));
             var link = RawRelay.attach(frontend, target,
-                    bytes -> observation.observeStream(false, bytes),
-                    bytes -> observation.observeStream(true, bytes));
+                    bytes -> observation.observeFrame(false, bytes),
+                    bytes -> observation.observeFrame(true, bytes));
             observation.ready().whenComplete((ignored, failure) -> link.stopObserving());
             link.ready().whenComplete((ignored, failure) -> {
                 if (failure != null) { closePair(); return; }
@@ -706,8 +706,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                     new KeepAliveBridge(keepAlives, false, this::closePair));
             installTransferFrameHandlers(attempt.frameState, attempt.channel);
             next = RawRelay.attach(frontend, attempt.channel,
-                    bytes -> nextObservation.observeStream(false, bytes),
-                    bytes -> nextObservation.observeStream(true, bytes));
+                    bytes -> nextObservation.observeFrame(false, bytes),
+                    bytes -> nextObservation.observeFrame(true, bytes));
             RawRelay.Link observedLink = next;
             nextObservation.ready().whenComplete((ignored, failure) -> observedLink.stopObserving());
         } catch (RuntimeException failure) {

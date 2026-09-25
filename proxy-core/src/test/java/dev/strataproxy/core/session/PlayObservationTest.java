@@ -1,52 +1,48 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
-import dev.strataproxy.core.protocol.PacketStreamTap;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PlayObservationTest {
     @Test
-    void fragmentedAndCoalescedFramesReachObserverOnce() {
-        var seen = new ArrayList<Integer>();
-        try (var tap = new PacketStreamTap(1024, packet -> seen.add(ProtocolVarInt.read(packet)))) {
-            ByteBuf joined = Unpooled.buffer();
+    void completeWireFramesMarkVanillaReadyWithoutConsumingRelayBuffers() {
+        try (var state = new PlayObservation()) {
+            var join = new Minecraft1710PlayPackets.JoinGame(3, 0, -1, 1, "default");
+            ByteBuf packet = Unpooled.buffer();
             try {
-                joined.writeByte(1).writeByte(7).writeByte(1).writeByte(8);
-                tap.accept(joined.readSlice(1));
-                assertTrue(seen.isEmpty());
-                tap.accept(joined.readSlice(2));
-                assertEquals(1, seen.size());
-                tap.accept(joined.readSlice(1));
-                assertEquals(java.util.List.of(7, 8), seen);
-            } finally { joined.release(); }
+                writeJoin(packet, join);
+                ByteBuf frame = Minecraft1710PlayPackets.frame(UnpooledByteBufAllocator.DEFAULT, packet);
+                try {
+                    int readerIndex = frame.readerIndex();
+                    state.observeFrame(true, frame);
+                    assertEquals(readerIndex, frame.readerIndex());
+                    assertFalse(state.ready().isDone());
+                } finally { frame.release(); }
+                packet.clear();
+                ProtocolVarInt.write(packet, 8);
+                frame = Minecraft1710PlayPackets.frame(UnpooledByteBufAllocator.DEFAULT, packet);
+                try {
+                    state.observeFrame(true, frame);
+                    assertTrue(state.ready().isDone());
+                } finally { frame.release(); }
+            } finally { packet.release(); }
         }
     }
 
     @Test
     void waitsForBothForgeCompletionDirections() {
         try (var state = new PlayObservation()) {
-            ByteBuf join = Unpooled.buffer();
-            try {
-                ProtocolVarInt.write(join, 1);
-                join.writeInt(3).writeByte(0).writeByte(0).writeByte(1).writeByte(20);
-                byte[] level = "default".getBytes(StandardCharsets.UTF_8);
-                ProtocolVarInt.write(join, level.length);
-                join.writeBytes(level);
-                state.observePacket(true, join);
-            } finally { join.release(); }
+            sendJoin(state);
             sendFml(state, true, 0, 2, 0, 0, 1, 0); // ServerHello, override dimension 256.
             assertTrue(state.forgeSeen());
             assertEquals(256, state.dimension().orElseThrow());
@@ -63,12 +59,7 @@ final class PlayObservationTest {
             var join = new Minecraft1710PlayPackets.JoinGame(3, 0, -1, 1, "default");
             ByteBuf packet = Unpooled.buffer();
             try {
-                ProtocolVarInt.write(packet, 1);
-                packet.writeInt(join.entityId()).writeByte(join.gameMode()).writeByte(join.dimension())
-                        .writeByte(join.difficulty()).writeByte(20);
-                byte[] level = join.levelType().getBytes(StandardCharsets.UTF_8);
-                ProtocolVarInt.write(packet, level.length);
-                packet.writeBytes(level);
+                writeJoin(packet, join);
                 state.observePacket(true, packet);
                 assertFalse(state.ready().isDone());
                 packet.clear();
@@ -80,50 +71,21 @@ final class PlayObservationTest {
         }
     }
 
-    @Test
-    void readinessReleasesAnUnrelatedPartialFrameAfterTheCurrentTapReturns() throws Exception {
-        try (var state = new PlayObservation()) {
-            ByteBuf partial = Unpooled.buffer();
-            try {
-                ProtocolVarInt.write(partial, 1000);
-                partial.writeZero(64);
-                state.observeStream(false, partial);
-            } finally { partial.release(); }
-            ByteBuf retained = pendingFrame(state);
-            assertNotNull(retained);
-            assertEquals(1, retained.refCnt());
-
-            ByteBuf join = Unpooled.buffer();
-            ByteBuf position = Unpooled.buffer();
-            ByteBuf stream = Unpooled.buffer();
-            try {
-                ProtocolVarInt.write(join, 1);
-                join.writeInt(3).writeByte(0).writeByte(0).writeByte(1).writeByte(20);
-                byte[] level = "default".getBytes(StandardCharsets.UTF_8);
-                ProtocolVarInt.write(join, level.length);
-                join.writeBytes(level);
-                ProtocolVarInt.write(position, 8);
-                ProtocolVarInt.write(stream, join.readableBytes());
-                stream.writeBytes(join);
-                ProtocolVarInt.write(stream, position.readableBytes());
-                stream.writeBytes(position);
-                state.observeStream(true, stream);
-                assertTrue(state.ready().isDone());
-                assertEquals(0, retained.refCnt());
-            } finally {
-                stream.release();
-                position.release();
-                join.release();
-            }
-        }
+    private static void sendJoin(PlayObservation state) {
+        ByteBuf packet = Unpooled.buffer();
+        try {
+            writeJoin(packet, new Minecraft1710PlayPackets.JoinGame(3, 0, 0, 1, "default"));
+            state.observePacket(true, packet);
+        } finally { packet.release(); }
     }
 
-    private static ByteBuf pendingFrame(PlayObservation observation) throws Exception {
-        Field tapField = PlayObservation.class.getDeclaredField("clientFrames");
-        tapField.setAccessible(true);
-        Field pendingField = PacketStreamTap.class.getDeclaredField("pending");
-        pendingField.setAccessible(true);
-        return (ByteBuf) pendingField.get(tapField.get(observation));
+    private static void writeJoin(ByteBuf packet, Minecraft1710PlayPackets.JoinGame join) {
+        ProtocolVarInt.write(packet, 1);
+        packet.writeInt(join.entityId()).writeByte(join.gameMode()).writeByte(join.dimension())
+                .writeByte(join.difficulty()).writeByte(20);
+        byte[] level = join.levelType().getBytes(StandardCharsets.UTF_8);
+        ProtocolVarInt.write(packet, level.length);
+        packet.writeBytes(level);
     }
 
     private static void sendFml(PlayObservation state, boolean clientbound, int... payload) {

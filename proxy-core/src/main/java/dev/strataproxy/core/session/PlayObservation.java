@@ -1,7 +1,6 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
-import dev.strataproxy.core.protocol.PacketStreamTap;
 import dev.strataproxy.core.protocol.ProtocolProfile;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
 import io.netty.buffer.ByteBuf;
@@ -9,12 +8,9 @@ import io.netty.buffer.ByteBuf;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 
-/** Only the PLAY facts needed to safely start a later backend replacement. */
+/** PLAY facts for a session; callers run on the player's event loop. */
 final class PlayObservation implements AutoCloseable {
-    private final PacketStreamTap clientFrames = new PacketStreamTap(
-            ProtocolProfile.minecraft1710().maxFrameBytes(), packet -> observePacket(false, packet));
-    private final PacketStreamTap backendFrames = new PacketStreamTap(
-            ProtocolProfile.minecraft1710().maxFrameBytes(), packet -> observePacket(true, packet));
+    private static final int MAX_FRAME_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private final CompletableFuture<Void> ready = new CompletableFuture<>();
     private boolean joinSeen;
     private boolean forgeSeen;
@@ -23,19 +19,15 @@ final class PlayObservation implements AutoCloseable {
     private OptionalInt dimension = OptionalInt.empty();
     private OptionalInt forgeDimensionOverride = OptionalInt.empty();
     private OptionalInt entityId = OptionalInt.empty();
-    private int streamObservationDepth;
-    private boolean tapsClosed;
-
-    void observeStream(boolean clientbound, ByteBuf bytes) {
+    /** Called after MinecraftFrameDecoder with one complete, length-prefixed frame. */
+    void observeFrame(boolean clientbound, ByteBuf frame) {
         if (ready.isDone()) return;
-        streamObservationDepth++;
-        try {
-            if (clientbound) backendFrames.accept(bytes);
-            else clientFrames.accept(bytes);
-        } finally {
-            streamObservationDepth--;
-            releaseTapsIfReady();
+        ByteBuf packet = frame.duplicate();
+        int length = ProtocolVarInt.read(packet);
+        if (length < 1 || length > MAX_FRAME_BYTES || length != packet.readableBytes()) {
+            throw new IllegalArgumentException("invalid PLAY frame");
         }
+        observePacket(clientbound, packet);
     }
 
     void observePacket(boolean clientbound, ByteBuf packet) {
@@ -71,7 +63,6 @@ final class PlayObservation implements AutoCloseable {
             });
         }
         if (joinSeen && forgeSeen && backendComplete && clientComplete) ready.complete(null);
-        releaseTapsIfReady();
     }
 
     CompletableFuture<Void> ready() { return ready; }
@@ -80,18 +71,6 @@ final class PlayObservation implements AutoCloseable {
     OptionalInt entityId() { return entityId; }
 
     @Override public void close() {
-        releaseTapsIfIdle();
         if (!ready.isDone()) ready.completeExceptionally(new IllegalStateException("session closed"));
-    }
-
-    private void releaseTapsIfReady() {
-        if (ready.isDone()) releaseTapsIfIdle();
-    }
-
-    private void releaseTapsIfIdle() {
-        if (streamObservationDepth != 0 || tapsClosed) return;
-        tapsClosed = true;
-        clientFrames.close();
-        backendFrames.close();
     }
 }
