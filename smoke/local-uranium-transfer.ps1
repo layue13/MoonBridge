@@ -4,6 +4,7 @@ param(
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
     [switch]$InstalledPlugin,
     [switch]$DebugSession,
+    [switch]$TraceBackend,
     [switch]$PrismClient,
     [switch]$ReturnToOld,
     [string]$PrismInstance = '1.7.10',
@@ -14,6 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
 if ($DebugSession -and -not $InstalledPlugin) { throw '-DebugSession requires -InstalledPlugin' }
+if ($TraceBackend -and -not $InstalledPlugin) { throw '-TraceBackend requires -InstalledPlugin' }
 if ($ReturnToOld -and -not $InstalledPlugin) {
     throw '-ReturnToOld requires -InstalledPlugin'
 }
@@ -145,6 +147,7 @@ $oldPort = FreePort
 $newPort = FreePort
 while ($newPort -eq $oldPort) { $newPort = FreePort }
 $servers = [System.Collections.Generic.List[object]]::new()
+$taps = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $proxy = $null
 $prismLauncher = $null
 $initialJavawIds = @()
@@ -162,6 +165,29 @@ try {
     $classpath = Join-Path $proxyLib '*'
     & javac -cp $classpath -d $classes (Join-Path $PSScriptRoot 'UraniumTransferProbe.java')
     if ($LASTEXITCODE -ne 0) { throw 'Could not compile Uranium transfer probe' }
+    $oldRoutePort = $oldPort
+    $newRoutePort = $newPort
+    if ($TraceBackend) {
+        & javac -d $classes (Join-Path $PSScriptRoot 'TcpRelayCapture.java')
+        if ($LASTEXITCODE -ne 0) { throw 'Could not compile backend TCP tap' }
+        $java = (Get-Command java.exe -ErrorAction Stop).Source
+        foreach ($target in @(@{ Name = 'old'; Port = $oldPort }, @{ Name = 'new'; Port = $newPort })) {
+            $routePort = FreePort
+            while ($routePort -eq $oldPort -or $routePort -eq $newPort -or
+                    $routePort -eq $oldRoutePort -or $routePort -eq $newRoutePort) { $routePort = FreePort }
+            if ($target.Name -eq 'old') { $oldRoutePort = $routePort }
+            else { $newRoutePort = $routePort }
+            $tapLog = Join-Path $runDir ("tap-$($target.Name).log")
+            $tapStdout = Join-Path $runDir ("tap-$($target.Name).stdout.log")
+            $tap = Start-Process -FilePath $java -ArgumentList @(
+                '-cp', ('"{0}"' -f $classes), 'dev.strataproxy.smoke.TcpRelayCapture',
+                $routePort, $target.Port, ('"{0}"' -f $tapLog)
+            ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $tapStdout `
+              -RedirectStandardError (Join-Path $runDir ("tap-$($target.Name).stderr.log"))
+            $taps.Add($tap)
+            WaitForProxyLog $tapStdout 'TAP_READY'
+        }
+    }
     if ($InstalledPlugin) {
         $pluginClasses = Join-Path $runDir 'plugin-classes'
         New-Item -ItemType Directory -Path $pluginClasses -Force | Out-Null
@@ -176,7 +202,8 @@ try {
         & jar -cf (Join-Path $pluginDir 'uranium-transfer-smoke.jar') -C $pluginClasses .
         if ($LASTEXITCODE -ne 0) { throw 'Could not package Uranium transfer plugin' }
         $proxyPort = FreePort
-        while ($proxyPort -eq $oldPort -or $proxyPort -eq $newPort) { $proxyPort = FreePort }
+        while ($proxyPort -eq $oldPort -or $proxyPort -eq $newPort -or
+                $proxyPort -eq $oldRoutePort -or $proxyPort -eq $newRoutePort) { $proxyPort = FreePort }
         $config = Join-Path $runDir 'strataproxy.yml'
         $pluginDirYaml = $pluginDir.Replace('\', '/')
         $returnToOldSetting = if ($ReturnToOld) { 'true' } else { 'false' }
@@ -187,11 +214,11 @@ plugins:
   directory: "$pluginDirYaml"
   enabled:
     dev.strataproxy.smoke.UraniumTransferPlugin:
-      newPort: "$newPort"
+      newPort: "$newRoutePort"
       returnToOld: "$returnToOldSetting"
 backends:
   - name: old
-    address: "127.0.0.1:$oldPort"
+    address: "127.0.0.1:$oldRoutePort"
 "@ | Set-Content -LiteralPath $config -Encoding utf8
         $java = (Get-Command java.exe -ErrorAction Stop).Source
         $proxyLog = Join-Path $runDir 'proxy.stdout.log'
@@ -327,6 +354,12 @@ backends:
     if ($proxy -and -not $proxy.HasExited) {
         Stop-Process -Id $proxy.Id -Force
         Wait-Process -Id $proxy.Id -ErrorAction SilentlyContinue
+    }
+    foreach ($tap in $taps) {
+        if (-not $tap.HasExited) {
+            Stop-Process -Id $tap.Id -Force
+            Wait-Process -Id $tap.Id -ErrorAction SilentlyContinue
+        }
     }
     foreach ($server in $servers) {
         if (-not $server.Process.HasExited) {

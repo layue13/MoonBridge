@@ -78,7 +78,7 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 `smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
-安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。初次登录 EOF 的复现实验见 [运行记录](smoke/results/2026-09-26-initial-login-repeat.md)；增强日志后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](smoke/results/2026-09-26-uranium-login-stalls.md)。
+安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](smoke/results/2026-09-26-uranium-login-stalls.md)。
 
 ## 合成 relay 基准
 
