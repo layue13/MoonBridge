@@ -27,16 +27,20 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.crypto.Cipher;
@@ -48,6 +52,47 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
+    @Test
+    void shutdownWhileAcceptingClientsClosesEveryRegisteredSession() throws Exception {
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                new InMemoryBackendCatalog());
+        listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+        var clients = Collections.synchronizedList(new ArrayList<Socket>());
+        var firstConnected = new CountDownLatch(1);
+        CompletableFuture<Void> connector = null;
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            connector = CompletableFuture.runAsync(() -> {
+                for (int i = 0; i < 64; i++) {
+                    try {
+                        Socket client = new Socket(InetAddress.getLoopbackAddress(), port);
+                        clients.add(client);
+                        firstConnected.countDown();
+                    } catch (IOException listenerClosed) {
+                        return;
+                    }
+                }
+            });
+            assertTrue(firstConnected.await(5, TimeUnit.SECONDS));
+            listener.close().toCompletableFuture().get(15, TimeUnit.SECONDS);
+            connector.get(5, TimeUnit.SECONDS);
+            assertTrue(listener.allSessions().isEmpty(), "shutdown left an accepted session registered");
+            for (Socket client : clients) {
+                client.setSoTimeout(2000);
+                try {
+                    assertEquals(-1, client.getInputStream().read());
+                } catch (SocketException reset) {
+                    // A peer close with unread login bytes can surface as a TCP reset on Windows.
+                }
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(15, TimeUnit.SECONDS);
+            if (connector != null) connector.get(5, TimeUnit.SECONDS);
+            for (Socket client : clients) client.close();
+        }
+    }
+
     @Test
     void rejectsOversizedFrontendFrameBeforeAuthentication() throws Exception {
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),

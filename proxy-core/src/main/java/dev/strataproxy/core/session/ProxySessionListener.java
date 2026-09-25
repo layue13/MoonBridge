@@ -160,8 +160,8 @@ public final class ProxySessionListener implements Players {
                 .childOption(io.netty.channel.ChannelOption.TCP_NODELAY, true)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel channel) {
-                        Session session = new Session(ProxySessionListener.this, channel);
-                        allSessions.add(session);
+                        Session session = registerSession(channel);
+                        if (session == null) return;
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                                 dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true,
                                 dev.strataproxy.core.protocol.ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
@@ -186,6 +186,17 @@ public final class ProxySessionListener implements Players {
             }
         });
         return result;
+    }
+
+    /** Serializes admission with close() so every accepted session is either closed or rejected. */
+    private synchronized Session registerSession(SocketChannel channel) {
+        if (closed) {
+            channel.close();
+            return null;
+        }
+        Session session = new Session(this, channel);
+        allSessions.add(session);
+        return session;
     }
 
     @Override public Optional<PlayerView> find(PlayerIdentity identity) {
