@@ -64,13 +64,11 @@ public final class Minecraft1710PlayPackets {
         return Optional.of(new ForgeHandshake(discriminator, phase, hello));
     }
 
-    public static ByteBuf respawnSequence(ByteBufAllocator allocator, JoinGame target,
-                                          OptionalInt currentDimension, int targetDimension) {
+    /** Always changes dimension before the target; the client's current dimension is not observed on the relay path. */
+    public static ByteBuf respawnSequence(ByteBufAllocator allocator, JoinGame target, int targetDimension) {
         ByteBuf output = allocator.buffer();
         try {
-            if (currentDimension.isEmpty() || currentDimension.getAsInt() == targetDimension) {
-                writeRespawn(output, allocator, target, targetDimension >= 0 ? -1 : 0);
-            }
+            writeRespawn(output, allocator, target, targetDimension >= 0 ? -1 : 0);
             writeRespawn(output, allocator, target, targetDimension);
             return output;
         } catch (RuntimeException failure) {

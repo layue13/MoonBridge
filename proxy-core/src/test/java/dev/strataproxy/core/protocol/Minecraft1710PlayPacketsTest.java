@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
-import java.util.OptionalInt;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,10 +36,10 @@ final class Minecraft1710PlayPacketsTest {
     }
 
     @Test
-    void sendsSameDimensionDetourThenTargetAndOneByteForgeReset() {
+    void alwaysSendsDimensionDetourThenTargetAndOneByteForgeReset() {
         var target = new Minecraft1710PlayPackets.JoinGame(7, 9, 0, 2, "default");
         ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(UnpooledByteBufAllocator.DEFAULT,
-                target, OptionalInt.of(256), 256);
+                target, 256);
         ByteBuf reset = Minecraft1710PlayPackets.forgeReset(UnpooledByteBufAllocator.DEFAULT);
         try {
             int firstLength = ProtocolVarInt.read(respawns);

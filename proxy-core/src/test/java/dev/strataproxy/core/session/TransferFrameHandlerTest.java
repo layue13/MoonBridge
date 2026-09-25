@@ -11,7 +11,6 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,8 +27,7 @@ final class TransferFrameHandlerTest {
             }
         });
         var observation = new PlayObservation();
-        var state = new TransferFrameHandler.State(frontend, backend, observation,
-                OptionalInt.of(0), 100, null, () -> { });
+        var state = new TransferFrameHandler.State(frontend, backend, observation, 100, null, () -> { });
         try {
             backend.pipeline().addLast("transfer-frame-handler", new TransferFrameHandler(state, true));
             RawRelay.attach(frontend, backend).start();

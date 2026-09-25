@@ -11,7 +11,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 
-import java.util.OptionalInt;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -21,20 +20,17 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
         private final Channel frontend;
         private final Channel backend;
         private final PlayObservation observation;
-        private final OptionalInt previousDimension;
         private final int clientEntityId;
         private final Runnable closeSession;
         private final ScheduledFuture<?> joinDeadline;
         private Integer serverEntityId;
         private boolean joined;
 
-        State(Channel frontend, Channel backend, PlayObservation observation,
-              OptionalInt previousDimension, int clientEntityId,
+        State(Channel frontend, Channel backend, PlayObservation observation, int clientEntityId,
               Minecraft1710PlayPackets.JoinGame consumedJoinGame, Runnable closeSession) {
             this.frontend = frontend;
             this.backend = backend;
             this.observation = observation;
-            this.previousDimension = previousDimension;
             this.clientEntityId = clientEntityId;
             this.closeSession = closeSession;
             if (consumedJoinGame == null) {
@@ -52,8 +48,7 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
                     .orElseThrow(() -> new IllegalArgumentException("expected replacement Join Game"));
             observation.observePacket(true, packet);
             int dimension = observation.dimension().orElse(join.dimension());
-            ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(), join,
-                    previousDimension, dimension);
+            ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(), join, dimension);
             serverEntityId = join.entityId();
             joined = true;
             if (joinDeadline != null) joinDeadline.cancel(false);

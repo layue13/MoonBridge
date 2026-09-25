@@ -701,7 +701,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             if (clientEntityId == null) clientEntityId = playObservation.entityId().orElseThrow();
             attempt.frameState = new TransferFrameHandler.State(frontend, attempt.channel, nextObservation,
-                    playObservation.dimension(), clientEntityId, attempt.candidate.joinGame(), this::closePair);
+                    clientEntityId, attempt.candidate.joinGame(), this::closePair);
             attempt.channel.pipeline().addLast("keep-alive-bridge",
                     new KeepAliveBridge(keepAlives, false, this::closePair));
             installTransferFrameHandlers(attempt.frameState, attempt.channel);
@@ -783,7 +783,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 int targetDimension = attempt.candidate.observation().dimension()
                         .orElse(attempt.candidate.joinGame().dimension());
                 ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
-                        attempt.candidate.joinGame(), playObservation.dimension(), targetDimension);
+                        attempt.candidate.joinGame(), targetDimension);
                 try { output.writeBytes(respawns); } finally { respawns.release(); }
             }
             for (ByteBuf packet : queued) {

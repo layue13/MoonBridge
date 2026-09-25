@@ -402,6 +402,7 @@ final class SessionTransferTest {
                     writeFrame(output, serverForgeAck());
                     assertArrayEquals(clientForgeAck(), readFrame(input));
                     sendJoinGame(output, 0, 100);
+                    sendRespawn(output, 7);
                     if (input.read() != -1) throw new AssertionError("old Forge backend received post-transfer data");
                     oldClosed.complete(null);
                 } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
@@ -439,6 +440,7 @@ final class SessionTransferTest {
                     assertArrayEquals(serverForgeAck(), readFrame(input));
                     writeFrame(output, clientForgeAck());
                     assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(7, respawnDimension(readFrame(input))); // Old backend changed dimension after login.
                     var player = awaitPlayer(listener);
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
@@ -449,10 +451,8 @@ final class SessionTransferTest {
                     assertArrayEquals(serverForgeHello(7), readFrame(input));
                     writeFrame(output, clientForgeAck());
                     assertArrayEquals(serverForgeAck(), readFrame(input));
-                    byte[] respawn = readFrame(input);
-                    var respawnInput = new DataInputStream(new ByteArrayInputStream(respawn));
-                    assertEquals(7, readVarInt(respawnInput));
-                    assertEquals(7, respawnInput.readInt()); // Target override, not Join Game's signed byte.
+                    assertEquals(-1, respawnDimension(readFrame(input))); // Force a world reload despite stale observation.
+                    assertEquals(7, respawnDimension(readFrame(input))); // Target override, not Join Game's signed byte.
                     sendPosition.complete(null);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newNegotiated.get(5, TimeUnit.SECONDS);
@@ -575,6 +575,23 @@ final class SessionTransferTest {
         joinData.writeByte(20);
         writeString(joinData, "default");
         writeFrame(output, join.toByteArray());
+    }
+
+    private static void sendRespawn(DataOutputStream output, int dimension) throws Exception {
+        ByteArrayOutputStream respawn = new ByteArrayOutputStream();
+        var data = new DataOutputStream(respawn);
+        writeVarInt(data, 7);
+        data.writeInt(dimension);
+        data.writeByte(1);
+        data.writeByte(0);
+        writeString(data, "default");
+        writeFrame(output, respawn.toByteArray());
+    }
+
+    private static int respawnDimension(byte[] packet) throws Exception {
+        var input = new DataInputStream(new ByteArrayInputStream(packet));
+        assertEquals(7, readVarInt(input));
+        return input.readInt();
     }
 
     private static byte[] keepAlive(int id) {
