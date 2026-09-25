@@ -71,7 +71,7 @@ plugins:
 
 如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](smoke/results/2026-09-25-local-uranium.md)。这项测试使用协议探针，目标整合包客户端与实服转服仍待验证。
 
-`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive；脚本同时核对两个后端的登录与旧服断线日志。本地结果见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。它仍使用协议探针，不能替代真实 Forge 客户端和目标整合包验收。
+`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`，让临时插件经公开的初始落点与 `Players.transfer` API 发起同一次转服。探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive；脚本同时核对两个后端的登录与旧服断线日志。本地结果见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。两种模式都使用协议探针，不能替代真实 Forge 客户端和目标整合包验收。
 
 ## 合成 relay 基准
 

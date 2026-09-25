@@ -29,6 +29,10 @@ public final class UraniumTransferProbe {
     private UraniumTransferProbe() { }
 
     public static void main(String[] arguments) throws Exception {
+        if (arguments.length == 2 && arguments[0].equals("--external")) {
+            runClient(Integer.parseInt(arguments[1]), null);
+            return;
+        }
         if (arguments.length != 2) throw new IllegalArgumentException("Expected old and new Uranium ports");
         int oldPort = Integer.parseInt(arguments[0]);
         int newPort = Integer.parseInt(arguments[1]);
@@ -43,70 +47,78 @@ public final class UraniumTransferProbe {
         try {
             var channel = proxy.start().toCompletableFuture().get(10, TimeUnit.SECONDS);
             int proxyPort = ((InetSocketAddress) channel.localAddress()).getPort();
-            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), proxyPort)) {
-                client.setSoTimeout(30000);
-                send(client, payload(out -> {
-                    out.writeByte(0);
-                    varInt(out, 5);
-                    string(out, "localhost");
-                    out.writeShort(proxyPort);
-                    varInt(out, 2);
-                }));
-                send(client, payload(out -> {
-                    out.writeByte(0);
-                    string(out, "NettyProbe");
-                }));
-                require(packetId(read(client)) == 2, "missing LOGIN success");
+            runClient(proxyPort, proxy);
+        } finally {
+            proxy.close().toCompletableFuture().get(15, TimeUnit.SECONDS);
+        }
+    }
 
-                int firstHellos = 0;
-                while (true) {
-                    byte[] frame = read(client);
-                    int id = packetId(frame);
-                    if (id == 1) break;
-                    if (id == 0) send(client, frame);
-                    if (id == 0x40) throw new AssertionError("disconnected before initial Join Game");
-                    if (id == 0x3f && respondToForge(client, frame) == ForgeMessage.SERVER_HELLO) firstHellos++;
+    private static void runClient(int proxyPort, ProxySessionListener proxy) throws Exception {
+        try (Socket client = new Socket(InetAddress.getLoopbackAddress(), proxyPort)) {
+            client.setSoTimeout(30000);
+            send(client, payload(out -> {
+                out.writeByte(0);
+                varInt(out, 5);
+                string(out, "localhost");
+                out.writeShort(proxyPort);
+                varInt(out, 2);
+            }));
+            send(client, payload(out -> {
+                out.writeByte(0);
+                string(out, "NettyProbe");
+            }));
+            require(packetId(read(client)) == 2, "missing LOGIN success");
+
+            int firstHellos = 0;
+            while (true) {
+                byte[] frame = read(client);
+                int id = packetId(frame);
+                if (id == 1) break;
+                if (id == 0) send(client, frame);
+                if (id == 0x40) throw new AssertionError("disconnected before initial Join Game");
+                if (id == 0x3f && respondToForge(client, frame) == ForgeMessage.SERVER_HELLO) firstHellos++;
+            }
+            require(firstHellos == 1, "expected one initial Forge ServerHello; got " + firstHellos);
+            PlayerView player = proxy == null ? null : awaitPlayer(proxy, "old");
+            var transfer = proxy == null ? null : proxy.transfer(player.identity(), "new").toCompletableFuture();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            int resets = 0;
+            int secondHellos = 0;
+            int respawns = 0;
+            int keepAlivesAfterReady = 0;
+            while (System.nanoTime() < deadline) {
+                byte[] frame = read(client);
+                int id = packetId(frame);
+                if (id == 0x40) throw new AssertionError("disconnected during transfer");
+                if (id == 0) {
+                    send(client, frame);
+                    if (transfer == null ? respawns >= 2 : transfer.isDone()) keepAlivesAfterReady++;
                 }
-                require(firstHellos == 1, "expected one initial Forge ServerHello; got " + firstHellos);
-                PlayerView player = awaitPlayer(proxy, "old");
-                var transfer = proxy.transfer(player.identity(), "new").toCompletableFuture();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-                int resets = 0;
-                int secondHellos = 0;
-                int respawns = 0;
-                int keepAlivesAfterReady = 0;
-                while (System.nanoTime() < deadline) {
-                    byte[] frame = read(client);
-                    int id = packetId(frame);
-                    if (id == 0x40) throw new AssertionError("disconnected during transfer");
-                    if (id == 0) {
-                        send(client, frame);
-                        if (transfer.isDone()) keepAlivesAfterReady++;
-                    }
-                    if (id == 0x3f) {
-                        ForgeMessage message = respondToForge(client, frame);
-                        if (message == ForgeMessage.RESET) resets++;
-                        if (message == ForgeMessage.SERVER_HELLO) secondHellos++;
-                    }
-                    if (id == 7) respawns++;
-                    if (transfer.isDone() && respawns >= 2 && keepAlivesAfterReady >= 2) break;
+                if (id == 0x3f) {
+                    ForgeMessage message = respondToForge(client, frame);
+                    if (message == ForgeMessage.RESET) resets++;
+                    if (message == ForgeMessage.SERVER_HELLO) secondHellos++;
                 }
+                if (id == 7) respawns++;
+                if ((transfer == null || transfer.isDone()) && respawns >= 2 && keepAlivesAfterReady >= 2) break;
+            }
+            if (transfer != null) {
                 TransferResult result = transfer.get(2, TimeUnit.SECONDS);
                 require(result.status() == TransferStatus.NETWORK_READY,
                         "transfer failed: " + result.status() + " " + result.detail().orElse(""));
-                require(resets == 1, "expected one Forge reset; got " + resets);
-                require(secondHellos == 1, "expected one replacement Forge ServerHello; got " + secondHellos);
-                require(respawns >= 2, "expected two world transition Respawns; got " + respawns);
-                require(keepAlivesAfterReady >= 2,
-                        "replacement session did not sustain two Keep Alives; got " + keepAlivesAfterReady);
+            }
+            require(resets == 1, "expected one Forge reset; got " + resets);
+            require(secondHellos == 1, "expected one replacement Forge ServerHello; got " + secondHellos);
+            require(respawns >= 2, "expected two world transition Respawns; got " + respawns);
+            require(keepAlivesAfterReady >= 2,
+                    "replacement session did not sustain two Keep Alives; got " + keepAlivesAfterReady);
+            if (proxy != null) {
                 require(proxy.find(player.identity()).flatMap(PlayerView::currentServer).orElse("").equals("new"),
                         "player did not move to new backend");
-                System.out.printf("REAL_URANIUM_TRANSFER_PASS reset=%d serverHellos=%d respawns=%d "
-                                + "keepAlivesAfterReady=%d oldPort=%d newPort=%d%n",
-                        resets, secondHellos, respawns, keepAlivesAfterReady, oldPort, newPort);
             }
-        } finally {
-            proxy.close().toCompletableFuture().get(15, TimeUnit.SECONDS);
+            System.out.printf("REAL_URANIUM_TRANSFER_PASS mode=%s reset=%d serverHellos=%d respawns=%d "
+                            + "keepAlivesAfterReady=%d%n",
+                    proxy == null ? "plugin" : "direct", resets, secondHellos, respawns, keepAlivesAfterReady);
         }
     }
 
