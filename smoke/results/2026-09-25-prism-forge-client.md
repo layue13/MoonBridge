@@ -43,3 +43,15 @@ On 2026-09-25 at commit `7925b868afb72cad3d26a5b6a6861bc76648a940`, after the in
 The Uranium server JAR had SHA-256 `B16747D08BAD4B7C67DB8F1F41C9C31066FEAAAC22B527775F604BDFA885BAD2`, matching the earlier run. The script reported `REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10` and `REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true`. The proxy log recorded `SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY`; both FML logs recorded handshake acknowledgements 2 through 5. The old backend logged the player in at 23:52:06 and disconnected at 23:52:07; the replacement logged in at 23:52:07 and stayed connected until the script stopped the client at 23:52:18. The script left no matching Prism 1.7.10 game process. Raw logs are in the ignored local `build/local-uranium-transfer-aa802d503ade43ac94aacbcdc4ac8189` directory.
 
 This revalidation confirms the current branch still handles this minimal Forge transfer. The target modpack and real online authentication remain unverified.
+
+## Revalidation after online Forge transfer coverage
+
+On 2026-09-26 (Asia/Shanghai), commit `c909f6a0e2b2151dd36be765802427b03e540ab7` was rebuilt from source with `./gradlew.bat :proxy-core:installDist --rerun-tasks --no-daemon` and the installed distribution was exercised with:
+
+```powershell
+.\smoke\local-uranium-transfer.ps1 -BundlePath 'C:\Users\layue\Documents\ChatGPT\tdlm 2\Uranium\rfg\build\rfg-netty-compat-bundle' -InstalledPlugin -PrismClient
+```
+
+The script reported `REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10` and `REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true`. The Uranium JAR SHA-256 was `B16747D08BAD4B7C67DB8F1F41C9C31066FEAAAC22B527775F604BDFA885BAD2`. The proxy log recorded `SMOKE_PLUGIN_REGISTER_PASS` at 01:15:57 and `SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY` at 01:16:08. The old backend logged `PrismSmoke` in at 01:16:07 and disconnected at 01:16:08; the replacement logged the player in at 01:16:08, recorded `Server side modded connection established` in its FML log, and remained connected until the smoke script stopped the client at 01:16:19. No matching Prism game process remained after cleanup. Raw logs are in ignored local directory `build/local-uranium-transfer-a1560de67b4c477f8fd5bdd25399bdfe`.
+
+This checks the current branch with one real minimal Forge client and two local Uranium backends. It does not cover the target modpack, real Mojang authentication, cross-host operation, or target traffic performance.
