@@ -110,6 +110,34 @@ class PluginHostTest {
     }
 
     @Test
+    void disabledPluginCannotUseRetainedServices() {
+        AtomicInteger transfers = new AtomicInteger();
+        Players delegate = new Players() {
+            @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.of(PLAYER); }
+            @Override public List<PlayerView> online() { return List.of(PLAYER); }
+            @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
+                    PlayerIdentity identity, String backendName) {
+                transfers.incrementAndGet();
+                return CompletableFuture.completedFuture(TransferResult.of(TransferStatus.NETWORK_READY));
+            }
+        };
+        CapturingPlugin plugin = new CapturingPlugin("unused", false);
+        PluginHost host = new PluginHost(new InMemoryBackendCatalog(), delegate, Duration.ofSeconds(1));
+        host.load(List.of(plugin));
+        host.enable();
+        Players retained = plugin.context.players();
+        var retainedServers = plugin.context.servers();
+        assertEquals(TransferStatus.NETWORK_READY,
+                retained.transfer(PLAYER.identity(), "lobby").toCompletableFuture().join().status());
+        host.close();
+
+        assertThrows(IllegalStateException.class, () -> retained.transfer(PLAYER.identity(), "lobby"));
+        assertThrows(IllegalStateException.class, retained::online);
+        assertThrows(IllegalStateException.class, retainedServers::all);
+        assertEquals(1, transfers.get());
+    }
+
+    @Test
     void placementFailuresOnlyFailTheirOwnRequest() {
         RecoveringPlacementPlugin plugin = new RecoveringPlacementPlugin();
         BackendCatalog catalog = new InMemoryBackendCatalog();

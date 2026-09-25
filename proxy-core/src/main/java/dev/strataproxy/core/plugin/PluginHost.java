@@ -2,6 +2,7 @@ package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Players;
 import dev.strataproxy.api.Plugin;
@@ -10,6 +11,7 @@ import dev.strataproxy.api.ServerDefinition;
 import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.ServerView;
 import dev.strataproxy.api.Servers;
+import dev.strataproxy.api.TransferResult;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
@@ -339,6 +341,7 @@ public final class PluginHost implements AutoCloseable {
 
     private final class PluginContextImpl implements PluginContext {
         private final BackendOwner owner;
+        private final Players pluginPlayers;
         private final PluginServers servers;
         private final Logger logger;
         private final Map<String, String> settings;
@@ -346,12 +349,13 @@ public final class PluginHost implements AutoCloseable {
 
         private PluginContextImpl(BackendOwner owner, Map<String, String> settings) {
             this.owner = owner;
+            this.pluginPlayers = new PluginPlayers(this);
             this.servers = new PluginServers(this);
             this.logger = LoggerFactory.getLogger("plugin." + owner.id());
             this.settings = Map.copyOf(settings);
         }
 
-        @Override public Players players() { return players; }
+        @Override public Players players() { return pluginPlayers; }
         @Override public Servers servers() { return servers; }
         @Override public Logger logger() { return logger; }
         @Override public Map<String, String> settings() { return settings; }
@@ -359,6 +363,39 @@ public final class PluginHost implements AutoCloseable {
         private synchronized void deactivateAndRemove() {
             active = false;
             catalog.removeOwner(owner);
+        }
+
+        private void requireActive() {
+            if (!active) throw new IllegalStateException("Plugin context is inactive");
+        }
+    }
+
+    private final class PluginPlayers implements Players {
+        private final PluginContextImpl context;
+
+        private PluginPlayers(PluginContextImpl context) {
+            this.context = context;
+        }
+
+        @Override public Optional<PlayerView> find(PlayerIdentity identity) {
+            synchronized (context) {
+                context.requireActive();
+                return players.find(identity);
+            }
+        }
+
+        @Override public List<PlayerView> online() {
+            synchronized (context) {
+                context.requireActive();
+                return players.online();
+            }
+        }
+
+        @Override public CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
+            synchronized (context) {
+                context.requireActive();
+                return players.transfer(identity, backendName);
+            }
         }
     }
 
@@ -373,21 +410,25 @@ public final class PluginHost implements AutoCloseable {
 
         @Override
         public Optional<ServerView> find(String backendName) {
-            Objects.requireNonNull(backendName, "backendName");
-            return catalog.find(new BackendId(backendName)).map(PluginHost::toServerView);
+            synchronized (context) {
+                context.requireActive();
+                Objects.requireNonNull(backendName, "backendName");
+                return catalog.find(new BackendId(backendName)).map(PluginHost::toServerView);
+            }
         }
 
         @Override
         public List<ServerView> all() {
-            return snapshotServers();
+            synchronized (context) {
+                context.requireActive();
+                return snapshotServers();
+            }
         }
 
         @Override
         public ServerRegistration register(ServerDefinition definition) {
             synchronized (context) {
-                if (!context.active) {
-                    throw new IllegalStateException("Plugin context is inactive");
-                }
+                context.requireActive();
                 Objects.requireNonNull(definition, "definition");
                 BackendId id = new BackendId(definition.name());
                 BackendRegistration registration = new BackendRegistration(id, owner, definition.address(),
