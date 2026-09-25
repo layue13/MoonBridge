@@ -2,7 +2,6 @@ package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Players;
@@ -13,6 +12,12 @@ import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.TransferResult;
 import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.backend.BackendCatalog;
+import dev.strataproxy.core.backend.BackendHandle;
+import dev.strataproxy.core.backend.BackendId;
+import dev.strataproxy.core.backend.BackendOwner;
+import dev.strataproxy.core.backend.BackendRegistration;
+import dev.strataproxy.core.backend.BackendView;
+import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +29,10 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -53,6 +62,36 @@ class PluginHostTest {
 
         assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("first")).isEmpty());
         assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("second")).isEmpty());
+    }
+
+    @Test
+    void concurrentRegistrationCannotSurviveHostClose() throws Exception {
+        BlockingCatalog catalog = new BlockingCatalog();
+        CapturingPlugin plugin = new CapturingPlugin("unused", false);
+        PluginHost host = new PluginHost(catalog, players(), Duration.ofSeconds(1));
+        host.load(List.of(plugin));
+        host.enable();
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            catalog.blockRegistration = true;
+            var registration = workers.submit(() -> plugin.context.servers().register(server("late")));
+            assertTrue(catalog.registerEntered.await(5, TimeUnit.SECONDS));
+            CountDownLatch closeStarted = new CountDownLatch(1);
+            var shutdown = workers.submit(() -> {
+                closeStarted.countDown();
+                host.close();
+            });
+            assertTrue(closeStarted.await(5, TimeUnit.SECONDS));
+            catalog.ownerRemoved.await(1, TimeUnit.SECONDS);
+            catalog.continueRegister.countDown();
+            registration.get(5, TimeUnit.SECONDS);
+            shutdown.get(5, TimeUnit.SECONDS);
+            assertTrue(catalog.find(new BackendId("late")).isEmpty());
+        } finally {
+            catalog.continueRegister.countDown();
+            host.close();
+            workers.shutdownNow();
+        }
     }
 
     @Test
@@ -163,5 +202,43 @@ class PluginHostTest {
         }
 
         @Override public void onDisable() { disableCount.incrementAndGet(); }
+    }
+
+    private static final class BlockingCatalog implements BackendCatalog {
+        private final InMemoryBackendCatalog delegate = new InMemoryBackendCatalog();
+        private final CountDownLatch registerEntered = new CountDownLatch(1);
+        private final CountDownLatch continueRegister = new CountDownLatch(1);
+        private final CountDownLatch ownerRemoved = new CountDownLatch(1);
+        private volatile boolean blockRegistration;
+
+        @Override public BackendView register(BackendRegistration registration) {
+            if (blockRegistration) {
+                registerEntered.countDown();
+                try {
+                    if (!continueRegister.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("registration was not released");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("registration interrupted", interrupted);
+                }
+            }
+            return delegate.register(registration);
+        }
+
+        @Override public Optional<BackendView> update(BackendHandle handle, BackendRegistration registration) {
+            return delegate.update(handle, registration);
+        }
+        @Override public boolean remove(BackendHandle handle) { return delegate.remove(handle); }
+        @Override public int removeOwner(BackendOwner owner) {
+            int count = delegate.removeOwner(owner);
+            ownerRemoved.countDown();
+            return count;
+        }
+        @Override public Optional<BackendView> find(BackendId id) { return delegate.find(id); }
+        @Override public List<BackendView> snapshot() { return delegate.snapshot(); }
+        @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
+            return delegate.reserve(handle, units);
+        }
     }
 }

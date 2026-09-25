@@ -241,8 +241,7 @@ public final class PluginHost implements AutoCloseable {
                     LOGGER.warn("Plugin {} failed during onDisable", loaded.owner.id(), failure);
                 }
             }
-            loaded.context.deactivate();
-            catalog.removeOwner(loaded.owner);
+            loaded.context.deactivateAndRemove();
         }
         callbacks.shutdownNow();
         timer.shutdownNow();
@@ -271,8 +270,7 @@ public final class PluginHost implements AutoCloseable {
         try {
             plugin.onLoad(context);
         } catch (Throwable failure) {
-            context.deactivate();
-            catalog.removeOwner(owner);
+            context.deactivateAndRemove();
             plugins.remove(loaded);
             throw new PluginLoadException(id, failure);
         }
@@ -336,7 +334,10 @@ public final class PluginHost implements AutoCloseable {
         @Override public Logger logger() { return logger; }
         @Override public Map<String, String> settings() { return settings; }
 
-        private void deactivate() { active = false; }
+        private synchronized void deactivateAndRemove() {
+            active = false;
+            catalog.removeOwner(owner);
+        }
     }
 
     private final class PluginServers implements Servers {
@@ -361,15 +362,17 @@ public final class PluginHost implements AutoCloseable {
 
         @Override
         public ServerRegistration register(ServerDefinition definition) {
-            if (!context.active) {
-                throw new IllegalStateException("Plugin context is inactive");
+            synchronized (context) {
+                if (!context.active) {
+                    throw new IllegalStateException("Plugin context is inactive");
+                }
+                Objects.requireNonNull(definition, "definition");
+                BackendId id = new BackendId(definition.name());
+                BackendRegistration registration = new BackendRegistration(id, owner, definition.address(),
+                        definition.capacity(), definition.tags(), definition.metadata());
+                BackendView view = catalog.register(registration);
+                return new PluginServerRegistration(view.handle());
             }
-            Objects.requireNonNull(definition, "definition");
-            BackendId id = new BackendId(definition.name());
-            BackendRegistration registration = new BackendRegistration(id, owner, definition.address(),
-                    definition.capacity(), definition.tags(), definition.metadata());
-            BackendView view = catalog.register(registration);
-            return new PluginServerRegistration(view.handle());
         }
 
         private final class PluginServerRegistration implements ServerRegistration {

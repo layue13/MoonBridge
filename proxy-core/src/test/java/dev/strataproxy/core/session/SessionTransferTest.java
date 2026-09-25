@@ -199,6 +199,66 @@ final class SessionTransferTest {
     }
 
     @Test
+    void sameNameWithNewAddressTransfersToCurrentRegistration() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newConnected = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0, 100);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0, 200);
+                    newConnected.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { newConnected.completeExceptionally(failure); }
+            });
+            BackendHandle handle = register(catalog, "same", oldServer);
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(ignored -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("same"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    var input = new DataInputStream(client.getInputStream());
+                    sendLogin(new DataOutputStream(client.getOutputStream()));
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var moved = new BackendRegistration(handle.id(), new BackendOwner("static", 0),
+                            URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()), 1);
+                    catalog.update(handle, moved).orElseThrow();
+
+                    var transfer = listener.transfer(player.identity(), "same").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
+                    newConnected.get(5, TimeUnit.SECONDS);
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                    assertEquals("same", listener.find(player.identity()).orElseThrow()
+                            .currentServer().orElseThrow());
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void staleKeepAliveReplyDoesNotReachTheReplacementBackend() throws Exception {
         int oldKeepAlive = 0x12345678;
         int newKeepAlive = 0x23456789;

@@ -523,8 +523,11 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         if (selected.handle().id().value().equals(backendName)) {
-            result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
-            return;
+            BackendView current = owner.catalog().find(selected.handle().id()).orElse(null);
+            if (current != null && current.address().equals(selected.address())) {
+                result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
+                return;
+            }
         }
         if (playObservation.ready().isCompletedExceptionally()) {
             result.complete(TransferResult.failed("backend login or Forge negotiation failed"));
