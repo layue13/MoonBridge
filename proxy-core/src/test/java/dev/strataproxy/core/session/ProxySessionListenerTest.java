@@ -1547,6 +1547,8 @@ final class ProxySessionListenerTest {
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                 while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                 assertTrue(listener.online().isEmpty());
+                while (catalog.find(backend.handle().id()).orElseThrow().availableUnits() != 1
+                        && System.nanoTime() < deadline) Thread.sleep(5);
                 assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
                 while (listener.onlineCount() != 0 && System.nanoTime() < deadline) Thread.sleep(5);
                 assertEquals(0, requestStatus(listenPort).path("players").path("online").asInt());
