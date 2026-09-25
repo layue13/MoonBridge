@@ -817,7 +817,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void onlineTransferForwardsVerifiedIdentityToReplacementAndKeepsClientEncrypted() throws Exception {
+    void onlineTransferToForgeForwardsVerifiedIdentityAndKeepsClientEncrypted() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
@@ -843,7 +843,21 @@ final class ProxySessionListenerTest {
                     var input = new DataInputStream(socket.getInputStream());
                     var output = new DataOutputStream(socket.getOutputStream());
                     acceptForwardedLogin(input, uuid);
-                    sendOnlineBackendPlayStart(output, uuid, 200);
+                    sendOnlineBackendLoginSuccess(output, uuid);
+                    writeFrame(output, forgeRegistration(true));
+                    writeFrame(output, forgeHello(7));
+                    assertArrayEquals(forgeRegistration(false), readFrame(input));
+                    assertArrayEquals(forgeMessage(false, new byte[]{1, 2}), readFrame(input));
+                    assertArrayEquals(forgeMessage(false, new byte[]{2, 0}), readFrame(input));
+                    writeFrame(output, forgeMessage(true, new byte[]{2, 0}));
+                    assertArrayEquals(forgeMessage(false, new byte[]{(byte) 0xff, 2}), readFrame(input));
+                    writeFrame(output, forgeMessage(true, new byte[]{3, 0, 0, 0}));
+                    writeFrame(output, forgeMessage(true, new byte[]{(byte) 0xff, 2}));
+                    assertArrayEquals(forgeMessage(false, new byte[]{(byte) 0xff, 3}), readFrame(input));
+                    assertArrayEquals(forgeMessage(false, new byte[]{(byte) 0xff, 4}), readFrame(input));
+                    writeFrame(output, forgeMessage(true, new byte[]{(byte) 0xff, 3}));
+                    assertArrayEquals(forgeMessage(false, new byte[]{(byte) 0xff, 5}), readFrame(input));
+                    sendOnlineBackendWorld(output, 200);
                     assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
                     writeFrame(output, new byte[]{0x03, 0x44});
                     replacementRelayed.complete(null);
@@ -898,6 +912,7 @@ final class ProxySessionListenerTest {
 
                     var encryptedInput = new DataInputStream(decryptingInput(client.getInputStream(),
                             aes(secret, Cipher.DECRYPT_MODE)));
+                    Cipher encryptor = aes(secret, Cipher.ENCRYPT_MODE);
                     var success = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
                     assertEquals(2, readVarInt(success));
                     assertEquals(uuid.toString(), readString(success, 36));
@@ -909,16 +924,30 @@ final class ProxySessionListenerTest {
                     while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
                     assertEquals(1, listener.online().size());
                     var player = listener.online().get(0);
-                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
+                    var pendingTransfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    byte[] reset = readFrame(encryptedInput);
+                    assertEquals(0x3f, readVarInt(new java.io.ByteArrayInputStream(reset)));
+                    assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertArrayEquals(forgeRegistration(true), readFrame(encryptedInput));
+                    assertArrayEquals(forgeHello(7), readFrame(encryptedInput));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeRegistration(false));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{1, 2}));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{2, 0}));
+                    assertArrayEquals(forgeMessage(true, new byte[]{2, 0}), readFrame(encryptedInput));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{(byte) 0xff, 2}));
+                    assertArrayEquals(forgeMessage(true, new byte[]{3, 0, 0, 0}), readFrame(encryptedInput));
+                    assertArrayEquals(forgeMessage(true, new byte[]{(byte) 0xff, 2}), readFrame(encryptedInput));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{(byte) 0xff, 3}));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{(byte) 0xff, 4}));
+                    assertArrayEquals(forgeMessage(true, new byte[]{(byte) 0xff, 3}), readFrame(encryptedInput));
+                    writeEncryptedFrame(clearOutput, encryptor, forgeMessage(false, new byte[]{(byte) 0xff, 5}));
+                    var transfer = pendingTransfer.get(5, TimeUnit.SECONDS);
                     assertEquals(dev.strataproxy.api.TransferStatus.NETWORK_READY, transfer.status(),
                             transfer.detail().orElse(""));
                     assertEquals(7, readVarInt(new java.io.ByteArrayInputStream(readFrame(encryptedInput))));
                     assertEquals(7, readVarInt(new java.io.ByteArrayInputStream(readFrame(encryptedInput))));
                     assertArrayEquals(new byte[]{0x08}, readFrame(encryptedInput));
-                    byte[] encryptedPlay = aes(secret, Cipher.ENCRYPT_MODE).update(framed(new byte[]{0x01, 0x33}));
-                    clearOutput.write(encryptedPlay);
-                    clearOutput.flush();
+                    writeEncryptedFrame(clearOutput, encryptor, new byte[]{0x01, 0x33});
                     replacementRelayed.get(5, TimeUnit.SECONDS);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(encryptedInput));
                     assertEquals("new", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
@@ -945,11 +974,19 @@ final class ProxySessionListenerTest {
     }
 
     private static void sendOnlineBackendPlayStart(DataOutputStream output, UUID uuid, int entityId) throws Exception {
+        sendOnlineBackendLoginSuccess(output, uuid);
+        sendOnlineBackendWorld(output, entityId);
+    }
+
+    private static void sendOnlineBackendLoginSuccess(DataOutputStream output, UUID uuid) throws Exception {
         ByteArrayOutputStream success = new ByteArrayOutputStream();
         writeVarInt(success, 2);
         writeString(success, uuid.toString());
         writeString(success, "Alice");
         writeFrame(output, success.toByteArray());
+    }
+
+    private static void sendOnlineBackendWorld(DataOutputStream output, int entityId) throws Exception {
         ByteArrayOutputStream join = new ByteArrayOutputStream();
         writeVarInt(join, 1);
         var data = new DataOutputStream(join);
@@ -961,6 +998,38 @@ final class ProxySessionListenerTest {
         writeString(join, "default");
         writeFrame(output, join.toByteArray());
         writeFrame(output, new byte[]{0x08});
+    }
+
+    private static void writeEncryptedFrame(DataOutputStream output, Cipher cipher, byte[] payload) throws Exception {
+        output.write(cipher.update(framed(payload)));
+        output.flush();
+    }
+
+    private static byte[] forgeRegistration(boolean clientbound) throws Exception {
+        return forgePacket(clientbound, "REGISTER", "FML|HS\0FML".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static byte[] forgeHello(int dimensionOverride) throws Exception {
+        ByteArrayOutputStream hello = new ByteArrayOutputStream();
+        var output = new DataOutputStream(hello);
+        output.writeByte(0);
+        output.writeByte(2);
+        output.writeInt(dimensionOverride);
+        return forgeMessage(true, hello.toByteArray());
+    }
+
+    private static byte[] forgeMessage(boolean clientbound, byte[] handshake) throws Exception {
+        return forgePacket(clientbound, "FML|HS", handshake);
+    }
+
+    private static byte[] forgePacket(boolean clientbound, String channel, byte[] payload) throws Exception {
+        ByteArrayOutputStream packet = new ByteArrayOutputStream();
+        writeVarInt(packet, clientbound ? 0x3f : 0x17);
+        writeString(packet, channel);
+        var output = new DataOutputStream(packet);
+        output.writeShort(payload.length);
+        output.write(payload);
+        return packet.toByteArray();
     }
 
     @Test
