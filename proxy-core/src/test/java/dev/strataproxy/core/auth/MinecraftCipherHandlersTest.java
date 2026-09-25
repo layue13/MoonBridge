@@ -1,8 +1,10 @@
 package dev.strataproxy.core.auth;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.Arrays;
@@ -50,6 +52,37 @@ class MinecraftCipherHandlersTest {
         segmented.writeOutbound(Unpooled.wrappedBuffer(Arrays.copyOfRange(plaintext, 219, plaintext.length)));
         assertArrayEquals(expected, collectOutbound(segmented));
         segmented.finishAndReleaseAll();
+    }
+
+    @Test
+    void handlesReadOnlyCompositeBuffersAndReleasesTheirComponents() throws Exception {
+        byte[] ciphertext = transform(plaintext, Cipher.ENCRYPT_MODE);
+        var inbound = new EmbeddedChannel(new MinecraftCipherDecoder(secret.clone()));
+        CompositeByteBuf encryptedInput = composite(ciphertext);
+        try {
+            inbound.writeInbound(encryptedInput.asReadOnly());
+            assertEquals(0, encryptedInput.refCnt());
+            assertArrayEquals(plaintext, collectInbound(inbound));
+        } finally {
+            inbound.finishAndReleaseAll();
+        }
+
+        var outbound = new EmbeddedChannel(new MinecraftCipherEncoder(secret.clone()));
+        CompositeByteBuf plainInput = composite(plaintext);
+        try {
+            outbound.writeOutbound(plainInput.asReadOnly());
+            assertEquals(0, plainInput.refCnt());
+            assertArrayEquals(ciphertext, collectOutbound(outbound));
+        } finally {
+            outbound.finishAndReleaseAll();
+        }
+    }
+
+    private static CompositeByteBuf composite(byte[] bytes) {
+        int split = 17;
+        ByteBuf first = Unpooled.directBuffer(split).writeBytes(bytes, 0, split);
+        ByteBuf second = Unpooled.directBuffer(bytes.length - split).writeBytes(bytes, split, bytes.length - split);
+        return Unpooled.compositeBuffer(2).addComponents(true, first, second);
     }
 
     private byte[] transform(byte[] input, int mode) throws Exception {
