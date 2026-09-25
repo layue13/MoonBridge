@@ -655,6 +655,68 @@ final class SessionTransferTest {
     }
 
     @Test
+    void candidatePlayDisconnectBeforeCutoverKeepsOldBackendUsable() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldRelayed = new CompletableFuture<Void>();
+            var newClosed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0);
+                    assertArrayEquals(new byte[]{0x01, 0x55}, readFrame(input));
+                    writeFrame(output, new byte[]{0x03, 0x66});
+                    oldRelayed.complete(null);
+                } catch (Throwable failure) { oldRelayed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    var batch = new ByteArrayOutputStream();
+                    var packets = new DataOutputStream(batch);
+                    sendJoinGame(packets, 0, 200);
+                    writeFrame(packets, new byte[]{0x40, 0x00});
+                    output.write(batch.toByteArray());
+                    output.flush();
+                    assertEquals(-1, input.read());
+                    newClosed.complete(null);
+                } catch (Throwable failure) { newClosed.completeExceptionally(failure); }
+            });
+            var oldHandle = register(catalog, "old", oldServer);
+            var newHandle = register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), bound.getPort())) {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    DataOutputStream output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    readFrame(input); readFrame(input); readFrame(input);
+                    var player = awaitPlayer(listener);
+                    var result = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.FAILED, result.status());
+                    newClosed.get(5, TimeUnit.SECONDS);
+                    assertEquals("old", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
+                    assertEquals(0, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
+                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
+                    writeFrame(output, new byte[]{0x01, 0x55});
+                    assertArrayEquals(new byte[]{0x03, 0x66}, readFrame(input));
+                    oldRelayed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void failedCandidateLoginKeepsOldBackendUsableAndReleasesCandidateCapacity() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {

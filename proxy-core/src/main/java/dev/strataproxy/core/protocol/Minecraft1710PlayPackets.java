@@ -12,6 +12,7 @@ public final class Minecraft1710PlayPackets {
     public static final int RESPAWN = 0x07;
     public static final int CLIENT_CUSTOM_PAYLOAD = 0x17;
     public static final int SERVER_CUSTOM_PAYLOAD = 0x3F;
+    public static final int SERVER_DISCONNECT = 0x40;
 
     private Minecraft1710PlayPackets() { }
 

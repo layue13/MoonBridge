@@ -73,6 +73,10 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
                 return;
             }
             if (state == State.PLAY || state == State.READY) {
+                if (ProtocolVarInt.read(packet.duplicate()) == Minecraft1710PlayPackets.SERVER_DISCONNECT) {
+                    fail(ctx, "replacement backend rejected player before transfer");
+                    return;
+                }
                 var login = Minecraft1710PlayPackets.joinGame(packet);
                 if (login.isPresent()) {
                     if (joinGame != null) throw new IllegalArgumentException("duplicate Join Game from backend");
