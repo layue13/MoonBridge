@@ -76,6 +76,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final AtomicBoolean closed = new AtomicBoolean();
     private ScheduledFuture<?> initialLoginDeadline;
     private PlayObservation playObservation;
+    private KeepAliveBridge.State keepAlives;
     private RawRelay.Link relay;
     private Integer clientEntityId;
     private TransferFrameHandler.State frameState;
@@ -367,6 +368,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         playObservation = new PlayObservation();
+        keepAlives = new KeepAliveBridge.State();
         playObservation.ready().whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(this::tryStartPendingTransfer));
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
@@ -401,6 +403,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (closed.get() || target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
         try {
             var observation = playObservation;
+            frontend.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, true, this::closePair));
+            target.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, false, this::closePair));
             var link = RawRelay.attach(frontend, target,
                     bytes -> observation.observeStream(false, bytes),
                     bytes -> observation.observeStream(true, bytes));
@@ -439,22 +443,34 @@ final class Session extends ChannelInboundHandlerAdapter {
         PendingFrame pending;
         while ((pending = transitionBuffer.pollFirst()) != null) {
             transitionBufferBytes -= pending.payload.readableBytes();
+            ByteBuf payload = pending.payload;
             try {
                 if (playObservation != null) {
-                    playObservation.observePacket(!pending.fromFrontend, pending.payload);
+                    playObservation.observePacket(!pending.fromFrontend, payload);
                 }
             } catch (RuntimeException malformed) {
-                pending.payload.release();
+                payload.release();
                 return CompletableFuture.failedFuture(malformed);
             }
             Channel target = pending.fromFrontend ? backend : frontend;
             if (target == null || !target.isActive()) {
-                pending.payload.release();
+                payload.release();
                 return CompletableFuture.failedFuture(new IllegalStateException("transition peer closed"));
             }
+            try {
+                ByteBuf mapped = keepAlives.body(target.alloc(), payload, pending.fromFrontend);
+                if (mapped != payload) {
+                    payload.release();
+                    payload = mapped;
+                }
+            } catch (RuntimeException malformed) {
+                payload.release();
+                return CompletableFuture.failedFuture(malformed);
+            }
+            if (payload == null) continue;
             CompletableFuture<Void> write = new CompletableFuture<>();
             writes.add(write);
-            target.writeAndFlush(pending.payload).addListener(future -> {
+            target.writeAndFlush(payload).addListener(future -> {
                 if (future.isSuccess()) write.complete(null);
                 else write.completeExceptionally(future.cause());
             });
@@ -678,6 +694,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (clientEntityId == null) clientEntityId = playObservation.entityId().orElseThrow();
             attempt.frameState = new TransferFrameHandler.State(frontend, attempt.channel, nextObservation,
                     playObservation.dimension(), clientEntityId, attempt.candidate.joinGame(), this::closePair);
+            attempt.channel.pipeline().addLast("keep-alive-bridge",
+                    new KeepAliveBridge(keepAlives, false, this::closePair));
             installTransferFrameHandlers(attempt.frameState, attempt.channel);
             next = RawRelay.attach(frontend, attempt.channel,
                     bytes -> nextObservation.observeStream(false, bytes),
@@ -697,6 +715,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
             ByteBuf opening;
             try {
+                keepAlives.switchBackend();
                 opening = transferOpening(attempt);
             } catch (RuntimeException malformed) {
                 failTransfer(attempt, "could not prepare replacement world transition");
@@ -760,8 +779,14 @@ final class Session extends ChannelInboundHandlerAdapter {
                 try { output.writeBytes(respawns); } finally { respawns.release(); }
             }
             for (ByteBuf packet : queued) {
-                ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), packet);
-                try { output.writeBytes(frame); } finally { frame.release(); }
+                ByteBuf mapped = keepAlives.body(frontend.alloc(), packet, false);
+                if (mapped == null) continue;
+                try {
+                    ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), mapped);
+                    try { output.writeBytes(frame); } finally { frame.release(); }
+                } finally {
+                    if (mapped != packet) mapped.release();
+                }
             }
             return output;
         } catch (RuntimeException failure) {

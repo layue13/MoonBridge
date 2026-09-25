@@ -47,6 +47,11 @@ public final class RawRelay {
         return link;
     }
 
+    /** Requests the next manual read when an upstream protocol handler consumed a frame. */
+    public static void continueAfterDrop(Channel source) {
+        if (source.pipeline().get("raw-relay") instanceof Side side) side.requestRead();
+    }
+
     public static final class Link {
         private final Side fromClient;
         private final Side fromBackend;
@@ -97,8 +102,8 @@ public final class RawRelay {
 
         private void maybeStartReads() {
             if (pending.get() == 0 && started.get() && readsStarted.compareAndSet(false, true)) {
-                fromClient.requestRead();
-                fromBackend.requestRead();
+                fromClient.enableReads();
+                fromBackend.enableReads();
             }
         }
     }
@@ -136,6 +141,7 @@ public final class RawRelay {
         private boolean closed;
         private boolean paused;
         private boolean detached;
+        private boolean readsEnabled;
         private CompletableFuture<Void> pauseComplete;
         private CompletableFuture<Void> resumeComplete;
 
@@ -149,6 +155,17 @@ public final class RawRelay {
             context = ctx;
         }
 
+        private void enableReads() {
+            var ctx = context;
+            if (ctx == null) return;
+            if (!ctx.executor().inEventLoop()) {
+                ctx.executor().execute(this::enableReads);
+                return;
+            }
+            readsEnabled = true;
+            requestRead();
+        }
+
         private void requestRead() {
             var ctx = context;
             if (ctx == null) return;
@@ -156,7 +173,7 @@ public final class RawRelay {
                 ctx.executor().execute(this::requestRead);
                 return;
             }
-            if (!closed && !paused && !detached && writesInFlight == 0
+            if (readsEnabled && !closed && !paused && !detached && writesInFlight == 0
                     && ctx.channel().isActive() && peer.isActive() && peer.isWritable()) {
                 ctx.read();
             }

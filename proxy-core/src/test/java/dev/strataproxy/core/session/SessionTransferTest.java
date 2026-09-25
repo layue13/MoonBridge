@@ -194,6 +194,72 @@ final class SessionTransferTest {
     }
 
     @Test
+    void staleKeepAliveReplyDoesNotReachTheReplacementBackend() throws Exception {
+        int oldKeepAlive = 0x12345678;
+        int newKeepAlive = 0x23456789;
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newReplied = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0);
+                    writeFrame(output, keepAlive(oldKeepAlive));
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    sendJoinGame(output, 0, 200);
+                    writeFrame(output, keepAlive(newKeepAlive));
+                    writeFrame(output, new byte[]{0x08});
+                    assertEquals(newKeepAlive, keepAliveId(readFrame(input)));
+                    newReplied.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { newReplied.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    DataOutputStream output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    int staleReply = keepAliveId(readFrame(input));
+                    var player = awaitPlayer(listener);
+                    assertEquals(TransferStatus.NETWORK_READY, listener.transfer(player.identity(), "new")
+                            .toCompletableFuture().get(5, TimeUnit.SECONDS).status());
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(7, packetId(readFrame(input)));
+                    int currentReply = keepAliveId(readFrame(input));
+                    assertEquals(8, packetId(readFrame(input)));
+                    assertTrue(staleReply != currentReply);
+                    writeFrame(output, keepAlive(staleReply));
+                    writeFrame(output, keepAlive(currentReply));
+                    newReplied.get(5, TimeUnit.SECONDS);
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
     void failedCandidateLoginKeepsOldBackendUsableAndReleasesCandidateCapacity() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
@@ -432,6 +498,18 @@ final class SessionTransferTest {
         joinData.writeByte(20);
         writeString(joinData, "default");
         writeFrame(output, join.toByteArray());
+    }
+
+    private static byte[] keepAlive(int id) {
+        return new byte[]{0, (byte) (id >>> 24), (byte) (id >>> 16), (byte) (id >>> 8), (byte) id};
+    }
+
+    private static int keepAliveId(byte[] packet) throws Exception {
+        var input = new DataInputStream(new ByteArrayInputStream(packet));
+        assertEquals(0, readVarInt(input));
+        int id = input.readInt();
+        assertEquals(-1, input.read());
+        return id;
     }
 
     private static byte[] serverForgeHello(int dimensionOverride) throws Exception {
