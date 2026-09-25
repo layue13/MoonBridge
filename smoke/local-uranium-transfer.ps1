@@ -4,6 +4,7 @@ param(
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
     [switch]$InstalledPlugin,
     [switch]$PrismClient,
+    [switch]$ReturnToOld,
     [string]$PrismInstance = '1.7.10',
     [string]$PrismInstanceFolder,
     [string]$PrismPath = (Join-Path $env:LOCALAPPDATA 'Programs\PrismLauncher\prismlauncher.exe')
@@ -11,6 +12,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
+if ($ReturnToOld -and -not $InstalledPlugin) {
+    throw '-ReturnToOld requires -InstalledPlugin'
+}
 if (-not $PrismInstanceFolder) { $PrismInstanceFolder = $PrismInstance }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
@@ -123,6 +127,7 @@ $newPort = FreePort
 while ($newPort -eq $oldPort) { $newPort = FreePort }
 $servers = [System.Collections.Generic.List[object]]::new()
 $proxy = $null
+$prismLauncher = $null
 $initialJavawIds = @()
 $clientLaunchAttempted = $false
 try {
@@ -155,6 +160,7 @@ try {
         while ($proxyPort -eq $oldPort -or $proxyPort -eq $newPort) { $proxyPort = FreePort }
         $config = Join-Path $runDir 'strataproxy.yml'
         $pluginDirYaml = $pluginDir.Replace('\', '/')
+        $returnToOldSetting = if ($ReturnToOld) { 'true' } else { 'false' }
         @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
@@ -163,6 +169,7 @@ plugins:
   enabled:
     dev.strataproxy.smoke.UraniumTransferPlugin:
       newPort: "$newPort"
+      returnToOld: "$returnToOldSetting"
 backends:
   - name: old
     address: "127.0.0.1:$oldPort"
@@ -178,12 +185,17 @@ backends:
         WaitForPort $proxyPort $proxy
         if ($PrismClient) {
             if (-not (Test-Path -LiteralPath $PrismPath)) { throw "Prism Launcher not found: $PrismPath" }
+            $existingSmokeLauncher = @(Get-CimInstance Win32_Process -Filter "Name = 'prismlauncher.exe'" |
+                Where-Object { $_.CommandLine -match '--offline\s+PrismSmoke' })
+            if ($existingSmokeLauncher.Count -ne 0) {
+                throw 'A PrismSmoke launcher from another run is still active'
+            }
             $initialJavawIds = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
                 Select-Object -ExpandProperty ProcessId)
-            Start-Process -FilePath $PrismPath -ArgumentList @(
+            $prismLauncher = Start-Process -FilePath $PrismPath -ArgumentList @(
                 '--launch', $PrismInstance, '--offline', 'PrismSmoke',
                 '--server', "127.0.0.1:$proxyPort"
-            ) -WindowStyle Hidden | Out-Null
+            ) -WindowStyle Hidden -PassThru
             $clientLaunchAttempted = $true
             $deadline = [DateTime]::UtcNow.AddSeconds(120)
             $oldLog = Join-Path $old.Directory 'logs\latest.log'
@@ -193,22 +205,41 @@ backends:
                 $newJoined = Select-String -LiteralPath $newLog -Pattern 'PrismSmoke.*logged in' -Quiet
                 $transferred = Select-String -LiteralPath $proxyLog `
                     -Pattern 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY' -Quiet
-                if ($oldJoined -and $newJoined -and $transferred) { break }
+                $returned = $false
+                $secondOldLogin = $false
+                $newDisconnected = $false
+                if ($ReturnToOld) {
+                    $returned = Select-String -LiteralPath $proxyLog `
+                        -Pattern 'SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY' -Quiet
+                    $secondOldLogin = @(Select-String -LiteralPath $oldLog -Pattern 'PrismSmoke.*logged in').Count -ge 2
+                    $newDisconnected = Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet
+                }
+                if ($oldJoined -and $newJoined -and $transferred -and
+                    (-not $ReturnToOld -or ($returned -and $secondOldLogin -and $newDisconnected))) { break }
                 if (Select-String -LiteralPath $proxyLog -Pattern 'SMOKE_PLUGIN_TRANSFER_FAILED' -Quiet) {
                     throw 'Proxy rejected the Prism Forge transfer; inspect proxy.stdout.log and the target server log'
                 }
-                if (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet) {
+                if (Select-String -LiteralPath $proxyLog -Pattern 'SMOKE_PLUGIN_RETURN_FAILED' -Quiet) {
+                    throw 'Proxy rejected the return Forge transfer; inspect proxy.stdout.log and the old server log'
+                }
+                if (-not $ReturnToOld -and
+                    (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet)) {
                     throw 'Target Uranium disconnected the Prism Forge client during transfer'
                 }
                 if ($proxy.HasExited) { throw "Proxy exited while Prism was transferring: $($proxy.ExitCode)" }
                 if ($old.Process.HasExited -or $new.Process.HasExited) { throw 'Uranium exited during Prism transfer' }
                 Start-Sleep -Milliseconds 500
             }
-            if (-not $oldJoined -or -not $newJoined -or -not $transferred) {
-                throw 'Prism Forge client did not finish Uranium-to-Uranium transfer within 120 seconds'
+            if (-not $oldJoined -or -not $newJoined -or -not $transferred -or
+                ($ReturnToOld -and (-not $returned -or -not $secondOldLogin -or -not $newDisconnected))) {
+                throw 'Prism Forge client did not finish Uranium transfer sequence within 120 seconds'
             }
             Start-Sleep -Seconds 10
-            if (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet) {
+            if ($ReturnToOld) {
+                if (@(Select-String -LiteralPath $oldLog -Pattern 'PrismSmoke lost connection').Count -ge 2) {
+                    throw 'Prism Forge client disconnected after returning to old during the 10-second hold'
+                }
+            } elseif (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet) {
                 throw 'Prism Forge client disconnected from target during the 10-second hold'
             }
             $newClient = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
@@ -216,14 +247,24 @@ backends:
             if ($newClient.Count -ne 1) {
                 throw "Expected one new Prism Java client, found $($newClient.Count)"
             }
-            Write-Output 'REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10'
+            if ($ReturnToOld) {
+                Write-Output 'REAL_PRISM_URANIUM_ROUNDTRIP_PASS dynamicRegistration=true transfers=2 status=NETWORK_READY holdSeconds=10'
+            } else {
+                Write-Output 'REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10'
+            }
         } else {
-            & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe --external $proxyPort
+            $probeMode = if ($ReturnToOld) { '--external-roundtrip' } else { '--external' }
+            & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $probeMode $proxyPort
             if ($LASTEXITCODE -ne 0) { throw "Installed-plugin transfer probe failed: $LASTEXITCODE" }
-            Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
+            if ($ReturnToOld) {
+                Write-Output 'REAL_URANIUM_PLUGIN_ROUNDTRIP_PASS dynamicRegistration=true transfers=2 status=NETWORK_READY'
+            } else {
+                Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
+            }
         }
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new'
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
+        if ($ReturnToOld) { WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY' }
     } else {
         & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $oldPort $newPort
         if ($LASTEXITCODE -ne 0) { throw "Uranium transfer probe failed: $LASTEXITCODE" }
@@ -233,11 +274,22 @@ backends:
     WaitForLog $new.Directory "$playerName.*logged in"
     WaitForLog $old.Directory "$playerName lost connection"
     Write-Output 'REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true'
+    if ($ReturnToOld) {
+        if (@(Select-String -LiteralPath (Join-Path $old.Directory 'logs\latest.log') `
+                -Pattern "$playerName.*logged in").Count -lt 2) {
+            throw 'Old Uranium did not log the returning player'
+        }
+        WaitForLog $new.Directory "$playerName lost connection"
+        Write-Output 'REAL_URANIUM_ROUNDTRIP_LOGS_PASS oldLogins=2 newLogin=true newDisconnected=true'
+    }
 } finally {
     if ($clientLaunchAttempted) {
         Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
             Where-Object { $_.ProcessId -notin $initialJavawIds -and (IsPrismInstanceProcess $_) } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+    if ($prismLauncher -and -not $prismLauncher.HasExited) {
+        Stop-Process -Id $prismLauncher.Id -Force -ErrorAction SilentlyContinue
     }
     if ($proxy -and -not $proxy.HasExited) {
         Stop-Process -Id $proxy.Id -Force

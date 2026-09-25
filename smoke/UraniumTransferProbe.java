@@ -29,8 +29,10 @@ public final class UraniumTransferProbe {
     private UraniumTransferProbe() { }
 
     public static void main(String[] arguments) throws Exception {
-        if (arguments.length == 2 && arguments[0].equals("--external")) {
-            runClient(Integer.parseInt(arguments[1]), null);
+        if (arguments.length == 2 && (arguments[0].equals("--external")
+                || arguments[0].equals("--external-roundtrip"))) {
+            runClient(Integer.parseInt(arguments[1]), null,
+                    arguments[0].equals("--external-roundtrip"));
             return;
         }
         if (arguments.length != 2) throw new IllegalArgumentException("Expected old and new Uranium ports");
@@ -47,13 +49,13 @@ public final class UraniumTransferProbe {
         try {
             var channel = proxy.start().toCompletableFuture().get(10, TimeUnit.SECONDS);
             int proxyPort = ((InetSocketAddress) channel.localAddress()).getPort();
-            runClient(proxyPort, proxy);
+            runClient(proxyPort, proxy, false);
         } finally {
             proxy.close().toCompletableFuture().get(15, TimeUnit.SECONDS);
         }
     }
 
-    private static void runClient(int proxyPort, ProxySessionListener proxy) throws Exception {
+    private static void runClient(int proxyPort, ProxySessionListener proxy, boolean roundTrip) throws Exception {
         try (Socket client = new Socket(InetAddress.getLoopbackAddress(), proxyPort)) {
             client.setSoTimeout(30000);
             send(client, payload(out -> {
@@ -100,7 +102,8 @@ public final class UraniumTransferProbe {
                     if (message == ForgeMessage.SERVER_HELLO) secondHellos++;
                 }
                 if (id == 7) respawns++;
-                if ((transfer == null || transfer.isDone()) && respawns >= 2 && keepAlivesAfterReady >= 2) break;
+                if ((transfer == null || transfer.isDone()) && respawns >= 2
+                        && (roundTrip || keepAlivesAfterReady >= 2)) break;
             }
             if (transfer != null) {
                 TransferResult result = transfer.get(2, TimeUnit.SECONDS);
@@ -110,8 +113,10 @@ public final class UraniumTransferProbe {
             require(resets == 1, "expected one Forge reset; got " + resets);
             require(secondHellos == 1, "expected one replacement Forge ServerHello; got " + secondHellos);
             require(respawns >= 2, "expected two world transition Respawns; got " + respawns);
-            require(keepAlivesAfterReady >= 2,
-                    "replacement session did not sustain two Keep Alives; got " + keepAlivesAfterReady);
+            if (!roundTrip) {
+                require(keepAlivesAfterReady >= 2,
+                        "replacement session did not sustain two Keep Alives; got " + keepAlivesAfterReady);
+            }
             if (proxy != null) {
                 require(proxy.find(player.identity()).flatMap(PlayerView::currentServer).orElse("").equals("new"),
                         "player did not move to new backend");
@@ -119,6 +124,37 @@ public final class UraniumTransferProbe {
             System.out.printf("REAL_URANIUM_TRANSFER_PASS mode=%s reset=%d serverHellos=%d respawns=%d "
                             + "keepAlivesAfterReady=%d%n",
                     proxy == null ? "plugin" : "direct", resets, secondHellos, respawns, keepAlivesAfterReady);
+            if (roundTrip) {
+                int returnResets = 0;
+                int returnHellos = 0;
+                int returnRespawns = 0;
+                int returnKeepAlives = 0;
+                long returnDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                while (System.nanoTime() < returnDeadline) {
+                    byte[] frame = read(client);
+                    int id = packetId(frame);
+                    if (id == 0x40) throw new AssertionError("disconnected during return transfer");
+                    if (id == 0) {
+                        send(client, frame);
+                        if (returnRespawns >= 2) returnKeepAlives++;
+                    }
+                    if (id == 0x3f) {
+                        ForgeMessage message = respondToForge(client, frame);
+                        if (message == ForgeMessage.RESET) returnResets++;
+                        if (message == ForgeMessage.SERVER_HELLO) returnHellos++;
+                    }
+                    if (id == 7) returnRespawns++;
+                    if (returnRespawns >= 2 && returnKeepAlives >= 2) break;
+                }
+                require(returnResets == 1, "expected one return Forge reset; got " + returnResets);
+                require(returnHellos == 1, "expected one return Forge ServerHello; got " + returnHellos);
+                require(returnRespawns >= 2, "expected two return Respawns; got " + returnRespawns);
+                require(returnKeepAlives >= 2,
+                        "return session did not sustain two Keep Alives; got " + returnKeepAlives);
+                System.out.printf("REAL_URANIUM_ROUNDTRIP_PASS resets=%d serverHellos=%d respawns=%d "
+                                + "keepAlivesAfterReady=%d%n",
+                        returnResets, returnHellos, returnRespawns, returnKeepAlives);
+            }
         }
     }
 

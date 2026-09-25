@@ -55,3 +55,17 @@ On 2026-09-26 (Asia/Shanghai), commit `c909f6a0e2b2151dd36be765802427b03e540ab7`
 The script reported `REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10` and `REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true`. The Uranium JAR SHA-256 was `B16747D08BAD4B7C67DB8F1F41C9C31066FEAAAC22B527775F604BDFA885BAD2`. The proxy log recorded `SMOKE_PLUGIN_REGISTER_PASS` at 01:15:57 and `SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY` at 01:16:08. The old backend logged `PrismSmoke` in at 01:16:07 and disconnected at 01:16:08; the replacement logged the player in at 01:16:08, recorded `Server side modded connection established` in its FML log, and remained connected until the smoke script stopped the client at 01:16:19. No matching Prism game process remained after cleanup. Raw logs are in ignored local directory `build/local-uranium-transfer-a1560de67b4c477f8fd5bdd25399bdfe`.
 
 This checks the current branch with one real minimal Forge client and two local Uranium backends. It does not cover the target modpack, real Mojang authentication, cross-host operation, or target traffic performance.
+
+## Two-hop protocol probe; Prism launcher limitation
+
+On 2026-09-26 (Asia/Shanghai), the installed distribution was exercised with a disposable plugin and the protocol probe:
+
+```powershell
+.\smoke\local-uranium-transfer.ps1 -BundlePath 'C:\Users\layue\Documents\ChatGPT\tdlm 2\Uranium\rfg\build\rfg-netty-compat-bundle' -InstalledPlugin -ReturnToOld
+```
+
+The run reported `REAL_URANIUM_ROUNDTRIP_PASS resets=1 serverHellos=1 respawns=2 keepAlivesAfterReady=2`, `REAL_URANIUM_PLUGIN_ROUNDTRIP_PASS dynamicRegistration=true transfers=2 status=NETWORK_READY`, and `REAL_URANIUM_ROUNDTRIP_LOGS_PASS oldLogins=2 newLogin=true newDisconnected=true`. The proxy logged both `SMOKE_PLUGIN_TRANSFER_PASS` and `SMOKE_PLUGIN_RETURN_PASS`. The old backend logged two `NettyProbe` logins; both backends logged a completed FML handshake. Raw logs are in ignored local directory `build/local-uranium-transfer-354d12ea24e54f83bead8ee47f3f7e6e`.
+
+The single-transfer installed-plugin probe also passed after these smoke-plugin changes, with `REAL_URANIUM_PLUGIN_TRANSFER_PASS` and backend login/disconnect markers. Its raw logs are in `build/local-uranium-transfer-0e15153ae1f74cfd8870fce0d58087af`.
+
+Two attempts to run `-InstalledPlugin -PrismClient -ReturnToOld` did not start the Minecraft client. Prism Launcher reported `部分组件元数据加载失败` during component resolution, and neither proxy nor Uranium logged a client login. Those attempts do not establish whether a real Forge client can complete a round trip. Their raw proxy/backend logs are in `build/local-uranium-transfer-6f41df45b2ac499cb7e59d64e4bff96e` and `build/local-uranium-transfer-6a09156996a7448e8133b38d8e863dc2`. The smoke script now stops the Prism launcher process it starts, including after a failed launch.

@@ -5,7 +5,7 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 ## 核心边界
 
 - **玩家会话**：代理负责入服、连接后端、转发、切换后端和断线清理。玩家身份包含 UUID 与连接代次，避免旧连接的异步结果作用到新连接。在线玩家视图由 Session 持有，监听器只保留按 UUID 查找会话的索引。
-- **服务器目录**：静态配置与插件调用同一个注册接口。目录维护地址、声明的容量，以及本代理连接和入服预留的数量；它不采集后端 CPU、TPS、内存等负载。同名重注册生成新句柄，旧异步结果不能修改新条目；同名同地址的旧连接仍占用容量，地址变更后旧连接只计入旧地址。容量预留同时确定本次连接使用的地址，避免动态更新夹在查询和预留之间时把会话计入错误后端。
+- **服务器目录**：静态配置与插件调用同一个注册接口。目录维护地址、声明的容量，以及本代理连接和入服预留的数量；它不采集后端 CPU、TPS、内存等负载，也不提供后端负载观测服务。玩法插件可自行获取其选服所需的数据。同名重注册生成新句柄，旧异步结果不能修改新条目；同名同地址的旧连接仍占用容量，地址变更后旧连接只计入旧地址。容量预留同时确定本次连接使用的地址，避免动态更新夹在查询和预留之间时把会话计入错误后端。
 - **插件 API**：插件可查询 `PlayerView`、`ServerView`，动态注册后端，并以一个异步回调决定初始落点。空岛分配、实例唤醒和玩法数据由插件自行实现。单次选服失败或超时只结束当前请求，不停用插件；玩家断线会取消未决请求并移除尚未执行的回调，已启动的插件异步任务只做尽力取消。宿主关闭时会结束未决选服请求并撤销插件注册。插件返回的拒绝原因会作为登录断开消息发给玩家。
 - **发现方式**：DNS 是独立插件，核心不认识 DNS 或 Agent。配置只启用列出的插件；插件关闭时其注册会清理。普通 DNS 主机名通过独立解析器查询 A 与 AAAA 地址，不使用 JVM 的进程级地址缓存；`localhost` 按系统回环地址解析。最小默认选路按注册顺序选取后端，因此 DNS 插件先注册 IPv4 地址。一次查询失败会保留已有注册，连续三次失败会移除旧地址，恢复解析后重新注册。
 - **协议热路径**：同一玩家的前端和后端通道绑定同一个 Netty 事件循环，会话控制状态在该循环上串行更新。会话始终保留协议 5 的帧边界，普通数据包不重新编码并尽量复用 Netty `ByteBuf`；Keep Alive ID 在会话内转换，可同时跟踪多个未回复请求，转服后旧后端的迟到回复会被丢弃；转服后只改写少数与玩家实体 ID 相关的包，并按目标通道可写状态控制读取。后端主机名由 Netty 异步解析，避免把 DNS 等待放在玩家 I/O 线程上。
@@ -76,7 +76,7 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](smoke/results/2026-09-25-local-uranium.md)。这项测试使用协议探针，目标整合包客户端与实服转服仍待验证。
 
-`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
+`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
 ## 合成 relay 基准
 

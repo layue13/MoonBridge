@@ -20,11 +20,17 @@ import java.util.concurrent.TimeUnit;
 public final class UraniumTransferPlugin implements Plugin {
     private PluginContext context;
     private ServerRegistration targetRegistration;
+    private boolean returnToOld;
     private volatile Thread worker;
 
     @Override public void onLoad(PluginContext loadedContext) {
         context = loadedContext;
         int port = Integer.parseInt(context.settings().get("newPort"));
+        String returnSetting = context.settings().getOrDefault("returnToOld", "false");
+        if (!returnSetting.equals("true") && !returnSetting.equals("false")) {
+            throw new IllegalArgumentException("returnToOld must be true or false");
+        }
+        returnToOld = Boolean.parseBoolean(returnSetting);
         targetRegistration = context.servers().register(new ServerDefinition("new",
                 URI.create("tcp://127.0.0.1:" + port), Map.of(), 10,
                 Map.of("source", "uranium-smoke-plugin")));
@@ -49,16 +55,25 @@ public final class UraniumTransferPlugin implements Plugin {
             while (System.nanoTime() < deadline) {
                 PlayerView player = context.players().find(identity).orElse(null);
                 if (player != null && player.currentServer().filter("old"::equals).isPresent()) {
-                    context.players().transfer(identity, "new").whenComplete((result, failure) -> {
-                        if (failure != null) {
-                            context.logger().error("SMOKE_PLUGIN_TRANSFER_FAILED", failure);
-                        } else if (result.status() == TransferStatus.NETWORK_READY) {
-                            context.logger().info("SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY");
-                        } else {
-                            context.logger().error("SMOKE_PLUGIN_TRANSFER_FAILED status={} detail={}",
-                                    result.status(), result.detail().orElse(""));
+                    var result = context.players().transfer(identity, "new").toCompletableFuture()
+                            .get(30, TimeUnit.SECONDS);
+                    if (result.status() != TransferStatus.NETWORK_READY) {
+                        context.logger().error("SMOKE_PLUGIN_TRANSFER_FAILED status={} detail={}",
+                                result.status(), result.detail().orElse(""));
+                        return;
+                    }
+                    context.logger().info("SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY");
+                    if (returnToOld) {
+                        Thread.sleep(2000);
+                        var returned = context.players().transfer(identity, "old").toCompletableFuture()
+                                .get(30, TimeUnit.SECONDS);
+                        if (returned.status() != TransferStatus.NETWORK_READY) {
+                            context.logger().error("SMOKE_PLUGIN_RETURN_FAILED status={} detail={}",
+                                    returned.status(), returned.detail().orElse(""));
+                            return;
                         }
-                    });
+                        context.logger().info("SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY");
+                    }
                     return;
                 }
                 Thread.sleep(20);
@@ -66,7 +81,7 @@ public final class UraniumTransferPlugin implements Plugin {
             context.logger().error("SMOKE_PLUGIN_TRANSFER_FAILED player was not connected to old backend");
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-        } catch (RuntimeException failure) {
+        } catch (Exception failure) {
             context.logger().error("SMOKE_PLUGIN_TRANSFER_FAILED", failure);
         }
     }
