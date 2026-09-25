@@ -388,7 +388,11 @@ final class Session extends ChannelInboundHandlerAdapter {
                     LOGGER.debug("Login phase deadline expired for player {} with backend {}; disconnect started={}",
                             view == null ? "<unknown>" : view.username(),
                             selected == null ? "<none>" : selected.handle().id().value(), loginDisconnectStarted);
-                    closePair();
+                    if (loginStart != null && !loginDisconnectStarted && !published) {
+                        disconnectLogin("Login timed out.");
+                    } else {
+                        closePair();
+                    }
                 },
                 timeout.toNanos(), TimeUnit.NANOSECONDS);
     }

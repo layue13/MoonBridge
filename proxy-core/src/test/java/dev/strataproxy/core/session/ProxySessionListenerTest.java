@@ -520,7 +520,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void backendLoginStillHasADeadlineAfterPlacement() throws Exception {
+    void backendLoginTimeoutSendsDisconnectReason() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
             var releaseBackend = new java.util.concurrent.CountDownLatch(1);
@@ -550,7 +550,13 @@ final class ProxySessionListenerTest {
                     client.setSoTimeout(5000);
                     sendLogin(client, "WaitingBackend");
                     backendAccepted.get(5, TimeUnit.SECONDS);
-                    assertEquals(-1, client.getInputStream().read());
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    var packet = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0, readVarInt(packet));
+                    String component = readString(packet, 32767);
+                    assertEquals("Login timed out.", new ObjectMapper().readTree(component).path("text").asText());
+                    assertEquals(0, packet.available());
+                    assertEquals(-1, input.read());
                 }
             } finally {
                 releaseBackend.countDown();
