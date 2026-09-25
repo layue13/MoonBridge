@@ -9,7 +9,7 @@ public final class MinecraftFrameEncoder {
 
     public static ByteBuf encode(ByteBufAllocator allocator, ByteBuf payload, ProtocolProfile profile) {
         int length = payload.readableBytes();
-        if (length > profile.maxFrameBytes()) throw new ProtocolException("frame length out of bounds: " + length);
+        if (length < 1 || length > profile.maxFrameBytes()) throw new ProtocolException("frame length out of bounds: " + length);
         ByteBuf output = allocator.buffer(ProtocolVarInt.encodedSize(length) + length);
         ProtocolVarInt.write(output, length);
         output.writeBytes(payload, payload.readerIndex(), length);

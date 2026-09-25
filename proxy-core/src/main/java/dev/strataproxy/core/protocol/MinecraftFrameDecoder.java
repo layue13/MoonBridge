@@ -44,7 +44,7 @@ public final class MinecraftFrameDecoder extends ByteToMessageDecoder {
         }
         if (!completePrefix) throw new DecoderException("frame length VarInt exceeds five bytes");
         if (ProtocolVarInt.encodedSize(length) != prefixBytes) throw new DecoderException("non-canonical frame length");
-        if (length < 0 || length > profile.maxFrameBytes()) throw new DecoderException("frame length out of bounds: " + length);
+        if (length < 1 || length > profile.maxFrameBytes()) throw new DecoderException("frame length out of bounds: " + length);
         if (readable - prefixBytes < length) return;
         if (retainLengthPrefix) output.add(input.readRetainedSlice(prefixBytes + length));
         else {
