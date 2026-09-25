@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @io.netty.channel.ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
+    private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
     private final ProxySessionListener owner;
     private final Channel frontend;
     private volatile Channel backend;
@@ -810,12 +811,32 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (closed.get()) return;
                 next.start();
                 if (closed.get()) return;
-                transfer = null;
-                attempt.finished = true;
-                attempt.cutoverDeadline.cancel(false);
-                attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
+                if (nextObservation.forgeSeen()) {
+                    attempt.cutoverDeadline.cancel(false);
+                    attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
+                        if (transfer != attempt || attempt.finished || closed.get()) return;
+                        failTransfer(attempt, "replacement Forge handshake timed out");
+                        closePair();
+                    }, FORGE_TRANSFER_HANDSHAKE_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+                    CompletableFuture.allOf(nextObservation.ready(), attempt.frameState.worldReady())
+                            .whenComplete((negotiated, negotiationFailure) -> frontend.eventLoop().execute(() -> {
+                                if (transfer != attempt || attempt.finished || closed.get()) return;
+                                if (negotiationFailure != null || !attempt.channel.isActive()) {
+                                    failTransfer(attempt, "replacement Forge handshake failed");
+                                    closePair();
+                                } else finishTransfer(attempt);
+                            }));
+                } else finishTransfer(attempt);
             }));
         }));
+    }
+
+    private void finishTransfer(TransferAttempt attempt) {
+        if (transfer != attempt || attempt.finished || closed.get()) return;
+        transfer = null;
+        attempt.finished = true;
+        attempt.cutoverDeadline.cancel(false);
+        attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
     }
 
     private void installTransferFrameHandlers(TransferFrameHandler.State state, Channel target) {

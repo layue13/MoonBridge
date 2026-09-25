@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -765,17 +766,19 @@ final class SessionTransferTest {
                     assertEquals(1, packetId(readFrame(input)));
                     assertEquals(7, respawnDimension(readFrame(input))); // Old backend changed dimension after login.
                     var player = awaitPlayer(listener);
-                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
-                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
                     byte[] reset = readFrame(input);
                     assertEquals(0x3f, packetId(reset));
                     assertEquals((byte) 0xfe, reset[reset.length - 1]);
                     assertArrayEquals(serverForgeHello(7), readFrame(input));
+                    assertThrows(TimeoutException.class, () -> transfer.get(100, TimeUnit.MILLISECONDS),
+                            "a Forge ServerHello is not a completed backend handshake");
                     writeFrame(output, clientForgeAck());
                     assertArrayEquals(serverForgeAck(), readFrame(input));
                     assertEquals(-1, respawnDimension(readFrame(input))); // Force a world reload despite stale observation.
                     assertEquals(7, respawnDimension(readFrame(input))); // Target override, not Join Game's signed byte.
+                    var result = transfer.get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, result.status(), result.detail().orElse(""));
                     sendPosition.complete(null);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newNegotiated.get(5, TimeUnit.SECONDS);
@@ -785,6 +788,77 @@ final class SessionTransferTest {
                 sendPosition.complete(null);
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
+        }
+    }
+
+    @Test
+    void forgeRejectionAfterServerHelloFailsTransferAndReleasesSession() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newRejected = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(0));
+                    writeFrame(output, serverForgeAck());
+                    assertArrayEquals(clientForgeAck(), readFrame(input));
+                    sendJoinGame(output, 0, 100);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(0));
+                    assertArrayEquals(clientForgeAck(), readFrame(input));
+                    newRejected.complete(null);
+                } catch (Throwable failure) { newRejected.completeExceptionally(failure); }
+            });
+            var oldHandle = register(catalog, "old", oldServer);
+            var newHandle = register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), bound.getPort())) {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    DataOutputStream output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertArrayEquals(serverForgeHello(0), readFrame(input));
+                    assertArrayEquals(serverForgeAck(), readFrame(input));
+                    writeFrame(output, clientForgeAck());
+                    assertEquals(1, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    byte[] reset = readFrame(input);
+                    assertEquals(0x3f, packetId(reset));
+                    assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertArrayEquals(serverForgeHello(0), readFrame(input));
+                    assertThrows(TimeoutException.class, () -> transfer.get(100, TimeUnit.MILLISECONDS));
+                    writeFrame(output, clientForgeAck());
+                    newRejected.get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
+                    assertEquals(-1, input.read());
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+                    assertTrue(listener.allSessions().isEmpty());
+                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
+                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
     }
 

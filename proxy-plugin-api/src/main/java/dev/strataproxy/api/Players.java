@@ -12,6 +12,10 @@ public interface Players {
     /** Returns an immutable snapshot of currently connected players. */
     List<PlayerView> online();
 
-    /** Requests a transfer by backend name; NETWORK_READY does not mean the game is ready. */
+    /**
+     * Requests a transfer by backend name. NETWORK_READY means the proxy wrote the world
+     * transition after the target's protocol handshake; it does not assert plugin game readiness.
+     * A failed target handshake after the client has switched chains closes the player session.
+     */
     CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName);
 }

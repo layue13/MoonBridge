@@ -11,8 +11,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 
 /** Handles the few framed packets that cannot pass unchanged after a backend switch. */
 final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
@@ -22,7 +21,7 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
         private final PlayObservation observation;
         private final int clientEntityId;
         private final Runnable closeSession;
-        private final ScheduledFuture<?> joinDeadline;
+        private final CompletableFuture<Void> worldReady = new CompletableFuture<>();
         private Integer serverEntityId;
         private boolean joined;
 
@@ -33,14 +32,14 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
             this.observation = observation;
             this.clientEntityId = clientEntityId;
             this.closeSession = closeSession;
-            if (consumedJoinGame == null) {
-                joinDeadline = frontend.eventLoop().schedule(closeSession, 30, TimeUnit.SECONDS);
-            } else {
+            if (consumedJoinGame != null) {
                 serverEntityId = consumedJoinGame.entityId();
                 joined = true;
-                joinDeadline = null;
+                worldReady.complete(null);
             }
         }
+
+        CompletableFuture<Void> worldReady() { return worldReady; }
 
         private void joinGame(ByteBuf packet) {
             if (joined) throw new IllegalArgumentException("duplicate replacement Join Game");
@@ -51,15 +50,20 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
             ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(), join, dimension);
             serverEntityId = join.entityId();
             joined = true;
-            if (joinDeadline != null) joinDeadline.cancel(false);
             frontend.writeAndFlush(respawns).addListener(write -> {
-                if (write.isSuccess()) RawRelay.continueAfterDrop(backend);
-                else closeSession.run();
+                if (write.isSuccess()) {
+                    worldReady.complete(null);
+                    RawRelay.continueAfterDrop(backend);
+                } else {
+                    worldReady.completeExceptionally(new IllegalStateException(
+                            "could not write replacement world transition", write.cause()));
+                    closeSession.run();
+                }
             });
         }
 
         @Override public void close() {
-            if (joinDeadline != null) joinDeadline.cancel(false);
+            worldReady.completeExceptionally(new IllegalStateException("replacement world transition closed"));
         }
     }
 
