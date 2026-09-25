@@ -4,7 +4,6 @@ plugins {
     id("strataproxy.application-conventions")
 }
 
-val nettyVersion = libs.findVersion("netty").get().requiredVersion
 val runtimeJavaHome = System.getProperty("java.home")
 
 dependencies {
@@ -14,14 +13,8 @@ dependencies {
     implementation(libs.findLibrary("slf4j-api").get())
     implementation(libs.findLibrary("netty-codec").get())
     implementation(libs.findLibrary("netty-transport").get())
-    implementation(libs.findLibrary("netty-transport-classes-epoll").get())
-    implementation(libs.findLibrary("netty-transport-classes-kqueue").get())
     implementation(libs.findLibrary("netty-handler").get())
     implementation(libs.findLibrary("netty-resolver-dns").get())
-    runtimeOnly("io.netty:netty-transport-native-epoll:$nettyVersion:linux-x86_64")
-    runtimeOnly("io.netty:netty-transport-native-epoll:$nettyVersion:linux-aarch_64")
-    runtimeOnly("io.netty:netty-transport-native-kqueue:$nettyVersion:osx-x86_64")
-    runtimeOnly("io.netty:netty-transport-native-kqueue:$nettyVersion:osx-aarch_64")
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
