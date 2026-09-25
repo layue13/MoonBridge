@@ -75,3 +75,13 @@ plugins:
 
 本地一次测量的环境、参数与原始输出见 `benchmarks/results/2026-09-25-local-relay.md`。
 加入实际 `KeepAliveBridge` 后的配对测量见 `benchmarks/results/2026-09-25-keepalive-bridge.md`；两份结果使用的 relay 事件循环安排不同，不能直接视为前后性能对比。
+
+## 合成会话基准
+
+`benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。每个回声都会校验，轮次交替执行直连与代理。
+
+```powershell
+.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2
+```
+
+本地试跑的参数与结果见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`。这是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
