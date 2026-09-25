@@ -72,7 +72,8 @@ public final class ProxyMain {
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers));
         try (var plugins = new PluginHost(catalog, listener, Duration.ofSeconds(3))) {
-            plugins.loadPlugins(Path.of(configuration.plugins().directory()), configuration.plugins().enabled());
+            plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
+                    configuration.plugins().enabled());
             plugins.enable();
             listener.setPlacement(plugins::placeInitial);
             var serverChannel = listener.start().toCompletableFuture().join();
@@ -94,5 +95,12 @@ public final class ProxyMain {
             listener.close().toCompletableFuture().join();
             if (verifierWorkers != null) verifierWorkers.shutdownNow();
         }
+    }
+
+    static Path pluginDirectory(Path configPath, String configuredDirectory) {
+        Path directory = Path.of(configuredDirectory);
+        if (directory.isAbsolute()) return directory.normalize();
+        Path absoluteConfig = configPath.toAbsolutePath().normalize();
+        return absoluteConfig.getParent().resolve(directory).normalize();
     }
 }

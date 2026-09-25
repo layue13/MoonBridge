@@ -19,7 +19,7 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 
 ## 配置与运行
 
-默认配置：`proxy-core/src/main/resources/config/strataproxy.yml`。安装包包含静态后端示例和 `strataproxy-dns.example.yml`；后者通过 `plugins.enabled` 启用 DNS 插件，`backends: []` 表示不使用静态后端。相对插件目录从启动时的工作目录解析。`ONLINE_BUNGEE` 只能连接已启用旧版 Bungee 身份转发、且限制直连的可信后端。
+默认配置：`proxy-core/src/main/resources/config/strataproxy.yml`。安装包包含静态后端示例和 `strataproxy-dns.example.yml`；后者通过 `plugins.enabled` 启用 DNS 插件，`backends: []` 表示不使用静态后端。相对插件目录从配置文件所在目录解析；安装包示例中的 `../plugins` 指向同一安装包的插件目录。`ONLINE_BUNGEE` 只能连接已启用旧版 Bungee 身份转发、且限制直连的可信后端。
 
 ```powershell
 .\gradlew.bat :proxy-core:installDist
@@ -27,7 +27,7 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 .\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\proxy-core\build\install\strataproxy\config\strataproxy.yml
 ```
 
-使用 DNS 插件时，把安装包的 `plugins` 目录和配置文件放在启动工作目录可访问的位置，并在示例配置中换成自己的 DNS 主机名。
+使用 DNS 插件时，把示例配置中的主机名换成自己的 DNS 主机名；相对插件目录随配置文件位置一起解析。
 
 ### Agent 动态注册插件
 
@@ -35,7 +35,7 @@ Agent 插件同样由 `plugins.enabled` 显式启用。它通过一个独立 HTT
 
 ```yaml
 plugins:
-  directory: plugins
+  directory: ../plugins
   enabled:
     dev.strataproxy.plugins.agent.AgentDiscoveryPlugin:
       secret: "replace-with-a-private-random-secret-of-32-bytes-or-more"

@@ -3,6 +3,7 @@ package dev.strataproxy.app;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -63,5 +64,14 @@ final class ProxyConfigurationTest {
         } finally {
             Files.deleteIfExists(config);
         }
+    }
+
+    @Test
+    void resolvesRelativePluginDirectoryFromTheConfigLocation() throws Exception {
+        Path config = Path.of("example", "config", "strataproxy.yml").toAbsolutePath();
+        assertEquals(config.getParent().getParent().resolve("plugins"),
+                ProxyMain.pluginDirectory(config, "../plugins"));
+        Path absolute = Path.of("example", "custom-plugins").toAbsolutePath();
+        assertEquals(absolute, ProxyMain.pluginDirectory(config, absolute.toString()));
     }
 }
