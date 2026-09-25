@@ -36,6 +36,26 @@ final class Minecraft1710PlayPacketsTest {
     }
 
     @Test
+    void readsExtendedVarShortForgeRegistryPayload() {
+        int payloadLength = 65_536;
+        ByteBuf packet = Unpooled.buffer();
+        try {
+            ProtocolVarInt.write(packet, Minecraft1710PlayPackets.SERVER_CUSTOM_PAYLOAD);
+            ProtocolStrings.write(packet, "FML|HS", 20);
+            packet.writeShort(0x8000); // Forge VarShort: extension flag, low 15 bits zero.
+            packet.writeByte(2); // 2 << 15 = 65,536 bytes.
+            packet.writeByte(3); // ModIdData discriminator.
+            packet.writeZero(payloadLength - 1);
+            int readerIndex = packet.readerIndex();
+            var handshake = Minecraft1710PlayPackets.forgeHandshake(packet, true).orElseThrow();
+            assertEquals(3, handshake.discriminator());
+            assertEquals(readerIndex, packet.readerIndex());
+        } finally {
+            packet.release();
+        }
+    }
+
+    @Test
     void alwaysSendsDimensionDetourThenTargetAndOneByteForgeReset() {
         var target = new Minecraft1710PlayPackets.JoinGame(7, 9, 0, 2, "default");
         ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(UnpooledByteBufAllocator.DEFAULT,

@@ -711,6 +711,7 @@ final class SessionTransferTest {
     @Test
     void forgeTransferResetsHandshakeAndUsesServerHelloDimensionOverride() throws Exception {
         var catalog = new InMemoryBackendCatalog();
+        byte[] largeRegistryPacket = serverForgeRegistryData();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
             var newNegotiated = new CompletableFuture<Void>();
@@ -739,6 +740,7 @@ final class SessionTransferTest {
                     acceptHandshakeAndLogin(input, output);
                     sendLoginSuccess(output);
                     writeFrame(output, serverForgeHello(7));
+                    writeFrame(output, largeRegistryPacket);
                     assertArrayEquals(clientForgeAck(), readFrame(input));
                     writeFrame(output, serverForgeAck());
                     sendJoinGame(output, 0, 200);
@@ -771,6 +773,7 @@ final class SessionTransferTest {
                     assertEquals(0x3f, packetId(reset));
                     assertEquals((byte) 0xfe, reset[reset.length - 1]);
                     assertArrayEquals(serverForgeHello(7), readFrame(input));
+                    assertArrayEquals(largeRegistryPacket, readFrame(input));
                     assertThrows(TimeoutException.class, () -> transfer.get(100, TimeUnit.MILLISECONDS),
                             "a Forge ServerHello is not a completed backend handshake");
                     writeFrame(output, clientForgeAck());
@@ -1191,6 +1194,18 @@ final class SessionTransferTest {
         output.writeShort(2);
         output.writeByte(0xff);
         output.writeByte(3);
+        return payload.toByteArray();
+    }
+
+    private static byte[] serverForgeRegistryData() throws Exception {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        var output = new DataOutputStream(payload);
+        writeVarInt(output, 0x3f);
+        writeString(output, "FML|HS");
+        output.writeShort(0x8000);
+        output.writeByte(2); // 65,536-byte extended VarShort payload.
+        output.writeByte(3); // ModIdData discriminator.
+        output.write(new byte[65_535]);
         return payload.toByteArray();
     }
 
