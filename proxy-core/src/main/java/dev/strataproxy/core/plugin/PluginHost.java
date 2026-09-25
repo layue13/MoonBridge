@@ -20,8 +20,11 @@ import dev.strataproxy.core.backend.BackendView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -47,6 +50,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.jar.JarFile;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
 public final class PluginHost implements AutoCloseable {
@@ -111,19 +115,28 @@ public final class PluginHost implements AutoCloseable {
         }
         var remaining = enabled == null ? null : new HashSet<>(enabled.keySet());
         for (Path jar : jars) {
-            URLClassLoader loader = new URLClassLoader(new java.net.URL[]{jar.toUri().toURL()}, Plugin.class.getClassLoader());
-            classLoaders.add(loader);
             try {
-                ServiceLoader.load(Plugin.class, loader).stream().forEach(provider -> {
-                    String className = provider.type().getName();
-                    if (enabled != null && !enabled.containsKey(className)) return;
-                    if (remaining != null && !remaining.remove(className)) {
-                        throw new IllegalStateException("Duplicate configured plugin provider: " + className);
+                List<String> selected = enabled == null ? null : declaredProviders(jar).stream()
+                        .filter(enabled::containsKey).toList();
+                if (selected != null && selected.isEmpty()) continue;
+                URLClassLoader loader = new URLClassLoader(new java.net.URL[]{jar.toUri().toURL()},
+                        Plugin.class.getClassLoader());
+                classLoaders.add(loader);
+                if (selected == null) {
+                    ServiceLoader.load(Plugin.class, loader).stream().forEach(provider -> {
+                        String className = provider.type().getName();
+                        loadOne(provider.get(), jar.getFileName() + ":" + className, Map.of());
+                    });
+                } else {
+                    for (String className : selected) {
+                        if (!remaining.remove(className)) {
+                            throw new IllegalStateException("Duplicate configured plugin provider: " + className);
+                        }
+                        Plugin plugin = Class.forName(className, true, loader).asSubclass(Plugin.class)
+                                .getConstructor().newInstance();
+                        loadOne(plugin, jar.getFileName() + ":" + className, enabled.get(className));
                     }
-                    Plugin plugin = provider.get();
-                    loadOne(plugin, jar.getFileName() + ":" + className,
-                            enabled == null ? Map.of() : enabled.get(className));
-                });
+                }
             } catch (Throwable failure) {
                 close();
                 throw new IOException("Failed to load plugin JAR " + jar, failure);
@@ -132,6 +145,24 @@ public final class PluginHost implements AutoCloseable {
         if (remaining != null && !remaining.isEmpty()) {
             close();
             throw new IOException("Configured plugins were not found: " + remaining);
+        }
+    }
+
+    private static List<String> declaredProviders(Path jar) throws IOException {
+        try (JarFile archive = new JarFile(jar.toFile())) {
+            var service = archive.getJarEntry("META-INF/services/" + Plugin.class.getName());
+            if (service == null) return List.of();
+            try (var reader = new BufferedReader(new InputStreamReader(
+                    archive.getInputStream(service), StandardCharsets.UTF_8))) {
+                var names = new ArrayList<String>();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    int comment = line.indexOf('#');
+                    String name = (comment < 0 ? line : line.substring(0, comment)).trim();
+                    if (!name.isEmpty()) names.add(name);
+                }
+                return names;
+            }
         }
     }
 

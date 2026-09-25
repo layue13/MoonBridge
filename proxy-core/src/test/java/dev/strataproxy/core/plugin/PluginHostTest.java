@@ -20,8 +20,13 @@ import dev.strataproxy.core.backend.BackendView;
 import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +39,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -43,6 +50,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PluginHostTest {
     private static final PlayerView PLAYER = new PlayerView(
             new PlayerIdentity(UUID.randomUUID(), 1), "TestPlayer", Optional.empty());
+
+    @Test
+    void disabledBrokenJarCannotPreventConfiguredPluginFromLoading(@TempDir Path directory) throws Exception {
+        serviceJar(directory.resolve("a-selected.jar"), ConfiguredProvider.class.getName());
+        serviceJar(directory.resolve("z-disabled-broken.jar"), "missing.DisabledProvider");
+        var catalog = new InMemoryBackendCatalog();
+        try (var host = new PluginHost(catalog, players(), Duration.ofSeconds(1))) {
+            host.loadPlugins(directory, Map.of(ConfiguredProvider.class.getName(), Map.of()));
+            host.enable();
+            assertTrue(catalog.find(new BackendId("configured")).isPresent());
+        }
+        assertTrue(catalog.find(new BackendId("configured")).isEmpty());
+    }
 
     @Test
     void pluginRegistrationsAreScopedToTheirOwner() {
@@ -193,6 +213,20 @@ class PluginHostTest {
 
     private static ServerDefinition server(String name) {
         return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), 20, Map.of());
+    }
+
+    private static void serviceJar(Path path, String provider) throws IOException {
+        try (var output = new JarOutputStream(Files.newOutputStream(path))) {
+            output.putNextEntry(new JarEntry("META-INF/services/" + Plugin.class.getName()));
+            output.write((provider + "\n").getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+    }
+
+    public static final class ConfiguredProvider implements Plugin {
+        @Override public void onLoad(PluginContext context) {
+            context.servers().register(server("configured"));
+        }
     }
 
     private static Players players() {
