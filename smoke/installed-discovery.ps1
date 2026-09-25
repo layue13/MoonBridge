@@ -95,11 +95,11 @@ function WaitForMax([int]$port, [int]$expected) {
     throw "Expected status max=$expected on port $port; last result=$last"
 }
 
-function StartFakeBackend {
+function StartFakeBackend([int]$ProbeCount = 1) {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
     $listener.Start()
-    $job = Start-ThreadJob -ArgumentList $listener -ScriptBlock {
-        param($backendListener)
+    $job = Start-ThreadJob -ArgumentList $listener, $ProbeCount -ScriptBlock {
+        param($backendListener, $expectedProbes)
         function ReadNumber($stream) {
             $number = 0
             for ($shift = 0; $shift -le 28; $shift += 7) {
@@ -169,38 +169,45 @@ function StartFakeBackend {
             $join = [byte[]]@(1, 0, 0, 0, 42, 0, 0, 0, 20, 7, 100, 101, 102, 97, 117, 108, 116)
             Send $stream $join
             $stream.Flush()
-            $probe = ReadFrame $stream
-            if ($probe.Length -ne 2 -or $probe[0] -ne 3 -or $probe[1] -ne 42) {
-                throw 'Backend did not receive the expected PLAY probe'
+            for ($index = 0; $index -lt $expectedProbes; $index++) {
+                $probe = ReadFrame $stream
+                if ($probe.Length -ne 2 -or $probe[0] -ne 3 -or $probe[1] -ne (42 + $index)) {
+                    throw "Backend did not receive PLAY probe $index"
+                }
+                Send $stream $probe
+                $stream.Flush()
             }
-            Send $stream $probe
-            $stream.Flush()
         } finally { $client.Dispose() }
     }
     return [pscustomobject]@{ Listener = $listener; Job = $job; Port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
 }
 
-function LoginThroughProxy([int]$port) {
+function SendOfflineLogin([System.IO.Stream]$stream, [string]$username) {
+    $handshake = [System.Collections.Generic.List[byte]]::new()
+    $handshake.AddRange([byte[]](VarInt 0))
+    $handshake.AddRange([byte[]](VarInt 5))
+    $hostBytes = [System.Text.Encoding]::UTF8.GetBytes('localhost')
+    $handshake.AddRange([byte[]](VarInt $hostBytes.Length))
+    $handshake.AddRange($hostBytes)
+    $handshake.AddRange([byte[]]@(0x63, 0xdd))
+    $handshake.AddRange([byte[]](VarInt 2))
+    WriteFrame $stream ($handshake.ToArray())
+    $login = [System.Collections.Generic.List[byte]]::new()
+    $login.Add(0)
+    $name = [System.Text.Encoding]::UTF8.GetBytes($username)
+    $login.AddRange([byte[]](VarInt $name.Length))
+    $login.AddRange($name)
+    WriteFrame $stream ($login.ToArray())
+}
+
+function LoginThroughProxy([int]$port, [switch]$KeepOpen) {
     $client = [System.Net.Sockets.TcpClient]::new()
+    $returned = $false
     try {
         $client.Connect([System.Net.IPAddress]::Loopback, $port)
         $client.ReceiveTimeout = 5000
         $stream = $client.GetStream()
-        $handshake = [System.Collections.Generic.List[byte]]::new()
-        $handshake.AddRange([byte[]](VarInt 0))
-        $handshake.AddRange([byte[]](VarInt 5))
-        $hostBytes = [System.Text.Encoding]::UTF8.GetBytes('localhost')
-        $handshake.AddRange([byte[]](VarInt $hostBytes.Length))
-        $handshake.AddRange($hostBytes)
-        $handshake.AddRange([byte[]]@(0x63, 0xdd))
-        $handshake.AddRange([byte[]](VarInt 2))
-        WriteFrame $stream ($handshake.ToArray())
-        $login = [System.Collections.Generic.List[byte]]::new()
-        $login.Add(0)
-        $name = [System.Text.Encoding]::UTF8.GetBytes('SmokePlayer')
-        $login.AddRange([byte[]](VarInt $name.Length))
-        $login.AddRange($name)
-        WriteFrame $stream ($login.ToArray())
+        SendOfflineLogin $stream 'SmokePlayer'
         $success = ReadExactly $stream (ReadVarInt $stream)
         if ($success[0] -ne 2) {
             $reason = [System.Text.Encoding]::UTF8.GetString($success)
@@ -211,6 +218,29 @@ function LoginThroughProxy([int]$port) {
         WriteFrame $stream ([byte[]]@(3, 42))
         $echo = ReadExactly $stream (ReadVarInt $stream)
         if ($echo.Length -ne 2 -or $echo[0] -ne 3 -or $echo[1] -ne 42) { throw 'PLAY frame did not traverse the discovered backend' }
+        if ($KeepOpen) {
+            $returned = $true
+            return $client
+        }
+    } finally {
+        if (-not $returned) { $client.Dispose() }
+    }
+}
+
+function ExpectNoBackend([int]$port) {
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $client.Connect([System.Net.IPAddress]::Loopback, $port)
+        $client.ReceiveTimeout = 5000
+        $stream = $client.GetStream()
+        SendOfflineLogin $stream 'NewSmokePlayer'
+        $response = ReadExactly $stream (ReadVarInt $stream)
+        $packet = [System.IO.MemoryStream]::new($response)
+        if ((ReadVarInt $packet) -ne 0) { throw 'New player reached an unregistered backend' }
+        $reason = [System.Text.Encoding]::UTF8.GetString((ReadExactly $packet (ReadVarInt $packet)))
+        if ($reason -notlike '*No server is available*') {
+            throw "New player got an unexpected login rejection: $reason"
+        }
     } finally { $client.Dispose() }
 }
 
@@ -241,6 +271,7 @@ $dns = $null
 $agent = $null
 $dnsBackend = $null
 $agentBackend = $null
+$agentClient = $null
 try {
     $pluginPath = $plugins.Replace('\', '/')
     $dnsBackend = StartFakeBackend
@@ -270,7 +301,7 @@ plugins:
     StopProxy $dns
     $dns = $null
 
-    $agentBackend = StartFakeBackend
+    $agentBackend = StartFakeBackend 2
     $proxyPort = FreePort
     $agentPort = FreePort
     while ($agentPort -eq $proxyPort) { $agentPort = FreePort }
@@ -311,16 +342,27 @@ plugins:
     if ($registered.StatusCode -ne 201) { throw "Agent registration returned $($registered.StatusCode)" }
     WaitForMax $proxyPort 19
     Write-Output "Agent plugin: registration status=$($registered.StatusCode), status max=$(StatusMax $proxyPort)"
-    LoginThroughProxy $proxyPort
-    $null = Wait-Job -Job $agentBackend.Job -Timeout 10
-    if ($agentBackend.Job.State -ne 'Completed') { throw "Agent fake backend job state=$($agentBackend.Job.State)" }
-    Receive-Job -Job $agentBackend.Job -ErrorAction Stop | Out-Null
+    $agentClient = LoginThroughProxy $proxyPort -KeepOpen
     Write-Output 'Agent plugin: discovered backend completed Login Success, Join Game, and PLAY relay'
     $nonce = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
     $unregistered = SendAgent "action=unregister&generation=$generation"
     if ($unregistered.StatusCode -ne 204) { throw "Agent unregister returned $($unregistered.StatusCode)" }
+    WaitForMax $proxyPort 1
+    ExpectNoBackend $proxyPort
+    Write-Output 'Agent plugin: unregister status=204, status max=1 while player remains connected'
+    $stream = $agentClient.GetStream()
+    WriteFrame $stream ([byte[]]@(3, 43))
+    $echo = ReadExactly $stream (ReadVarInt $stream)
+    if ($echo.Length -ne 2 -or $echo[0] -ne 3 -or $echo[1] -ne 43) {
+        throw 'Existing PLAY session stopped after Agent unregister'
+    }
+    $agentClient.Dispose()
+    $agentClient = $null
+    $null = Wait-Job -Job $agentBackend.Job -Timeout 10
+    if ($agentBackend.Job.State -ne 'Completed') { throw "Agent fake backend job state=$($agentBackend.Job.State)" }
+    Receive-Job -Job $agentBackend.Job -ErrorAction Stop | Out-Null
     WaitForMax $proxyPort 0
-    Write-Output 'Agent plugin: unregister status=204, status max=0'
+    Write-Output 'Agent plugin: existing PLAY session survived unregister, status max=0 after disconnect'
 } catch {
     foreach ($backend in @($dnsBackend, $agentBackend)) {
         if ($backend) {
@@ -330,6 +372,7 @@ plugins:
     }
     throw
 } finally {
+    if ($agentClient) { $agentClient.Dispose() }
     StopProxy $dns
     StopProxy $agent
     foreach ($backend in @($dnsBackend, $agentBackend)) {

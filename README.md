@@ -67,7 +67,7 @@ plugins:
 .\smoke\installed-discovery.ps1
 ```
 
-`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它通过协议状态查询核对发现后的声明容量，并验证两种发现方式下玩家完成离线登录和 PLAY 帧转发，以及 Agent 注册与注销。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。真实客户端和服务端整合包尚未提供；合成测试不替代实服验证。
+`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它通过协议状态查询核对发现后的声明容量，并验证两种发现方式下玩家完成离线登录和 PLAY 帧转发。Agent 注销时，已连接玩家继续收发 PLAY 帧，新玩家无法选到已注销的后端；原玩家离开后在线数归零。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。真实客户端和服务端整合包尚未提供；合成测试不替代实服验证。
 
 ## 合成 relay 基准
 
