@@ -1176,6 +1176,9 @@ final class ProxySessionListenerTest {
                             new ObjectMapper().readTree(readString(packet, 32767)).path("text").asText());
                     assertEquals(-1, encryptedInput.read());
                 }
+                long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (catalog.find(registration.handle().id()).orElseThrow().availableUnits() != 1
+                        && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
                 assertEquals(1, catalog.find(registration.handle().id()).orElseThrow().availableUnits());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -1316,6 +1319,9 @@ final class ProxySessionListenerTest {
                                 "the stalled login disconnect write must not keep the session open forever");
                     }
                     assertEquals(-1, input.read());
+                    long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (catalog.find(new BackendId("lobby")).orElseThrow().reservedCapacity() != 0
+                            && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
                     assertEquals(0, catalog.find(new BackendId("lobby")).orElseThrow().reservedCapacity());
                 }
             } finally {
@@ -1591,6 +1597,9 @@ final class ProxySessionListenerTest {
                     assertEquals(-1, input.read());
                 }
                 assertTrue(listener.online().isEmpty());
+                long cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (catalog.find(backend.handle().id()).orElseThrow().availableUnits() != 1
+                        && System.nanoTime() < cleanupDeadline) Thread.sleep(5);
                 assertEquals(1, catalog.find(backend.handle().id()).orElseThrow().availableUnits());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
