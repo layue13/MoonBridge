@@ -272,6 +272,7 @@ final class ProxySessionListenerTest {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
             while (!listener.allSessions().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
             assertTrue(listener.allSessions().isEmpty(), "disconnected player should not occupy a pending session");
+            assertTrue(decision.isCancelled(), "disconnected player should cancel its placement request");
             decision.complete(Optional.of(PlacementDecision.reject("too late")));
             assertEquals(0, listener.onlineCount());
         } finally {

@@ -51,6 +51,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarFile;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
@@ -216,6 +217,8 @@ public final class PluginHost implements AutoCloseable {
         final InitialPlacementHandler handler;
         final CompletableFuture<Optional<PlacementDecision>> result;
         final AtomicBoolean decided;
+        final AtomicReference<Runnable> callback;
+        final AtomicReference<CompletableFuture<PlacementDecision>> pluginStage;
         final PendingPlacement request;
         final ScheduledFuture<?> timeoutTask;
         synchronized (this) {
@@ -228,6 +231,8 @@ public final class PluginHost implements AutoCloseable {
             }
             result = new CompletableFuture<>();
             decided = new AtomicBoolean();
+            callback = new AtomicReference<>();
+            pluginStage = new AtomicReference<>();
             request = new PendingPlacement(result, decided);
             pendingPlacements.add(request);
             try {
@@ -242,34 +247,47 @@ public final class PluginHost implements AutoCloseable {
             }
         }
         result.whenComplete((ignored, failure) -> {
+            decided.set(true);
             timeoutTask.cancel(false);
             pendingPlacements.remove(request);
+            Runnable queued = callback.get();
+            if (queued != null) callbacks.remove(queued);
+            CompletableFuture<PlacementDecision> stage = pluginStage.get();
+            if (stage != null && !stage.isDone()) stage.cancel(false);
         });
+        Runnable invocation = () -> {
+            if (decided.get()) {
+                return;
+            }
+            try {
+                CompletionStage<PlacementDecision> stage = Objects.requireNonNull(
+                        handler.place(player, snapshotServers()), "placement handler stage");
+                CompletableFuture<PlacementDecision> cancellable = stage.toCompletableFuture();
+                pluginStage.set(cancellable);
+                if (result.isDone() && !cancellable.isDone()) cancellable.cancel(false);
+                stage.whenComplete((decision, failure) -> {
+                    if (failure != null) {
+                        if (!decided.compareAndSet(false, true)) return;
+                        result.completeExceptionally(failure);
+                    } else if (decision == null) {
+                        if (!decided.compareAndSet(false, true)) return;
+                        IllegalStateException invalid = new IllegalStateException("Placement handler returned null");
+                        result.completeExceptionally(invalid);
+                    } else {
+                        if (decided.compareAndSet(false, true)) result.complete(Optional.of(decision));
+                    }
+                });
+            } catch (Throwable failure) {
+                if (!decided.compareAndSet(false, true)) return;
+                result.completeExceptionally(failure);
+            }
+        };
+        callback.set(invocation);
         try {
-            callbacks.execute(() -> {
-                if (decided.get()) {
-                    return;
-                }
-                try {
-                    CompletionStage<PlacementDecision> stage = Objects.requireNonNull(
-                            handler.place(player, snapshotServers()), "placement handler stage");
-                    stage.whenComplete((decision, failure) -> {
-                        if (failure != null) {
-                            if (!decided.compareAndSet(false, true)) return;
-                            result.completeExceptionally(failure);
-                        } else if (decision == null) {
-                            if (!decided.compareAndSet(false, true)) return;
-                            IllegalStateException invalid = new IllegalStateException("Placement handler returned null");
-                            result.completeExceptionally(invalid);
-                        } else {
-                            if (decided.compareAndSet(false, true)) result.complete(Optional.of(decision));
-                        }
-                    });
-                } catch (Throwable failure) {
-                    if (!decided.compareAndSet(false, true)) return;
-                    result.completeExceptionally(failure);
-                }
-            });
+            if (!decided.get()) {
+                callbacks.execute(invocation);
+                if (decided.get()) callbacks.remove(invocation);
+            }
         } catch (RejectedExecutionException overloaded) {
             if (decided.compareAndSet(false, true)) {
                 result.completeExceptionally(new PluginOverloadedException(overloaded));

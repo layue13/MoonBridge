@@ -205,6 +205,7 @@ class PluginHostTest {
         CompletionException failure = assertThrows(CompletionException.class,
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
         assertInstanceOf(PlacementTimeoutException.class, failure.getCause());
+        assertTrue(plugin.firstDecision.isCancelled(), "timed-out placement should cancel unfinished plugin work");
         assertTrue(catalog.find(new dev.strataproxy.core.backend.BackendId("placement")).isPresent());
         CompletionException transientFailure = assertThrows(CompletionException.class,
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
@@ -228,8 +229,52 @@ class PluginHostTest {
         var failure = assertThrows(java.util.concurrent.ExecutionException.class,
                 () -> placement.get(1, TimeUnit.SECONDS));
         assertInstanceOf(IllegalStateException.class, failure.getCause());
+        assertTrue(plugin.decision.isCancelled(), "host close should cancel the plugin's unfinished stage");
         plugin.decision.complete(PlacementDecision.select("late"));
         assertTrue(placement.isCompletedExceptionally());
+    }
+
+    @Test
+    void cancelingQueuedPlacementFreesCallbackQueue() throws Exception {
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        AtomicInteger invocations = new AtomicInteger();
+        Plugin plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+
+            @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
+                return Optional.of((player, servers) -> {
+                    if (invocations.incrementAndGet() == 1) {
+                        firstEntered.countDown();
+                        try {
+                            if (!releaseFirst.await(5, TimeUnit.SECONDS)) {
+                                return CompletableFuture.failedFuture(new IllegalStateException("first callback was not released"));
+                            }
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return CompletableFuture.failedFuture(interrupted);
+                        }
+                    }
+                    return CompletableFuture.completedFuture(PlacementDecision.select("lobby"));
+                });
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(),
+                Duration.ofSeconds(5), 1, 1)) {
+            host.load(List.of(plugin));
+            host.enable();
+            var first = host.placeInitial(PLAYER).toCompletableFuture();
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+            var abandoned = host.placeInitial(PLAYER).toCompletableFuture();
+            assertTrue(abandoned.cancel(false));
+            var next = host.placeInitial(PLAYER).toCompletableFuture();
+            releaseFirst.countDown();
+            assertEquals(Optional.of(PlacementDecision.select("lobby")), first.get(5, TimeUnit.SECONDS));
+            assertEquals(Optional.of(PlacementDecision.select("lobby")), next.get(5, TimeUnit.SECONDS));
+            assertEquals(2, invocations.get());
+        } finally {
+            releaseFirst.countDown();
+        }
     }
 
     @Test
@@ -304,6 +349,7 @@ class PluginHostTest {
     private static final class RecoveringPlacementPlugin implements Plugin {
         private final AtomicInteger calls = new AtomicInteger();
         private final AtomicInteger disableCount = new AtomicInteger();
+        private final CompletableFuture<PlacementDecision> firstDecision = new CompletableFuture<>();
 
         @Override public void onLoad(PluginContext context) {
             context.servers().register(server("placement"));
@@ -311,7 +357,7 @@ class PluginHostTest {
 
         @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
             return Optional.of((player, servers) -> switch (calls.incrementAndGet()) {
-                case 1 -> new CompletableFuture<>();
+                case 1 -> firstDecision;
                 case 2 -> CompletableFuture.failedFuture(new IllegalStateException("temporary lookup failure"));
                 default -> CompletableFuture.completedFuture(PlacementDecision.select("placement"));
             });

@@ -75,6 +75,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private BackendView selected;
     private CapacityReservation reservation;
     private boolean placementInProgress;
+    private CompletableFuture<Optional<PlacementDecision>> placementRequest;
     private boolean loginDisconnectStarted;
     private volatile boolean published;
     private boolean relayStarting;
@@ -238,15 +239,24 @@ final class Session extends ChannelInboundHandlerAdapter {
         placementInProgress = true;
         observeWaitingClient();
         resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
-        CompletionStage<Optional<PlacementDecision>> stage = owner.placement().apply(view);
-        stage.whenComplete((decision, failure) -> frontend.eventLoop().execute(() -> {
+        CompletableFuture<Optional<PlacementDecision>> request = owner.placement().apply(view).toCompletableFuture();
+        placementRequest = request;
+        request.whenComplete((decision, failure) -> {
             if (closed.get()) return;
-            if (failure != null || decision == null) {
-                disconnectLogin("Could not select a server. Please try again.");
-                return;
+            try {
+                frontend.eventLoop().execute(() -> {
+                    if (placementRequest == request) placementRequest = null;
+                    if (closed.get()) return;
+                    if (failure != null || decision == null) {
+                        disconnectLogin("Could not select a server. Please try again.");
+                        return;
+                    }
+                    selectBackend(decision);
+                });
+            } catch (RejectedExecutionException shutdown) {
+                closePair();
             }
-            selectBackend(decision);
-        }));
+        });
     }
 
     private boolean statusRequest;
@@ -1004,6 +1014,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
             if (verification != null) verification.cancel(true);
+            if (placementRequest != null) {
+                placementRequest.cancel(false);
+                placementRequest = null;
+            }
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();
