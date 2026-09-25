@@ -1016,7 +1016,16 @@ final class Session extends ChannelInboundHandlerAdapter {
             transitionBufferBytes = 0;
         };
         if (frontend.eventLoop().inEventLoop()) cleanup.run();
-        else frontend.eventLoop().execute(cleanup);
+        else {
+            try {
+                frontend.eventLoop().execute(cleanup);
+            } catch (RejectedExecutionException shutdown) {
+                // Once the loop has stopped, no session task can race this cleanup.
+                // If shutdown is still in progress, wait for its last task to finish.
+                if (frontend.eventLoop().isTerminated()) cleanup.run();
+                else frontend.eventLoop().terminationFuture().addListener(ignored -> cleanup.run());
+            }
+        }
     }
 
     @Override public void channelInactive(ChannelHandlerContext ctx) {
