@@ -130,6 +130,7 @@ final class SessionTransferTest {
                     frontend.eventLoop().submit(() -> {
                         Object message = heldMessage.getAndSet(null);
                         ChannelPromise promise = heldPromise.getAndSet(null);
+                        frontend.pipeline().remove("hold-opening");
                         heldContext.get().writeAndFlush(message, promise);
                     }).get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.NETWORK_READY, transfer.get(5, TimeUnit.SECONDS).status());

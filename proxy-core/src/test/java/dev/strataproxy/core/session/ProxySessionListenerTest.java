@@ -817,6 +817,153 @@ final class ProxySessionListenerTest {
     }
 
     @Test
+    void onlineTransferForwardsVerifiedIdentityToReplacementAndKeepsClientEncrypted() throws Exception {
+        UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+             ServerSocket replacement = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var oldClosed = new CompletableFuture<Void>();
+            var replacementRelayed = new CompletableFuture<Void>();
+            Thread oldThread = new Thread(() -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptForwardedLogin(input, uuid);
+                    sendOnlineBackendPlayStart(output, uuid, 100);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            }, "online-transfer-old-backend");
+            oldThread.setDaemon(true);
+            oldThread.start();
+            Thread replacementThread = new Thread(() -> {
+                try (Socket socket = replacement.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptForwardedLogin(input, uuid);
+                    sendOnlineBackendPlayStart(output, uuid, 200);
+                    assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    writeFrame(output, new byte[]{0x03, 0x44});
+                    replacementRelayed.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { replacementRelayed.completeExceptionally(failure); }
+            }, "online-transfer-replacement-backend");
+            replacementThread.setDaemon(true);
+            replacementThread.start();
+
+            var owner = new BackendOwner("static", 0);
+            catalog.register(new BackendRegistration(new BackendId("old"), owner,
+                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort()), 1, Map.of(), Map.of()));
+            catalog.register(new BackendRegistration(new BackendId("new"), owner,
+                    URI.create("tcp://127.0.0.1:" + replacement.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, (name, hash, ip) -> CompletableFuture.completedFuture(
+                            Optional.of(new VerifiedProfile(uuid, "Alice", List.of()))));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("old"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setTcpNoDelay(true);
+                    client.setSoTimeout(5000);
+                    var clearInput = new DataInputStream(client.getInputStream());
+                    var clearOutput = new DataOutputStream(client.getOutputStream());
+                    ByteArrayOutputStream hello = new ByteArrayOutputStream();
+                    writeVarInt(hello, 0); writeVarInt(hello, 5); writeString(hello, "localhost");
+                    hello.write(0); hello.write(1); writeVarInt(hello, 2);
+                    writeFrame(clearOutput, hello.toByteArray());
+                    ByteArrayOutputStream login = new ByteArrayOutputStream();
+                    writeVarInt(login, 0); writeString(login, "Alice");
+                    writeFrame(clearOutput, login.toByteArray());
+
+                    var requestBytes = Unpooled.wrappedBuffer(readFrame(clearInput));
+                    MinecraftEncryptionRequest request;
+                    try { request = MinecraftEncryptionRequest.decode(requestBytes); }
+                    finally { requestBytes.release(); }
+                    byte[] secret = new byte[16];
+                    java.util.Arrays.fill(secret, (byte) 0x42);
+                    var publicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(request.publicKey()));
+                    Cipher rsa = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+                    rsa.init(Cipher.ENCRYPT_MODE, publicKey);
+                    var response = new MinecraftEncryptionResponse(rsa.doFinal(secret), rsa.doFinal(request.verifyToken()));
+                    var encoded = response.encode(UnpooledByteBufAllocator.DEFAULT);
+                    try {
+                        byte[] payload = new byte[encoded.readableBytes()];
+                        encoded.readBytes(payload);
+                        writeFrame(clearOutput, payload);
+                    } finally { encoded.release(); }
+
+                    var encryptedInput = new DataInputStream(decryptingInput(client.getInputStream(),
+                            aes(secret, Cipher.DECRYPT_MODE)));
+                    var success = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(2, readVarInt(success));
+                    assertEquals(uuid.toString(), readString(success, 36));
+                    assertEquals("Alice", readString(success, 16));
+                    assertEquals(1, readVarInt(new java.io.ByteArrayInputStream(readFrame(encryptedInput))));
+                    assertArrayEquals(new byte[]{0x08}, readFrame(encryptedInput));
+
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+                    assertEquals(1, listener.online().size());
+                    var player = listener.online().get(0);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(dev.strataproxy.api.TransferStatus.NETWORK_READY, transfer.status(),
+                            transfer.detail().orElse(""));
+                    assertEquals(7, readVarInt(new java.io.ByteArrayInputStream(readFrame(encryptedInput))));
+                    assertEquals(7, readVarInt(new java.io.ByteArrayInputStream(readFrame(encryptedInput))));
+                    assertArrayEquals(new byte[]{0x08}, readFrame(encryptedInput));
+                    byte[] encryptedPlay = aes(secret, Cipher.ENCRYPT_MODE).update(framed(new byte[]{0x01, 0x33}));
+                    clearOutput.write(encryptedPlay);
+                    clearOutput.flush();
+                    replacementRelayed.get(5, TimeUnit.SECONDS);
+                    assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(encryptedInput));
+                    assertEquals("new", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    private static void acceptForwardedLogin(DataInputStream input, UUID uuid) throws Exception {
+        var handshake = new java.io.ByteArrayInputStream(readFrame(input));
+        assertEquals(0, readVarInt(handshake));
+        assertEquals(5, readVarInt(handshake));
+        String[] fields = readString(handshake, 32767).split(String.valueOf('\0'), -1);
+        assertEquals(3, fields.length);
+        assertEquals("localhost", fields[0]);
+        assertEquals("127.0.0.1", fields[1]);
+        assertEquals(uuid.toString().replace("-", ""), fields[2]);
+        handshake.readNBytes(2);
+        assertEquals(2, readVarInt(handshake));
+        var login = new java.io.ByteArrayInputStream(readFrame(input));
+        assertEquals(0, readVarInt(login));
+        assertEquals("Alice", readString(login, 16));
+    }
+
+    private static void sendOnlineBackendPlayStart(DataOutputStream output, UUID uuid, int entityId) throws Exception {
+        ByteArrayOutputStream success = new ByteArrayOutputStream();
+        writeVarInt(success, 2);
+        writeString(success, uuid.toString());
+        writeString(success, "Alice");
+        writeFrame(output, success.toByteArray());
+        ByteArrayOutputStream join = new ByteArrayOutputStream();
+        writeVarInt(join, 1);
+        var data = new DataOutputStream(join);
+        data.writeInt(entityId);
+        data.writeByte(0);
+        data.writeByte(0);
+        data.writeByte(1);
+        data.writeByte(20);
+        writeString(join, "default");
+        writeFrame(output, join.toByteArray());
+        writeFrame(output, new byte[]{0x08});
+    }
+
+    @Test
     void onlinePlacementRejectionIsEncryptedAndDelivered() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         String reason = "Your island is starting";
