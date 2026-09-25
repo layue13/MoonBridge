@@ -54,6 +54,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
@@ -379,6 +380,59 @@ final class ProxySessionListenerTest {
                 releaseBackend.countDown();
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void numericBackendAddressConnectsWithoutDnsResolver() throws Exception {
+        String username = "NumericBackend";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        var resolver = new DeferredBackendResolver("127.0.0.1");
+        try (ServerSocket backendServer = new ServerSocket(0, 8,
+                InetAddress.getByAddress(new byte[]{127, 0, 0, 1}))) {
+            var releaseBackend = new CountDownLatch(1);
+            var backendDone = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    ByteArrayOutputStream success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    releaseBackend.await(5, TimeUnit.SECONDS);
+                    backendDone.complete(null);
+                } catch (Throwable failure) { backendDone.completeExceptionally(failure); }
+            }, "fake-numeric-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(15), Duration.ofSeconds(15), Duration.ofSeconds(15), resolver);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(1000);
+                    sendLogin(client, username);
+                    assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
+                    assertFalse(resolver.pending().isDone(), "numeric IP must bypass DNS resolution");
+                }
+                releaseBackend.countDown();
+                backendDone.get(5, TimeUnit.SECONDS);
+            } finally {
+                releaseBackend.countDown();
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendServer.close();
             }
         }
     }

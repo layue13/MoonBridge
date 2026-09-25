@@ -35,6 +35,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.NetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -712,6 +713,10 @@ final class Session extends ChannelInboundHandlerAdapter {
         String host = address.getHost();
         if (host.startsWith("[") && host.endsWith("]")) {
             host = host.substring(1, host.length() - 1);
+        }
+        var numericAddress = NetUtil.createInetAddressFromIpAddressString(host);
+        if (numericAddress != null) {
+            return new InetSocketAddress(numericAddress, address.getPort());
         }
         return InetSocketAddress.createUnresolved(host, address.getPort());
     }
