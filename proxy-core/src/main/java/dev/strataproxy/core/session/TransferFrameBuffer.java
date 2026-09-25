@@ -18,6 +18,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     private ChannelHandlerContext context;
     private int bytes;
     private boolean draining;
+    private boolean reading;
 
     TransferFrameBuffer(Runnable closeSession) {
         this.closeSession = closeSession;
@@ -25,6 +26,16 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
         context = ctx;
+    }
+
+    /** Keep reading bounded frames so a paused transfer also observes peer disconnects. */
+    void readUntilRemoved() {
+        ChannelHandlerContext ctx = context;
+        if (ctx == null || !ctx.executor().inEventLoop()) {
+            throw new IllegalStateException("transfer buffer must read on its channel event loop");
+        }
+        reading = true;
+        if (!draining && ctx.channel().isActive()) ctx.read();
     }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
@@ -73,6 +84,11 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     @Override public void channelInactive(ChannelHandlerContext ctx) {
         releaseFrames();
         ctx.fireChannelInactive();
+    }
+
+    @Override public void channelReadComplete(ChannelHandlerContext ctx) {
+        if (reading && !draining && ctx.channel().isActive()) ctx.read();
+        ctx.fireChannelReadComplete();
     }
 
     private void releaseFrames() {

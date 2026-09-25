@@ -906,6 +906,109 @@ final class SessionTransferTest {
         }
     }
 
+    @Test
+    void clientDisconnectWhileOldRelayIsPausedCompletesTransferAndReleasesBothReservations() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var candidateAccepted = new CompletableFuture<Void>();
+            var candidateClosed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(30000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptLogin(input, output, 0);
+                    if (input.read() != -1) throw new AssertionError("unexpected old backend data");
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(30000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    sendJoinGame(output, 0, 200);
+                    candidateAccepted.complete(null);
+                    if (input.read() != -1) throw new AssertionError("unexpected candidate data");
+                    candidateClosed.complete(null);
+                } catch (Throwable failure) {
+                    candidateAccepted.completeExceptionally(failure);
+                    candidateClosed.completeExceptionally(failure);
+                }
+            });
+            var oldHandle = register(catalog, "old", oldServer);
+            var newHandle = register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress();
+                Socket client = new Socket(InetAddress.getLoopbackAddress(), bound.getPort());
+                try {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    sendLogin(new DataOutputStream(client.getOutputStream()));
+                    readFrame(input); readFrame(input); readFrame(input);
+                    var player = awaitPlayer(listener);
+
+                    var session = listener.allSessions().iterator().next();
+                    var backendField = Session.class.getDeclaredField("backend");
+                    backendField.setAccessible(true);
+                    Channel oldChannel = (Channel) backendField.get(session);
+                    var frontendField = Session.class.getDeclaredField("frontend");
+                    frontendField.setAccessible(true);
+                    Channel frontend = (Channel) frontendField.get(session);
+                    var heldWrite = new CompletableFuture<Void>();
+                    var heldMessage = new AtomicReference<Object>();
+                    var heldPromise = new AtomicReference<ChannelPromise>();
+                    oldChannel.eventLoop().submit(() -> oldChannel.pipeline().addFirst("hold-cutover-write",
+                            new ChannelDuplexHandler() {
+                                @Override public void write(ChannelHandlerContext ctx, Object message,
+                                                            ChannelPromise promise) {
+                                    heldMessage.set(message);
+                                    heldPromise.set(promise);
+                                    heldWrite.complete(null);
+                                }
+
+                                @Override public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                    ReferenceCountUtil.release(heldMessage.getAndSet(null));
+                                    ChannelPromise promise = heldPromise.getAndSet(null);
+                                    if (promise != null) promise.tryFailure(
+                                            new IllegalStateException("old backend closed"));
+                                    super.channelInactive(ctx);
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    writeFrame(new DataOutputStream(client.getOutputStream()), new byte[]{0x01, 0x55});
+                    heldWrite.get(5, TimeUnit.SECONDS);
+
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    candidateAccepted.get(5, TimeUnit.SECONDS);
+                    boolean buffersInstalled = false;
+                    for (int i = 0; i < 200 && !buffersInstalled; i++) {
+                        buffersInstalled = frontend.eventLoop().submit(() ->
+                                frontend.pipeline().get("transfer-client-buffer") != null
+                                        && oldChannel.pipeline().get("transfer-old-backend-buffer") != null)
+                                .get(1, TimeUnit.SECONDS);
+                        if (!buffersInstalled) Thread.sleep(5);
+                    }
+                    assertTrue(buffersInstalled, "cutover buffers should be installed while old write is held");
+
+                    client.close();
+                    assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (!listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+                    assertTrue(listener.online().isEmpty());
+                    candidateClosed.get(5, TimeUnit.SECONDS);
+                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
+                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
+                } finally { client.close(); }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
     private static ProxySessionListener listener(InMemoryBackendCatalog catalog) {
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         listener.setPlacement(ignored -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("old"))));

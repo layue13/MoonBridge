@@ -648,7 +648,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         attempt.pauseInProgress = true;
-        attempt.oldRelay.pause().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+        CompletionStage<Void> pause = attempt.oldRelay.pause();
+        frontend.eventLoop().execute(attempt.clientBuffer::readUntilRemoved);
+        backend.eventLoop().execute(attempt.oldBackendBuffer::readUntilRemoved);
+        pause.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
             attempt.pauseInProgress = false;
             if (failure != null) {
                 if (!attempt.finished) failTransfer(attempt, "old backend stopped during transfer");
