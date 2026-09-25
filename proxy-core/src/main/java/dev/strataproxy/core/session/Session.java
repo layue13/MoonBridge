@@ -1070,6 +1070,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
+                if (activeTransfer.frameState != null) activeTransfer.frameState.close();
                 activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
             if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
