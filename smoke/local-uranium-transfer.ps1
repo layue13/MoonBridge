@@ -4,11 +4,14 @@ param(
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
     [switch]$InstalledPlugin,
     [switch]$PrismClient,
+    [string]$PrismInstance = '1.7.10',
+    [string]$PrismInstanceFolder,
     [string]$PrismPath = (Join-Path $env:LOCALAPPDATA 'Programs\PrismLauncher\prismlauncher.exe')
 )
 
 $ErrorActionPreference = 'Stop'
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
+if (-not $PrismInstanceFolder) { $PrismInstanceFolder = $PrismInstance }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
 $proxyLib = Join-Path $repoRoot 'proxy-core\build\install\strataproxy\lib'
@@ -24,6 +27,13 @@ function FreePort {
     $listener.Start()
     try { return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
     finally { $listener.Stop() }
+}
+
+function IsPrismInstanceProcess([object]$process) {
+    if (-not $process.CommandLine) { return $false }
+    $line = $process.CommandLine.Replace('/', '\')
+    return $line.IndexOf('PrismLauncher', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $line.IndexOf("\instances\$PrismInstanceFolder\", [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function WaitForReady([int]$port, [System.Diagnostics.Process]$process, [string]$directory) {
@@ -171,7 +181,7 @@ backends:
             $initialJavawIds = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
                 Select-Object -ExpandProperty ProcessId)
             Start-Process -FilePath $PrismPath -ArgumentList @(
-                '--launch', '1.7.10', '--offline', 'PrismSmoke',
+                '--launch', $PrismInstance, '--offline', 'PrismSmoke',
                 '--server', "127.0.0.1:$proxyPort"
             ) -WindowStyle Hidden | Out-Null
             $clientLaunchAttempted = $true
@@ -202,8 +212,7 @@ backends:
                 throw 'Prism Forge client disconnected from target during the 10-second hold'
             }
             $newClient = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
-                Where-Object { $_.ProcessId -notin $initialJavawIds -and
-                    $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' })
+                Where-Object { $_.ProcessId -notin $initialJavawIds -and (IsPrismInstanceProcess $_) })
             if ($newClient.Count -ne 1) {
                 throw "Expected one new Prism Java client, found $($newClient.Count)"
             }
@@ -227,8 +236,7 @@ backends:
 } finally {
     if ($clientLaunchAttempted) {
         Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
-            Where-Object { $_.ProcessId -notin $initialJavawIds -and
-                $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' } |
+            Where-Object { $_.ProcessId -notin $initialJavawIds -and (IsPrismInstanceProcess $_) } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     }
     if ($proxy -and -not $proxy.HasExited) {

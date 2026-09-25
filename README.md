@@ -15,7 +15,7 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 
 配置必须显式选择 `authentication: OFFLINE` 或 `ONLINE_BUNGEE`。两种模式均解析协议 5 Handshake 与 Login Start，等待异步落点，预留容量，连接后端，确认 Login Success，然后转发普通字节流。在线模式执行加密握手、异步会话校验，并向可信的 Bungee 兼容后端转发已验证身份。状态查询由代理直接回答：在线数是本代理已登录的会话数，最大值按当前已注册后端的声明容量计算，且不低于在线数。登录阶段的后端拒绝消息会在前端写出后再清理会话；后端关闭或读失败时，已提交给客户端的写入也会先排空再关闭前端，这两种等待最多 5 秒。`Players.transfer` 会在旧后端继续服务时登录候选后端；普通候选后端收到 Join Game 后即可开始交接，Forge 候选后端收到 ServerHello 后先切换握手链路，待客户端完成握手并收到 Join Game 时再合成 Respawn。`NETWORK_READY` 等待这次协议握手和世界切换包写出，但不表示目标服的插件已完成空岛或副本加载。切换后的玩家实体 ID 会映射到原客户端 ID；候选登录失败时保留旧链路。Forge 重置包写出后若目标拒绝握手，代理结束会话并返回失败，不能恢复旧链路。DNS 与 Agent 是调用通用注册 API 的独立插件。
 
-**验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括切换前失败回退、候选服 Join Game 后立即断开时保留旧会话、切换后 Forge 握手拒绝、维度变化后再转服、Forge 到普通后端的切换、握手后 Join Game、维度覆盖、玩家实体 ID 映射和中途断线清理。从 Forge 切换到普通后端会发送一次 FML 重置以恢复客户端注册表；随后进入 Forge 时不会重复发送重置。转服固定发送中间维度和目标维度两次 Respawn，避免依赖已经过期的客户端维度记录；交接期间客户端与旧后端的帧分别进入有上限的缓冲区。成功时，客户端帧在世界切换包写出后转发，旧后端帧丢弃；切换前失败恢复旧链路后，两侧暂存的帧都会回放。这些时序已通过合成 TCP 测试。在线认证仅通过注入会话校验器的合成 TCP 测试。最小 Uranium 1.7.10 后端已通过代理完成协议探针登录和保持连接，两台 Uranium 间的 Forge 转服探针也已通过，见下文记录。真实 Forge 客户端、目标 1.7.10 整合包、Mojang 在线认证和同条件性能验收仍未验证；当前不能宣称生产可用或目标整合包实服兼容。
+**验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括切换前失败回退、候选服 Join Game 后立即断开时保留旧会话、切换后 Forge 握手拒绝、维度变化后再转服、Forge 到普通后端的切换、握手后 Join Game、维度覆盖、玩家实体 ID 映射和中途断线清理。从 Forge 切换到普通后端会发送一次 FML 重置以恢复客户端注册表；随后进入 Forge 时不会重复发送重置。转服固定发送中间维度和目标维度两次 Respawn，避免依赖已经过期的客户端维度记录；交接期间客户端与旧后端的帧分别进入有上限的缓冲区。成功时，客户端帧在世界切换包写出后转发，旧后端帧丢弃；切换前失败恢复旧链路后，两侧暂存的帧都会回放。这些时序已通过合成 TCP 测试。在线认证仅通过注入会话校验器的合成 TCP 测试。最小 Uranium 1.7.10 后端已通过代理完成协议探针登录和保持连接，两台 Uranium 间的 Forge 转服探针也已通过。Prism 中的真实 Minecraft 1.7.10 + Forge 10.13.4.1614 客户端已通过最小 Uranium 的首次登录与两台 Uranium 间的插件触发转服，见 [真实客户端联机记录](smoke/results/2026-09-25-prism-forge-client.md)。目标 1.7.10 整合包、Mojang 在线认证、跨主机部署和目标流量下的性能验收仍未验证；当前不能宣称生产可用或目标整合包实服兼容。
 
 ## 配置与运行
 
@@ -67,11 +67,11 @@ plugins:
 .\smoke\installed-discovery.ps1
 ```
 
-`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它通过协议状态查询核对发现后的声明容量，并验证两种发现方式下玩家完成离线登录和 PLAY 帧转发。Agent 注销时，已连接玩家继续收发 PLAY 帧，新玩家无法选到已注销的后端；原玩家离开后在线数归零。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。真实客户端和服务端整合包尚未提供；合成测试不替代实服验证。
+`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它通过协议状态查询核对发现后的声明容量，并验证两种发现方式下玩家完成离线登录和 PLAY 帧转发。Agent 注销时，已连接玩家继续收发 PLAY 帧，新玩家无法选到已注销的后端；原玩家离开后在线数归零。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次与容量并发、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。最小 Forge 客户端实测已通过；目标整合包尚未提供，合成测试和最小实例测试不能替代目标环境验收。
 
 如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](smoke/results/2026-09-25-local-uranium.md)。这项测试使用协议探针，目标整合包客户端与实服转服仍待验证。
 
-`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive；脚本同时核对两个后端的登录与旧服断线日志。本地结果见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。两种模式都使用协议探针，不能替代真实 Forge 客户端和目标整合包验收。
+`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
 ## 合成 relay 基准
 
@@ -99,6 +99,8 @@ plugins:
 当前提交的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](benchmarks/results/2026-09-25-session-after-lifecycle.md)。之前提交的测量见 [原会话基准记录](benchmarks/results/2026-09-25-current-session-benchmark.md)。这些是代理自身的合成流量性能验证，不是后端负载观测。
 
 `-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
+
+加入 Forge 握手阶段旧世界数据包过滤后，在当前代码上重跑的 [转服后基准](benchmarks/results/2026-09-25-forge-transfer-gate-followup.md) 与先前结果的范围重叠；合成流量没有显示稳定的大幅退化，目标整合包仍需单独测量。
 
 当前会话路径的 [JFR 采样记录](benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
 
