@@ -104,6 +104,8 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 加入 Forge 握手阶段旧世界数据包过滤后，在当前代码上重跑的 [转服后基准](benchmarks/results/2026-09-25-forge-transfer-gate-followup.md) 与先前结果的范围重叠；合成流量没有显示稳定的大幅退化，目标整合包仍需单独测量。
 
+同一提交在独立 Linux 容器中的 [转服后会话基准](benchmarks/results/2026-09-25-linux-container-post-transfer.md) 也完成了窗口 1 和 16 的各五轮对照与逐包校验。该结果仅验证另一运行环境中的合成路径；目标整合包和跨主机网络仍需实测。
+
 当前会话路径的 [JFR 采样记录](benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
 
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。

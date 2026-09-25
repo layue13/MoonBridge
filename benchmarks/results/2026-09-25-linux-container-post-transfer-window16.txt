@@ -1,0 +1,14 @@
+Offline synthetic Minecraft 1.7.10 PLAY echo; mode=post-transfer payload=4096 bytes frame=4098 bytes connections=4 measured_roundtrips_per_connection=10000 warmup_per_connection=1000 window_per_connection=16 repeats=5
+Direct and proxy phases use the same JVM, fake backend, client code, framed payload, connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.
+Proxy clients switch from bench to replacement before warmup; direct clients connect to replacement. Transfer is excluded from timing.
+No Forge, real pack, or real client is involved.
+direct-1: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=158634.4 warmup_roundtrips=4000 window=16 one_way_MiB/s=619.67 latency_ms_p50=0.354 p95=0.592 p99=0.707 elapsed_ms=252.152
+proxy-1: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=115622.1 warmup_roundtrips=4000 window=16 one_way_MiB/s=451.65 latency_ms_p50=0.403 p95=1.020 p99=1.853 elapsed_ms=345.955
+proxy-2: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=138869.6 warmup_roundtrips=4000 window=16 one_way_MiB/s=542.46 latency_ms_p50=0.396 p95=0.737 p99=1.176 elapsed_ms=288.040
+direct-2: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=162352.5 warmup_roundtrips=4000 window=16 one_way_MiB/s=634.19 latency_ms_p50=0.351 p95=0.555 p99=0.651 elapsed_ms=246.377
+direct-3: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=153885.7 warmup_roundtrips=4000 window=16 one_way_MiB/s=601.12 latency_ms_p50=0.354 p95=0.590 p99=0.648 elapsed_ms=259.933
+proxy-3: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=160502.8 warmup_roundtrips=4000 window=16 one_way_MiB/s=626.96 latency_ms_p50=0.374 p95=0.540 p99=0.670 elapsed_ms=249.217
+proxy-4: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=165346.0 warmup_roundtrips=4000 window=16 one_way_MiB/s=645.88 latency_ms_p50=0.369 p95=0.466 p99=0.582 elapsed_ms=241.917
+direct-4: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=151876.7 warmup_roundtrips=4000 window=16 one_way_MiB/s=593.27 latency_ms_p50=0.363 p95=0.568 p99=0.656 elapsed_ms=263.372
+direct-5: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=151993.9 warmup_roundtrips=4000 window=16 one_way_MiB/s=593.73 latency_ms_p50=0.355 p95=0.616 p99=0.678 elapsed_ms=263.169
+proxy-5: roundtrips=40000 echoes=40000 correct=40000 errors=0 roundtrips/s=170156.3 warmup_roundtrips=4000 window=16 one_way_MiB/s=664.67 latency_ms_p50=0.358 p95=0.457 p99=0.541 elapsed_ms=235.078
