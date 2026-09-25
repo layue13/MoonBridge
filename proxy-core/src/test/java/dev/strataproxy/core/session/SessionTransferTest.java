@@ -390,6 +390,7 @@ final class SessionTransferTest {
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
             var newNegotiated = new CompletableFuture<Void>();
+            var sendPosition = new CompletableFuture<Void>();
             backendThread(oldServer, () -> {
                 try (Socket socket = oldServer.accept()) {
                     socket.setSoTimeout(5000);
@@ -416,6 +417,7 @@ final class SessionTransferTest {
                     assertArrayEquals(clientForgeAck(), readFrame(input));
                     writeFrame(output, serverForgeAck());
                     sendJoinGame(output, 0, 200);
+                    sendPosition.get(5, TimeUnit.SECONDS);
                     writeFrame(output, new byte[]{0x03, 0x44});
                     newNegotiated.complete(null);
                     while (input.read() != -1) { }
@@ -451,11 +453,15 @@ final class SessionTransferTest {
                     var respawnInput = new DataInputStream(new ByteArrayInputStream(respawn));
                     assertEquals(7, readVarInt(respawnInput));
                     assertEquals(7, respawnInput.readInt()); // Target override, not Join Game's signed byte.
+                    sendPosition.complete(null);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newNegotiated.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
                 }
-            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+            } finally {
+                sendPosition.complete(null);
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
         }
     }
 

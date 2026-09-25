@@ -4,6 +4,7 @@ import dev.strataproxy.core.protocol.Minecraft1710EntityIds;
 import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
 import dev.strataproxy.core.protocol.ProtocolProfile;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
+import dev.strataproxy.core.relay.RawRelay;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -53,12 +54,13 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
             int dimension = observation.dimension().orElse(join.dimension());
             ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(), join,
                     previousDimension, dimension);
-            frontend.writeAndFlush(respawns).addListener(write -> {
-                if (!write.isSuccess()) closeSession.run();
-            });
             serverEntityId = join.entityId();
             joined = true;
             if (joinDeadline != null) joinDeadline.cancel(false);
+            frontend.writeAndFlush(respawns).addListener(write -> {
+                if (write.isSuccess()) RawRelay.continueAfterDrop(backend);
+                else closeSession.run();
+            });
         }
 
         @Override public void close() {
