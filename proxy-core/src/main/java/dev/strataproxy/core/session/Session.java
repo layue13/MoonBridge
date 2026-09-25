@@ -73,12 +73,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     private MinecraftEncryptionRequest encryptionRequest;
     private VerifiedProfile verifiedProfile;
     private CompletableFuture<Optional<VerifiedProfile>> verification;
-    private boolean verifyingIdentity;
     private PlayerIdentity identity;
     private boolean identityClaimed;
     private volatile PlayerView view;
     private BackendView selected;
-    private boolean placementInProgress;
     private CompletableFuture<Optional<PlacementDecision>> placementRequest;
     private boolean loginDisconnectStarted;
     private volatile boolean published;
@@ -171,11 +169,11 @@ final class Session extends ChannelInboundHandlerAdapter {
             } else closePair();
             return;
         }
-        if (encryptionRequest != null && !verifyingIdentity) {
+        if (encryptionRequest != null) {
             receiveEncryptionResponse(packet);
             return;
         }
-        if (loginStart != null || placementInProgress || verifyingIdentity) {
+        if (loginStart != null) {
             closePair();
             return;
         }
@@ -203,7 +201,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         byte[] secret = accepted.sharedSecret();
         String serverHash = OnlineModeCrypto.serverHash(encryptionRequest.serverId(), secret,
                 encryptionRequest.publicKey());
-        verifyingIdentity = true;
+        encryptionRequest = null;
         ChannelPipeline pipeline = frontend.pipeline();
         try {
             pipeline.addAfter("minecraft-frame-decoder", "minecraft-cipher-decoder", new MinecraftCipherDecoder(secret));
@@ -242,7 +240,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
-        placementInProgress = true;
         observeWaitingClient();
         resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
         CompletableFuture<Optional<PlacementDecision>> request = owner.placement().apply(view).toCompletableFuture();
