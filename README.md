@@ -23,6 +23,8 @@ StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正�
 
 `plugins.initialPlacementTimeoutSeconds` 控制初始选服回调的等待时间，默认 15 秒，可配置为 1–120 秒。握手与身份验证、后端连接与登录各有独立的 15 秒期限；选服阶段不会消耗这两个阶段的时间。插件可以异步查询或准备后端；超过时限的当前玩家登录会失败，后续玩家仍可调用该插件。客户端和后端自身也可能提前断开等待中的连接。
 
+候选后端就绪后的切换阶段另有 15 秒期限。如果旧链路的写入持续未完成，代理会以失败结果结束转服并断开该会话，避免玩家与插件调用无限等待。
+
 ```powershell
 .\gradlew.bat :proxy-core:installDist
 .\proxy-core\build\install\strataproxy\bin\strataproxy.bat --validate-config .\proxy-core\build\install\strataproxy\config\strataproxy.yml

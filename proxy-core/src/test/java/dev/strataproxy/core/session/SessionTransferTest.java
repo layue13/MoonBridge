@@ -7,6 +7,11 @@ import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -21,11 +26,13 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,6 +42,88 @@ final class SessionTransferTest {
     private static final String USERNAME = "IslandPlayer";
     private static final UUID PLAYER_ID = UUID.nameUUIDFromBytes(
             ("OfflinePlayer:" + USERNAME).getBytes(StandardCharsets.UTF_8));
+
+    @Test
+    void cutoverTimesOutWhenOldBackendWriteNeverCompletes() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newClosed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    acceptLogin(new DataInputStream(socket.getInputStream()),
+                            new DataOutputStream(socket.getOutputStream()), 0);
+                    assertEquals(-1, socket.getInputStream().read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    acceptLogin(new DataInputStream(socket.getInputStream()),
+                            new DataOutputStream(socket.getOutputStream()), 0, 200);
+                    assertEquals(-1, socket.getInputStream().read());
+                    newClosed.complete(null);
+                } catch (Throwable failure) { newClosed.completeExceptionally(failure); }
+            });
+            var oldHandle = register(catalog, "old", oldServer);
+            var newHandle = register(catalog, "new", newServer);
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(15), Duration.ofSeconds(15), Duration.ofSeconds(1));
+            listener.setPlacement(ignored -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("old"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    DataOutputStream output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+
+                    var session = listener.allSessions().iterator().next();
+                    var backendField = Session.class.getDeclaredField("backend");
+                    backendField.setAccessible(true);
+                    Channel oldChannel = (Channel) backendField.get(session);
+                    var blockedWrite = new CompletableFuture<Void>();
+                    var heldMessage = new AtomicReference<Object>();
+                    var heldPromise = new AtomicReference<ChannelPromise>();
+                    oldChannel.eventLoop().submit(() -> oldChannel.pipeline().addFirst("hold-old-write",
+                            new ChannelDuplexHandler() {
+                                @Override public void write(ChannelHandlerContext ctx, Object message,
+                                                            ChannelPromise promise) {
+                                    heldMessage.set(message);
+                                    heldPromise.set(promise);
+                                    blockedWrite.complete(null);
+                                }
+
+                                @Override public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                    ReferenceCountUtil.release(heldMessage.getAndSet(null));
+                                    ChannelPromise promise = heldPromise.getAndSet(null);
+                                    if (promise != null) promise.tryFailure(new IllegalStateException("old backend closed"));
+                                    super.channelInactive(ctx);
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    writeFrame(output, new byte[]{0x01, 0x55});
+                    blockedWrite.get(5, TimeUnit.SECONDS);
+
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.FAILED, transfer.status());
+                    assertTrue(transfer.detail().orElse("").contains("cutover timed out"));
+                    assertEquals(-1, input.read());
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                    newClosed.get(5, TimeUnit.SECONDS);
+                    assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
+                    assertEquals(1, catalog.find(newHandle.id()).orElseThrow().availableUnits());
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
 
     @Test
     void transfersVanillaPlayConnectionWithoutSecondLoginAndReleasesOldCapacity() throws Exception {

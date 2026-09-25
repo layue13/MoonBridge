@@ -596,6 +596,11 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void candidateReady(TransferAttempt attempt) {
         if (transfer != attempt || attempt.finished || closed.get()) return;
+        attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
+            if (transfer != attempt || attempt.result.isDone()) return;
+            attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
+            closePair();
+        }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
         attempt.pauseInProgress = true;
         attempt.oldRelay.pause().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
             attempt.pauseInProgress = false;
@@ -717,6 +722,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 view = new PlayerView(identity, view.username(), selected.handle().id().value());
                 transfer = null;
                 attempt.finished = true;
+                attempt.cutoverDeadline.cancel(false);
                 oldBackend.close();
                 oldReservation.close();
                 oldObservation.close();
@@ -789,6 +795,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void completeFailedTransfer(TransferAttempt attempt) {
+        if (attempt.cutoverDeadline != null) attempt.cutoverDeadline.cancel(false);
         if (transfer == attempt) transfer = null;
         attempt.result.complete(TransferResult.failed(attempt.failureReason));
     }
@@ -813,6 +820,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (activeTransfer != null) {
                 transfer = null;
                 activeTransfer.finished = true;
+                if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
                 activeTransfer.claim.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
@@ -855,6 +863,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         private boolean detached;
         private boolean finished;
         private String failureReason;
+        private ScheduledFuture<?> cutoverDeadline;
 
         private TransferAttempt(BackendView target, CapacityReservation claim,
                                 CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {

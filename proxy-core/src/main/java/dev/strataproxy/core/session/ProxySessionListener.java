@@ -44,6 +44,7 @@ public final class ProxySessionListener implements Players {
     private final SessionVerifier verifier;
     private final Duration loginStageTimeout;
     private final Duration placementTimeout;
+    private final Duration transferCutoverTimeout;
     private final KeyPair encryptionKeys;
     private final SecureRandom random = new SecureRandom();
     private final EventLoopGroup boss = new NioEventLoopGroup(1, namedFactory("strataproxy-session-accept"));
@@ -74,16 +75,24 @@ public final class ProxySessionListener implements Players {
 
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout) {
+        this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, Duration.ofSeconds(15));
+    }
+
+    ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                         Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.verifier = verifier;
         this.loginStageTimeout = Objects.requireNonNull(loginStageTimeout, "loginStageTimeout");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
+        this.transferCutoverTimeout = Objects.requireNonNull(transferCutoverTimeout, "transferCutoverTimeout");
         if (loginStageTimeout.isZero() || loginStageTimeout.isNegative()
                 || placementTimeout.isZero() || placementTimeout.isNegative()
+                || transferCutoverTimeout.isZero() || transferCutoverTimeout.isNegative()
                 || loginStageTimeout.compareTo(Duration.ofMinutes(3)) > 0
-                || placementTimeout.compareTo(Duration.ofMinutes(3)) > 0) {
-            throw new IllegalArgumentException("login stage and placement timeouts must be within three minutes");
+                || placementTimeout.compareTo(Duration.ofMinutes(3)) > 0
+                || transferCutoverTimeout.compareTo(Duration.ofMinutes(3)) > 0) {
+            throw new IllegalArgumentException("session timeouts must be within three minutes");
         }
         try {
             if (verifier == null) encryptionKeys = null;
@@ -201,6 +210,7 @@ public final class ProxySessionListener implements Players {
     SessionVerifier verifier() { return verifier; }
     Duration loginStageTimeout() { return loginStageTimeout; }
     Duration placementTimeout() { return placementTimeout; }
+    Duration transferCutoverTimeout() { return transferCutoverTimeout; }
     KeyPair encryptionKeys() { return encryptionKeys; }
     MinecraftEncryptionRequest newEncryptionRequest() {
         return MinecraftEncryptionRequest.create("", encryptionKeys.getPublic(), random);
