@@ -5,7 +5,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.DecoderException;
 import io.netty.util.ReferenceCountUtil;
-import java.util.Arrays;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -27,22 +26,13 @@ public final class MinecraftCipherDecoder extends ChannelInboundHandlerAdapter {
             context.fireChannelRead(message);
             return;
         }
-        byte[] source = new byte[input.readableBytes()];
-        byte[] decoded = null;
-        ByteBuf output = null;
+        ByteBuf output;
         try {
-            input.getBytes(input.readerIndex(), source);
-            decoded = cipher.update(source);
-            if (decoded == null) decoded = new byte[0];
-            output = context.alloc().buffer(decoded.length);
-            output.writeBytes(decoded);
+            output = CipherBufferTransform.update(context.alloc(), cipher, input);
         } catch (RuntimeException failure) {
-            if (output != null) output.release();
             throw new DecoderException("Minecraft AES/CFB8 decryption failed", failure);
         } finally {
             ReferenceCountUtil.release(input);
-            Arrays.fill(source, (byte) 0);
-            if (decoded != null) Arrays.fill(decoded, (byte) 0);
         }
         context.fireChannelRead(output);
     }

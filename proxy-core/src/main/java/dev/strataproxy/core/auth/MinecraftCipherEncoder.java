@@ -5,7 +5,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
-import java.util.Arrays;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -36,26 +35,15 @@ public final class MinecraftCipherEncoder extends ChannelOutboundHandlerAdapter 
             context.write(message, promise);
             return;
         }
-        byte[] source = new byte[input.readableBytes()];
-        byte[] encrypted = null;
-        ByteBuf output = null;
+        ByteBuf output;
         try {
-            input.getBytes(input.readerIndex(), source);
-            encrypted = cipher.update(source);
-            if (encrypted == null) encrypted = new byte[0];
-            output = context.alloc().buffer(encrypted.length);
-            output.writeBytes(encrypted);
+            output = CipherBufferTransform.update(context.alloc(), cipher, input);
         } catch (RuntimeException failure) {
             promise.setFailure(failure);
-            if (output != null) output.release();
             ReferenceCountUtil.release(input);
-            Arrays.fill(source, (byte) 0);
-            if (encrypted != null) Arrays.fill(encrypted, (byte) 0);
             return;
         }
         ReferenceCountUtil.release(input);
-        Arrays.fill(source, (byte) 0);
-        if (encrypted != null) Arrays.fill(encrypted, (byte) 0);
         try {
             context.write(output, promise);
         } catch (RuntimeException failure) {

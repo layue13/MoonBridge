@@ -55,6 +55,36 @@ class MinecraftCipherHandlersTest {
     }
 
     @Test
+    void directBuffersPreserveTheContinuousCipherAcrossWrites() throws Exception {
+        byte[] ciphertext = transform(plaintext, Cipher.ENCRYPT_MODE);
+        var outbound = new EmbeddedChannel(new MinecraftCipherEncoder(secret.clone()));
+        ByteBuf firstPlain = directSegment(plaintext, 0, 17);
+        ByteBuf secondPlain = directSegment(plaintext, 17, plaintext.length);
+        try {
+            outbound.writeOutbound(firstPlain);
+            outbound.writeOutbound(secondPlain);
+            assertEquals(0, firstPlain.refCnt());
+            assertEquals(0, secondPlain.refCnt());
+            assertArrayEquals(ciphertext, collectOutbound(outbound));
+        } finally {
+            outbound.finishAndReleaseAll();
+        }
+
+        var inbound = new EmbeddedChannel(new MinecraftCipherDecoder(secret.clone()));
+        ByteBuf firstEncrypted = directSegment(ciphertext, 0, 17);
+        ByteBuf secondEncrypted = directSegment(ciphertext, 17, ciphertext.length);
+        try {
+            inbound.writeInbound(firstEncrypted);
+            inbound.writeInbound(secondEncrypted);
+            assertEquals(0, firstEncrypted.refCnt());
+            assertEquals(0, secondEncrypted.refCnt());
+            assertArrayEquals(plaintext, collectInbound(inbound));
+        } finally {
+            inbound.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     void handlesReadOnlyCompositeBuffersAndReleasesTheirComponents() throws Exception {
         byte[] ciphertext = transform(plaintext, Cipher.ENCRYPT_MODE);
         var inbound = new EmbeddedChannel(new MinecraftCipherDecoder(secret.clone()));
@@ -78,11 +108,28 @@ class MinecraftCipherHandlersTest {
         }
     }
 
+    @Test
+    void handlesReadOnlyDirectBuffer() throws Exception {
+        var outbound = new EmbeddedChannel(new MinecraftCipherEncoder(secret.clone()));
+        ByteBuf plainInput = directSegment(plaintext, 0, plaintext.length);
+        try {
+            outbound.writeOutbound(plainInput.asReadOnly());
+            assertEquals(0, plainInput.refCnt());
+            assertArrayEquals(transform(plaintext, Cipher.ENCRYPT_MODE), collectOutbound(outbound));
+        } finally {
+            outbound.finishAndReleaseAll();
+        }
+    }
+
     private static CompositeByteBuf composite(byte[] bytes) {
         int split = 17;
         ByteBuf first = Unpooled.directBuffer(split).writeBytes(bytes, 0, split);
         ByteBuf second = Unpooled.directBuffer(bytes.length - split).writeBytes(bytes, split, bytes.length - split);
         return Unpooled.compositeBuffer(2).addComponents(true, first, second);
+    }
+
+    private static ByteBuf directSegment(byte[] bytes, int start, int end) {
+        return Unpooled.directBuffer(end - start).writeBytes(bytes, start, end - start);
     }
 
     private byte[] transform(byte[] input, int mode) throws Exception {
