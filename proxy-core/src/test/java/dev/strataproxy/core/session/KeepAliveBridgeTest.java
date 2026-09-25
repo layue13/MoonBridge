@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -84,6 +85,40 @@ final class KeepAliveBridgeTest {
             assertEquals(202, reply.getInt(reply.readerIndex() + 2));
             reply.release();
             assertTrue(!closed.get());
+        } finally {
+            frontend.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void forwardsRepliesForMultipleOutstandingKeepAlives() {
+        var state = new KeepAliveBridge.State();
+        var backend = new EmbeddedChannel(new KeepAliveBridge(state, false, () -> { }));
+        var frontend = new EmbeddedChannel(new KeepAliveBridge(state, true, () -> { }));
+        try {
+            backend.writeInbound(frame(101));
+            backend.writeInbound(frame(202));
+            ByteBuf first = backend.readInbound();
+            ByteBuf second = backend.readInbound();
+            int firstClientId = first.getInt(first.readerIndex() + 2);
+            int secondClientId = second.getInt(second.readerIndex() + 2);
+            first.release();
+            second.release();
+
+            frontend.writeInbound(frame(secondClientId));
+            frontend.writeInbound(frame(firstClientId));
+            ByteBuf firstReply = frontend.readInbound();
+            ByteBuf secondReply = frontend.readInbound();
+            try {
+                assertNotNull(firstReply);
+                assertNotNull(secondReply);
+                assertEquals(202, firstReply.getInt(firstReply.readerIndex() + 2));
+                assertEquals(101, secondReply.getInt(secondReply.readerIndex() + 2));
+            } finally {
+                if (firstReply != null) firstReply.release();
+                if (secondReply != null) secondReply.release();
+            }
         } finally {
             frontend.finishAndReleaseAll();
             backend.finishAndReleaseAll();

@@ -7,17 +7,19 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Keeps connection-local PLAY keep-alive replies on the backend that issued them. */
 final class KeepAliveBridge extends ChannelInboundHandlerAdapter {
     static final class State {
+        private static final int MAX_PENDING = 1024;
         private int nextClientId = ThreadLocalRandom.current().nextInt();
-        private Integer expectedClientId;
-        private int backendId;
+        private final Map<Integer, Integer> pending = new HashMap<>();
 
         void switchBackend() {
-            expectedClientId = null;
+            pending.clear();
         }
 
         /** Transforms a packet body while the login frame encoder is still installed. */
@@ -43,14 +45,16 @@ final class KeepAliveBridge extends ChannelInboundHandlerAdapter {
 
         private Integer map(int incomingId, boolean fromFrontend) {
             if (fromFrontend) {
-                if (expectedClientId == null || incomingId != expectedClientId) return null;
-                expectedClientId = null;
-                return backendId;
+                return pending.remove(incomingId);
             }
-            int generated = ++nextClientId;
-            if (generated == incomingId) generated = ++nextClientId;
-            expectedClientId = generated;
-            backendId = incomingId;
+            if (pending.size() >= MAX_PENDING) {
+                throw new IllegalStateException("too many unanswered backend keep-alives");
+            }
+            int generated;
+            do {
+                generated = ++nextClientId;
+            } while (generated == incomingId || pending.containsKey(generated));
+            pending.put(generated, incomingId);
             return generated;
         }
     }

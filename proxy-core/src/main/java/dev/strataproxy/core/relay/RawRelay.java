@@ -88,7 +88,10 @@ public final class RawRelay {
             return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.resume(), fromBackend.resume()));
         }
 
-        /** Removes both paused handlers if neither side has queued reads; otherwise leaves the link resumable. */
+        /**
+         * Removes both paused handlers if neither side has queued reads; otherwise leaves the link resumable.
+         * Both channels keep auto-read disabled so a replacement relay can take over without reading unowned bytes.
+         */
         public CompletionStage<Void> detach() {
             return pause().thenCompose(ignored -> {
                 synchronized (detachLock) {
