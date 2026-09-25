@@ -155,7 +155,7 @@ public final class RawRelay {
         private int writesInFlight;
         private int pausedBytes;
         private volatile boolean closed;
-        private boolean paused;
+        private boolean paused = true;
         private volatile boolean detached;
         private boolean readsEnabled;
         private CompletableFuture<Void> pauseComplete;
@@ -179,7 +179,15 @@ public final class RawRelay {
                 return;
             }
             readsEnabled = true;
-            requestRead();
+            // An in-flight read may arrive after attach but before start removes the
+            // login codecs. Flush those owned buffers before requesting new data.
+            if (paused) {
+                resume().whenComplete((ignored, failure) -> {
+                    if (failure != null) closePair(context);
+                });
+            } else {
+                requestRead();
+            }
         }
 
         private void requestRead() {
@@ -383,15 +391,23 @@ public final class RawRelay {
                 return;
             }
             writesInFlight++;
-            peer.writeAndFlush(next).addListener((ChannelFutureListener) future ->
-                    context.executor().execute(() -> {
-                        writesInFlight--;
-                        if (!future.isSuccess()) {
-                            failResume(future.cause());
-                            return;
-                        }
-                        drainPausedMessages();
-                    }));
+            try {
+                Consumer<ByteBuf> activeObserver = observer;
+                if (activeObserver != null) activeObserver.accept(next.duplicate());
+                peer.writeAndFlush(next).addListener((ChannelFutureListener) future ->
+                        context.executor().execute(() -> {
+                            writesInFlight--;
+                            if (!future.isSuccess()) {
+                                failResume(future.cause());
+                                return;
+                            }
+                            drainPausedMessages();
+                        }));
+            } catch (RuntimeException failure) {
+                writesInFlight--;
+                next.release();
+                failResume(failure);
+            }
         }
 
         private void failResume(Throwable failure) {

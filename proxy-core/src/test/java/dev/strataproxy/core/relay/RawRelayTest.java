@@ -16,6 +16,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RawRelayTest {
     @Test
+    void holdsAnInFlightReadUntilTheRelayStarts() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var observed = new AtomicInteger();
+            var link = RawRelay.attach(client, backend, bytes -> observed.incrementAndGet(), null);
+            pump(client, backend);
+
+            var inFlight = Unpooled.wrappedBuffer(new byte[] {42});
+            client.writeInbound(inFlight);
+            pump(client, backend);
+            assertNull(backend.readOutbound());
+            assertEquals(1, inFlight.refCnt());
+            assertEquals(0, observed.get());
+
+            link.start();
+            pump(client, backend);
+            var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
+            assertSame(inFlight, forwarded);
+            assertEquals(1, observed.get());
+            forwarded.release();
+            assertEquals(0, inFlight.refCnt());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     void forwardsTheOriginalBufferAndClosesBothSides() {
         var client = new EmbeddedChannel();
         var backend = new EmbeddedChannel();
