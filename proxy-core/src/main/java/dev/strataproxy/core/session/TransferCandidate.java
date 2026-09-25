@@ -87,10 +87,9 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
                     queuedBytes += bytes;
                 }
                 observation.observePacket(true, packet);
-                // Forge sends ServerHello before it can finish the handshake and issue Join Game.
-                // The proxy must connect the player to this backend so the client can answer it.
-                if (state == State.PLAY && (observation.forgeSeen()
-                        || (joinGame != null && observation.ready().isDone()))) {
+                // Forge needs the client to answer ServerHello; a vanilla Join Game already
+                // provides the world and entity ID needed to begin the network cutover.
+                if (state == State.PLAY && (observation.forgeSeen() || joinGame != null)) {
                     state = State.READY;
                     ctx.channel().config().setAutoRead(false);
                     deadline.cancel(false);

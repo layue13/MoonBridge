@@ -473,8 +473,8 @@ final class SessionTransferTest {
                     sendLoginSuccess(output);
                     sendJoinGame(output, 0, 200);
                     writeFrame(output, new byte[]{0x1C, 0, 0, 0, (byte) 200, 0x7F});
-                    writeFrame(output, new byte[]{0x08});
                     assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    writeFrame(output, new byte[]{0x08});
                     assertArrayEquals(new byte[]{0x0B, 0, 0, 0, (byte) 200, 1}, readFrame(input));
                     writeFrame(output, new byte[]{0x1A, 0, 0, 0, (byte) 200, 1});
                     writeFrame(output, new byte[]{0x03, 0x44});
@@ -504,8 +504,8 @@ final class SessionTransferTest {
                     assertEquals(7, packetId(readFrame(input))); // Dummy respawn for same dimension.
                     assertEquals(7, packetId(readFrame(input))); // Target dimension.
                     assertArrayEquals(new byte[]{0x1C, 0, 0, 0, 100, 0x7F}, readFrame(input));
-                    assertEquals(8, packetId(readFrame(input))); // Target Position and Look, no second Login Success.
                     writeFrame(output, new byte[]{0x01, 0x33});
+                    assertEquals(8, packetId(readFrame(input))); // Target Position and Look, no second Login Success.
                     writeFrame(output, new byte[]{0x0B, 0, 0, 0, 100, 1});
                     assertArrayEquals(new byte[]{0x1A, 0, 0, 0, 100, 1}, readFrame(input));
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
