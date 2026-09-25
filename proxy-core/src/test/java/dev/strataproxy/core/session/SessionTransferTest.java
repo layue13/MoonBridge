@@ -3,9 +3,12 @@ package dev.strataproxy.core.session;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.backend.BackendId;
+import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
+import dev.strataproxy.core.backend.BackendView;
+import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -28,6 +31,7 @@ import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -519,6 +523,87 @@ final class SessionTransferTest {
                     assertEquals(0, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void transferConnectsToTheEndpointActuallyReservedAfterAnAddressUpdate() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket staleTarget = server();
+             ServerSocket movedTarget = server()) {
+            movedTarget.setSoTimeout(5000);
+            var oldClosed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    acceptLogin(input, new DataOutputStream(socket.getOutputStream()), 0);
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            BackendHandle targetHandle = register(catalog, "new", staleTarget);
+            var moved = new BackendRegistration(targetHandle.id(), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + movedTarget.getLocalPort()), 1);
+            var updated = new AtomicBoolean();
+            BackendCatalog movingCatalog = new BackendCatalog() {
+                @Override public BackendView register(BackendRegistration definition) {
+                    return catalog.register(definition);
+                }
+                @Override public Optional<BackendView> update(BackendHandle handle, BackendRegistration definition) {
+                    return catalog.update(handle, definition);
+                }
+                @Override public boolean remove(BackendHandle handle) { return catalog.remove(handle); }
+                @Override public int removeOwner(BackendOwner value) { return catalog.removeOwner(value); }
+                @Override public Optional<BackendView> find(BackendId id) {
+                    Optional<BackendView> snapshot = catalog.find(id);
+                    if (id.equals(targetHandle.id()) && updated.compareAndSet(false, true)) {
+                        catalog.update(targetHandle, moved).orElseThrow();
+                    }
+                    return snapshot;
+                }
+                @Override public List<BackendView> snapshot() { return catalog.snapshot(); }
+                @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
+                    return catalog.reserve(handle, units);
+                }
+            };
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    movingCatalog);
+            listener.setPlacement(ignored -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("old"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    var input = new DataInputStream(client.getInputStream());
+                    sendLogin(new DataOutputStream(client.getOutputStream()));
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    try (Socket candidate = movedTarget.accept()) {
+                        candidate.setSoTimeout(5000);
+                        var candidateInput = new DataInputStream(candidate.getInputStream());
+                        var candidateOutput = new DataOutputStream(candidate.getOutputStream());
+                        acceptHandshakeAndLogin(candidateInput, candidateOutput);
+                        sendLoginSuccess(candidateOutput);
+                        sendJoinGame(candidateOutput, 0, 200);
+                        writeFrame(candidateOutput, new byte[]{0x08});
+                        assertEquals(TransferStatus.NETWORK_READY, transfer.get(5, TimeUnit.SECONDS).status());
+                        assertEquals(7, packetId(readFrame(input)));
+                        assertEquals(7, packetId(readFrame(input)));
+                        assertEquals(8, packetId(readFrame(input)));
+                        assertEquals(moved.address(), catalog.find(targetHandle.id()).orElseThrow().address());
+                        assertEquals(1, catalog.find(targetHandle.id()).orElseThrow().connectedPlayers());
+                    }
+                }
+                oldClosed.get(5, TimeUnit.SECONDS);
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+            assertTrue(updated.get());
+            assertEquals(1, catalog.find(targetHandle.id()).orElseThrow().availableUnits());
         }
     }
 

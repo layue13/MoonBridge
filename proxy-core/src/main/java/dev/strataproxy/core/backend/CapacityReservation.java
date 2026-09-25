@@ -4,24 +4,25 @@ import java.util.function.BooleanSupplier;
 
 /** One capacity claim that can atomically become a connected player. */
 public final class CapacityReservation implements AutoCloseable {
-    private final BackendHandle backend;
+    private final BackendView backendView;
     private final int units;
     private final BooleanSupplier commit;
     private final Runnable release;
     private final Runnable disconnect;
     private volatile State state = State.RESERVED;
 
-    CapacityReservation(BackendHandle backend, int units, BooleanSupplier commit,
+    CapacityReservation(BackendView backendView, int units, BooleanSupplier commit,
                         Runnable release, Runnable disconnect) {
-        this.backend = backend;
+        this.backendView = backendView;
         this.units = units;
         this.commit = commit;
         this.release = release;
         this.disconnect = disconnect;
     }
 
-    public BackendHandle backend() {
-        return backend;
+    /** Address and definition atomically selected with this capacity claim. */
+    public BackendView backendView() {
+        return backendView;
     }
 
     public int units() {

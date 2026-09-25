@@ -120,7 +120,7 @@ public final class InMemoryBackendCatalog implements BackendCatalog {
         entry.reservations.put(reservationId, units);
         entry.reservedUnits += units;
         Occupancy reservedOccupancy = entry.occupancy;
-        return Optional.of(new CapacityReservation(handle, units,
+        return Optional.of(new CapacityReservation(entry.view(), units,
                 () -> commit(handle, entry, reservedOccupancy, reservationId),
                 () -> release(entry, reservationId),
                 () -> disconnect(reservedOccupancy, units)));

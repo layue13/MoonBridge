@@ -302,7 +302,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             disconnectLogin("The selected server is full or unavailable.");
             return;
         }
-        selected = backendView;
+        selected = reservation.backendView();
         if (!"tcp".equalsIgnoreCase(selected.address().getScheme()) || selected.address().getHost() == null || selected.address().getPort() < 1) {
             closePair();
             return;
@@ -616,7 +616,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
             return;
         }
-        TransferAttempt attempt = new TransferAttempt(target, claim, result, relay);
+        TransferAttempt attempt = new TransferAttempt(claim.backendView(), claim, result, relay);
         transfer = attempt;
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
@@ -636,7 +636,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                             channel.pipeline().addLast("transfer-candidate", attempt.candidate);
                         }
                     });
-            ChannelFuture connect = bootstrap.connect(backendSocketAddress(target.address()));
+            ChannelFuture connect = bootstrap.connect(backendSocketAddress(attempt.target.address()));
             attempt.channel = connect.channel();
             connect.addListener(future -> {
                 if (attempt.finished || closed.get()) { connect.channel().close(); return; }

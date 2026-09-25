@@ -7,8 +7,12 @@ import dev.strataproxy.core.auth.MinecraftEncryptionResponse;
 import dev.strataproxy.core.auth.ProfileProperty;
 import dev.strataproxy.core.auth.VerifiedProfile;
 import dev.strataproxy.core.backend.BackendId;
+import dev.strataproxy.core.backend.BackendCatalog;
+import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
+import dev.strataproxy.core.backend.BackendView;
+import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
 import org.junit.jupiter.api.Test;
 import io.netty.buffer.Unpooled;
@@ -28,11 +32,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -95,6 +101,70 @@ final class ProxySessionListenerTest {
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
+        }
+    }
+
+    @Test
+    void initialLoginConnectsToTheEndpointActuallyReservedAfterAnAddressUpdate() throws Exception {
+        String username = "MovedPlayer";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+             ServerSocket newServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            newServer.setSoTimeout(5000);
+            var owner = new BackendOwner("static", 0);
+            var id = new BackendId("lobby");
+            var original = catalog.register(new BackendRegistration(id, owner,
+                    URI.create("tcp://127.0.0.1:" + oldServer.getLocalPort()), 1));
+            var moved = new BackendRegistration(id, owner,
+                    URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()), 1);
+            var updated = new AtomicBoolean();
+            BackendCatalog movingCatalog = new BackendCatalog() {
+                @Override public BackendView register(BackendRegistration definition) {
+                    return catalog.register(definition);
+                }
+                @Override public Optional<BackendView> update(BackendHandle handle, BackendRegistration definition) {
+                    return catalog.update(handle, definition);
+                }
+                @Override public boolean remove(BackendHandle handle) { return catalog.remove(handle); }
+                @Override public int removeOwner(BackendOwner value) { return catalog.removeOwner(value); }
+                @Override public Optional<BackendView> find(BackendId value) { return catalog.find(value); }
+                @Override public List<BackendView> snapshot() { return catalog.snapshot(); }
+                @Override public Optional<CapacityReservation> reserve(BackendHandle handle, int units) {
+                    if (updated.compareAndSet(false, true)) catalog.update(handle, moved).orElseThrow();
+                    return catalog.reserve(handle, units);
+                }
+            };
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    movingCatalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    try (Socket backend = newServer.accept()) {
+                        backend.setSoTimeout(5000);
+                        var input = new DataInputStream(backend.getInputStream());
+                        assertEquals(0, readVarInt(readFrame(input)));
+                        assertEquals(0, readVarInt(readFrame(input)));
+                        var success = new ByteArrayOutputStream();
+                        writeVarInt(success, 2);
+                        writeString(success, uuid.toString());
+                        writeString(success, username);
+                        writeFrame(new DataOutputStream(backend.getOutputStream()), success.toByteArray());
+                        assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
+                        assertEquals(1, catalog.find(original.handle().id()).orElseThrow().connectedPlayers());
+                        assertEquals(moved.address(), catalog.find(original.handle().id()).orElseThrow().address());
+                    }
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+            assertTrue(updated.get());
+            assertEquals(1, catalog.find(original.handle().id()).orElseThrow().availableUnits());
         }
     }
 
