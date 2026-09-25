@@ -8,8 +8,8 @@ import io.netty.util.ReferenceCountUtil;
 
 import java.util.ArrayDeque;
 
-/** Holds complete client frames only while the session changes backend. */
-final class TransferInboundBuffer extends ChannelInboundHandlerAdapter {
+/** Holds decoded frames on either side of the old session during backend cutover. */
+final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     private static final int MAX_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final int MAX_MESSAGES = 1024;
 
@@ -19,7 +19,7 @@ final class TransferInboundBuffer extends ChannelInboundHandlerAdapter {
     private int bytes;
     private boolean draining;
 
-    TransferInboundBuffer(Runnable closeSession) {
+    TransferFrameBuffer(Runnable closeSession) {
         this.closeSession = closeSession;
     }
 

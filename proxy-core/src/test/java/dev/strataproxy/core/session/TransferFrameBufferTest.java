@@ -11,10 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-final class TransferInboundBufferTest {
+final class TransferFrameBufferTest {
     @Test
     void replaysFramesInOrderAndTransfersOwnership() {
-        var buffer = new TransferInboundBuffer(() -> { });
+        var buffer = new TransferFrameBuffer(() -> { });
         var channel = new EmbeddedChannel(buffer);
         try {
             ByteBuf first = Unpooled.wrappedBuffer(new byte[]{1});
@@ -37,7 +37,7 @@ final class TransferInboundBufferTest {
 
     @Test
     void closingBeforeReplayReleasesQueuedFrame() {
-        var channel = new EmbeddedChannel(new TransferInboundBuffer(() -> { }));
+        var channel = new EmbeddedChannel(new TransferFrameBuffer(() -> { }));
         ByteBuf queued = Unpooled.wrappedBuffer(new byte[]{3});
         channel.writeInbound(queued);
         channel.close();
@@ -49,7 +49,7 @@ final class TransferInboundBufferTest {
     @Test
     void exceedingCutoverLimitRejectsTheNewFrame() {
         var overflows = new AtomicInteger();
-        var channel = new EmbeddedChannel(new TransferInboundBuffer(overflows::incrementAndGet));
+        var channel = new EmbeddedChannel(new TransferFrameBuffer(overflows::incrementAndGet));
         try {
             ByteBuf first = Unpooled.wrappedBuffer(new byte[2 * 1024 * 1024]);
             ByteBuf overflow = Unpooled.wrappedBuffer(new byte[]{4});

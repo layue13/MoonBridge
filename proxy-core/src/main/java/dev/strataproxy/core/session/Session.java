@@ -626,14 +626,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
         }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
         try {
-            ChannelPipeline pipeline = frontend.pipeline();
-            String decoder = pipeline.get("encrypted-frame-decoder") != null
-                    ? "encrypted-frame-decoder" : "minecraft-frame-decoder";
-            var buffer = new TransferInboundBuffer(this::closePair);
-            pipeline.addAfter(decoder, "transfer-inbound-buffer", buffer);
-            attempt.clientBuffer = buffer;
+            attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
+            attempt.oldBackendBuffer = installTransferBuffer(backend, "transfer-old-backend-buffer");
         } catch (RuntimeException failure) {
-            failTransfer(attempt, "could not buffer client frames for transfer");
+            failTransfer(attempt, "could not buffer frames for transfer");
             closePair();
             return;
         }
@@ -676,6 +672,15 @@ final class Session extends ChannelInboundHandlerAdapter {
                         activateCandidate(attempt);
                     }));
         }));
+    }
+
+    private TransferFrameBuffer installTransferBuffer(Channel channel, String name) {
+        ChannelPipeline pipeline = channel.pipeline();
+        String decoder = pipeline.get("encrypted-frame-decoder") != null
+                ? "encrypted-frame-decoder" : "minecraft-frame-decoder";
+        var buffer = new TransferFrameBuffer(this::closePair);
+        pipeline.addAfter(decoder, name, buffer);
+        return buffer;
     }
 
     private boolean clientHasPartialFrame() {
@@ -854,9 +859,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void completeFailedTransfer(TransferAttempt attempt) {
-        if (attempt.clientBuffer != null && !attempt.detached && !closed.get()) {
+        if (!attempt.detached && !closed.get()) {
             try {
-                attempt.clientBuffer.drainAndRemove();
+                if (attempt.oldBackendBuffer != null) attempt.oldBackendBuffer.drainAndRemove();
+                if (attempt.clientBuffer != null) attempt.clientBuffer.drainAndRemove();
             } catch (RuntimeException failure) {
                 closePair();
             }
@@ -923,7 +929,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         private final RawRelay.Link oldRelay;
         private TransferCandidate candidate;
         private TransferFrameHandler.State frameState;
-        private TransferInboundBuffer clientBuffer;
+        private TransferFrameBuffer clientBuffer;
+        private TransferFrameBuffer oldBackendBuffer;
         private Channel channel;
         private boolean pauseInProgress;
         private boolean paused;

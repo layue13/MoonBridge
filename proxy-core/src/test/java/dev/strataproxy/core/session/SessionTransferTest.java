@@ -225,7 +225,7 @@ final class SessionTransferTest {
                     boolean bufferInstalled = false;
                     for (int i = 0; i < 200 && !bufferInstalled; i++) {
                         bufferInstalled = frontend.eventLoop().submit(() ->
-                                frontend.pipeline().get("transfer-inbound-buffer") != null)
+                                frontend.pipeline().get("transfer-client-buffer") != null)
                                 .get(1, TimeUnit.SECONDS);
                         if (!bufferInstalled) Thread.sleep(5);
                     }
@@ -233,6 +233,8 @@ final class SessionTransferTest {
                     frontend.eventLoop().submit(() -> frontend.pipeline().fireChannelRead(
                             Unpooled.wrappedBuffer(new byte[]{2, 0x01, 0x55, 2, 0x01})))
                             .get(5, TimeUnit.SECONDS);
+                    oldChannel.eventLoop().submit(() -> oldChannel.pipeline().fireChannelRead(
+                            Unpooled.wrappedBuffer(new byte[]{2, 0x03, 0x77}))).get(5, TimeUnit.SECONDS);
                     oldChannel.eventLoop().submit(() -> {
                         Object message = heldMessage.getAndSet(null);
                         ChannelPromise promise = heldPromise.getAndSet(null);
@@ -244,10 +246,121 @@ final class SessionTransferTest {
                     assertTrue(result.detail().orElse("").contains("incomplete"));
                     assertEquals("old", listener.find(player.identity()).orElseThrow()
                             .currentServer().orElseThrow());
+                    assertArrayEquals(new byte[]{0x03, 0x77}, readFrame(input));
                     frontend.eventLoop().submit(() -> frontend.pipeline().fireChannelRead(
                             Unpooled.wrappedBuffer(new byte[]{0x66}))).get(5, TimeUnit.SECONDS);
                     oldReceived.get(5, TimeUnit.SECONDS);
                     newClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void oldBackendFrameDuringCutoverDoesNotCancelTransfer() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var newReceived = new CompletableFuture<byte[]>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    acceptLogin(input, new DataOutputStream(socket.getOutputStream()), 0);
+                    assertArrayEquals(new byte[]{0x01, 0x44}, readFrame(input));
+                    assertEquals(-1, input.read());
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    sendJoinGame(output, 0, 200);
+                    writeFrame(output, new byte[]{0x08});
+                    newReceived.complete(readFrame(input));
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { newReceived.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    sendLogin(output);
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+
+                    var session = listener.allSessions().iterator().next();
+                    var backendField = Session.class.getDeclaredField("backend");
+                    backendField.setAccessible(true);
+                    Channel oldChannel = (Channel) backendField.get(session);
+                    var frontendField = Session.class.getDeclaredField("frontend");
+                    frontendField.setAccessible(true);
+                    Channel frontend = (Channel) frontendField.get(session);
+                    var firstWriteHeld = new CompletableFuture<Void>();
+                    var holdNext = new AtomicBoolean(true);
+                    var heldMessage = new AtomicReference<Object>();
+                    var heldPromise = new AtomicReference<ChannelPromise>();
+                    var heldContext = new AtomicReference<ChannelHandlerContext>();
+                    oldChannel.eventLoop().submit(() -> oldChannel.pipeline().addFirst("hold-one-old-write",
+                            new ChannelDuplexHandler() {
+                                @Override public void write(ChannelHandlerContext ctx, Object message,
+                                                            ChannelPromise promise) {
+                                    if (!holdNext.compareAndSet(true, false)) {
+                                        ctx.write(message, promise);
+                                        return;
+                                    }
+                                    heldMessage.set(message);
+                                    heldPromise.set(promise);
+                                    heldContext.set(ctx);
+                                    firstWriteHeld.complete(null);
+                                }
+
+                                @Override public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                    ReferenceCountUtil.release(heldMessage.getAndSet(null));
+                                    ChannelPromise promise = heldPromise.getAndSet(null);
+                                    if (promise != null) promise.tryFailure(new IllegalStateException("old backend closed"));
+                                    super.channelInactive(ctx);
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    writeFrame(output, new byte[]{0x01, 0x44});
+                    firstWriteHeld.get(5, TimeUnit.SECONDS);
+
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    boolean bufferInstalled = false;
+                    for (int i = 0; i < 200 && !bufferInstalled; i++) {
+                        bufferInstalled = frontend.eventLoop().submit(() ->
+                                frontend.pipeline().get("transfer-client-buffer") != null)
+                                .get(1, TimeUnit.SECONDS);
+                        if (!bufferInstalled) Thread.sleep(5);
+                    }
+                    assertTrue(bufferInstalled, "candidate should reach the cutover buffer");
+                    oldChannel.eventLoop().submit(() -> oldChannel.pipeline().fireChannelRead(
+                            Unpooled.wrappedBuffer(new byte[]{2, 0x03, 0x77}))).get(5, TimeUnit.SECONDS);
+                    oldChannel.eventLoop().submit(() -> {
+                        Object message = heldMessage.getAndSet(null);
+                        ChannelPromise promise = heldPromise.getAndSet(null);
+                        heldContext.get().writeAndFlush(message, promise);
+                    }).get(5, TimeUnit.SECONDS);
+
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.get(5, TimeUnit.SECONDS).status());
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    writeFrame(output, new byte[]{0x01, 0x55});
+                    assertArrayEquals(new byte[]{0x01, 0x55}, newReceived.get(5, TimeUnit.SECONDS));
+                    oldClosed.get(5, TimeUnit.SECONDS);
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
