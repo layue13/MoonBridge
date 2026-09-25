@@ -8,11 +8,13 @@ import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PlayObservationTest {
@@ -76,6 +78,52 @@ final class PlayObservationTest {
                 assertFalse(state.forgeSeen());
             } finally { packet.release(); }
         }
+    }
+
+    @Test
+    void readinessReleasesAnUnrelatedPartialFrameAfterTheCurrentTapReturns() throws Exception {
+        try (var state = new PlayObservation()) {
+            ByteBuf partial = Unpooled.buffer();
+            try {
+                ProtocolVarInt.write(partial, 1000);
+                partial.writeZero(64);
+                state.observeStream(false, partial);
+            } finally { partial.release(); }
+            ByteBuf retained = pendingFrame(state);
+            assertNotNull(retained);
+            assertEquals(1, retained.refCnt());
+
+            ByteBuf join = Unpooled.buffer();
+            ByteBuf position = Unpooled.buffer();
+            ByteBuf stream = Unpooled.buffer();
+            try {
+                ProtocolVarInt.write(join, 1);
+                join.writeInt(3).writeByte(0).writeByte(0).writeByte(1).writeByte(20);
+                byte[] level = "default".getBytes(StandardCharsets.UTF_8);
+                ProtocolVarInt.write(join, level.length);
+                join.writeBytes(level);
+                ProtocolVarInt.write(position, 8);
+                ProtocolVarInt.write(stream, join.readableBytes());
+                stream.writeBytes(join);
+                ProtocolVarInt.write(stream, position.readableBytes());
+                stream.writeBytes(position);
+                state.observeStream(true, stream);
+                assertTrue(state.ready().isDone());
+                assertEquals(0, retained.refCnt());
+            } finally {
+                stream.release();
+                position.release();
+                join.release();
+            }
+        }
+    }
+
+    private static ByteBuf pendingFrame(PlayObservation observation) throws Exception {
+        Field tapField = PlayObservation.class.getDeclaredField("clientFrames");
+        tapField.setAccessible(true);
+        Field pendingField = PacketStreamTap.class.getDeclaredField("pending");
+        pendingField.setAccessible(true);
+        return (ByteBuf) pendingField.get(tapField.get(observation));
     }
 
     private static void sendFml(PlayObservation state, boolean clientbound, int... payload) {

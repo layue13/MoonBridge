@@ -23,11 +23,19 @@ final class PlayObservation implements AutoCloseable {
     private OptionalInt dimension = OptionalInt.empty();
     private OptionalInt forgeDimensionOverride = OptionalInt.empty();
     private OptionalInt entityId = OptionalInt.empty();
+    private int streamObservationDepth;
+    private boolean tapsClosed;
 
     void observeStream(boolean clientbound, ByteBuf bytes) {
         if (ready.isDone()) return;
-        if (clientbound) backendFrames.accept(bytes);
-        else clientFrames.accept(bytes);
+        streamObservationDepth++;
+        try {
+            if (clientbound) backendFrames.accept(bytes);
+            else clientFrames.accept(bytes);
+        } finally {
+            streamObservationDepth--;
+            releaseTapsIfReady();
+        }
     }
 
     void observePacket(boolean clientbound, ByteBuf packet) {
@@ -63,6 +71,7 @@ final class PlayObservation implements AutoCloseable {
             });
         }
         if (joinSeen && forgeSeen && backendComplete && clientComplete) ready.complete(null);
+        releaseTapsIfReady();
     }
 
     CompletableFuture<Void> ready() { return ready; }
@@ -71,8 +80,18 @@ final class PlayObservation implements AutoCloseable {
     OptionalInt entityId() { return entityId; }
 
     @Override public void close() {
+        releaseTapsIfIdle();
+        if (!ready.isDone()) ready.completeExceptionally(new IllegalStateException("session closed"));
+    }
+
+    private void releaseTapsIfReady() {
+        if (ready.isDone()) releaseTapsIfIdle();
+    }
+
+    private void releaseTapsIfIdle() {
+        if (streamObservationDepth != 0 || tapsClosed) return;
+        tapsClosed = true;
         clientFrames.close();
         backendFrames.close();
-        if (!ready.isDone()) ready.completeExceptionally(new IllegalStateException("session closed"));
     }
 }
