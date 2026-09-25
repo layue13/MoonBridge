@@ -86,6 +86,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private KeepAliveBridge.State keepAlives;
     private RawRelay.Link relay;
     private Integer clientEntityId;
+    private boolean clientFmlAwaitingServerHello;
     private TransferFrameHandler.State frameState;
     private PendingTransfer pendingTransfer;
     private TransferAttempt transfer;
@@ -908,10 +909,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf output = frontend.alloc().buffer();
         List<ByteBuf> queued = attempt.candidate.takeQueuedPackets();
         try {
-            if (attempt.candidate.observation().forgeSeen()) {
+            boolean nextForge = attempt.candidate.observation().forgeSeen();
+            // FML's reset also restores the client's frozen registry. A Forge -> vanilla
+            // switch needs it even though the replacement server has no ServerHello.
+            // After that reset the client remains in HELLO until a later Forge switch.
+            if (!clientFmlAwaitingServerHello && (playObservation.forgeSeen() || nextForge)) {
                 ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
                 try { output.writeBytes(reset); } finally { reset.release(); }
+                clientFmlAwaitingServerHello = true;
             }
+            if (nextForge) clientFmlAwaitingServerHello = false;
             if (attempt.candidate.joinGame() != null) {
                 int targetDimension = attempt.candidate.observation().dimension()
                         .orElse(attempt.candidate.joinGame().dimension());

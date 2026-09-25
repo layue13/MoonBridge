@@ -1103,11 +1103,13 @@ final class SessionTransferTest {
     }
 
     @Test
-    void forgeToVanillaTransferDoesNotLeaveClientWaitingForAnotherForgeHandshake() throws Exception {
+    void forgeToVanillaThenForgeResetsClientRegistryOnlyOnce() throws Exception {
         var catalog = new InMemoryBackendCatalog();
-        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server(); ServerSocket thirdServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
             var newRelayed = new CompletableFuture<Void>();
+            var vanillaClosed = new CompletableFuture<Void>();
+            var thirdNegotiated = new CompletableFuture<Void>();
             backendThread(oldServer, () -> {
                 try (Socket socket = oldServer.accept()) {
                     socket.setSoTimeout(5000);
@@ -1132,11 +1134,31 @@ final class SessionTransferTest {
                     assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
                     writeFrame(output, new byte[]{0x03, 0x44});
                     newRelayed.complete(null);
+                    assertEquals(-1, input.read());
+                    vanillaClosed.complete(null);
+                } catch (Throwable failure) {
+                    newRelayed.completeExceptionally(failure);
+                    vanillaClosed.completeExceptionally(failure);
+                }
+            });
+            backendThread(thirdServer, () -> {
+                try (Socket socket = thirdServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    writeFrame(output, serverForgeHello(7));
+                    writeFrame(output, serverForgeAck());
+                    assertArrayEquals(clientForgeAck(), readFrame(input));
+                    sendJoinGame(output, 0, 300);
+                    thirdNegotiated.complete(null);
                     while (input.read() != -1) { }
-                } catch (Throwable failure) { newRelayed.completeExceptionally(failure); }
+                } catch (Throwable failure) { thirdNegotiated.completeExceptionally(failure); }
             });
             register(catalog, "old", oldServer);
             register(catalog, "new", newServer);
+            register(catalog, "third", thirdServer);
             var listener = listener(catalog);
             try {
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
@@ -1155,13 +1177,27 @@ final class SessionTransferTest {
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
-                    assertEquals(-1, respawnDimension(readFrame(input))); // No FML Reset before the vanilla world.
+                    byte[] reset = readFrame(input);
+                    assertEquals(0x3f, packetId(reset));
+                    assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertEquals(-1, respawnDimension(readFrame(input)));
                     assertEquals(0, respawnDimension(readFrame(input)));
                     assertEquals(8, packetId(readFrame(input)));
                     writeFrame(output, new byte[]{0x01, 0x33});
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newRelayed.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
+
+                    var thirdTransfer = listener.transfer(player.identity(), "third").toCompletableFuture();
+                    assertArrayEquals(serverForgeHello(7), readFrame(input)); // Reset already left FML in HELLO.
+                    assertArrayEquals(serverForgeAck(), readFrame(input));
+                    writeFrame(output, clientForgeAck());
+                    assertEquals(-1, respawnDimension(readFrame(input)));
+                    assertEquals(7, respawnDimension(readFrame(input)));
+                    assertEquals(TransferStatus.NETWORK_READY,
+                            thirdTransfer.get(5, TimeUnit.SECONDS).status());
+                    thirdNegotiated.get(5, TimeUnit.SECONDS);
+                    vanillaClosed.get(5, TimeUnit.SECONDS);
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
