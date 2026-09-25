@@ -1,5 +1,6 @@
 package dev.strataproxy.core.session;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.core.auth.MinecraftEncryptionRequest;
 import dev.strataproxy.core.auth.MinecraftEncryptionResponse;
@@ -25,6 +26,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +41,130 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
+    @Test
+    void placementRejectionSendsItsReasonAsALoginDisconnect() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+        String reason = "空岛 \"alpha\" 正在唤醒";
+        listener.setPlacement(player -> CompletableFuture.completedFuture(
+                Optional.of(PlacementDecision.reject(reason))));
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                client.setSoTimeout(5000);
+                sendLogin(client, "WaitingPlayer");
+                DataInputStream input = new DataInputStream(client.getInputStream());
+                var packet = new java.io.ByteArrayInputStream(readFrame(input));
+                assertEquals(0, readVarInt(packet));
+                String component = readString(packet, 32767);
+                assertEquals(reason, new ObjectMapper().readTree(component).path("text").asText());
+                assertEquals(0, packet.available());
+                assertEquals(-1, input.read());
+            }
+            assertTrue(listener.online().isEmpty());
+            assertTrue(catalog.snapshot().isEmpty());
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void initialPlacementCanOutlastTheHandshakeDeadline() throws Exception {
+        String username = "SlowPlacement";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var releaseBackend = new java.util.concurrent.CountDownLatch(1);
+            var backendDone = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    ByteArrayOutputStream success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    releaseBackend.await(5, TimeUnit.SECONDS);
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-slow-placement-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofMillis(300), Duration.ofSeconds(1));
+            listener.setPlacement(player -> {
+                var decision = new CompletableFuture<Optional<PlacementDecision>>();
+                CompletableFuture.delayedExecutor(600, TimeUnit.MILLISECONDS)
+                        .execute(() -> decision.complete(Optional.of(PlacementDecision.select("lobby"))));
+                return decision;
+            });
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
+                }
+            } finally {
+                releaseBackend.countDown();
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void backendLoginStillHasADeadlineAfterPlacement() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var releaseBackend = new java.util.concurrent.CountDownLatch(1);
+            var backendAccepted = new CompletableFuture<Void>();
+            var backendDone = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    backendAccepted.complete(null);
+                    releaseBackend.await(5, TimeUnit.SECONDS);
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-silent-login-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(1), Duration.ofSeconds(1));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, "WaitingBackend");
+                    backendAccepted.get(5, TimeUnit.SECONDS);
+                    assertEquals(-1, client.getInputStream().read());
+                }
+            } finally {
+                releaseBackend.countDown();
+                backendServer.close();
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                if (backendAccepted.isDone()) backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     @Test
     void rejectsSecondConnectionForSamePlayerIdentity() throws Exception {
         String username = "SamePlayer";

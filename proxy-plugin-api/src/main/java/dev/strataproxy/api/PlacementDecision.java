@@ -24,8 +24,8 @@ public sealed interface PlacementDecision permits PlacementDecision.Select, Plac
     record Reject(String reason) implements PlacementDecision {
         public Reject {
             Objects.requireNonNull(reason, "reason");
-            if (reason.isBlank()) {
-                throw new IllegalArgumentException("reason must not be blank");
+            if (reason.isBlank() || reason.codePointCount(0, reason.length()) > 1024) {
+                throw new IllegalArgumentException("reason must contain 1 to 1024 characters");
             }
         }
     }

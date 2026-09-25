@@ -19,6 +19,7 @@ import dev.strataproxy.core.forwarding.BungeeLegacyForwarding;
 import dev.strataproxy.core.protocol.LoginStart;
 import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
 import dev.strataproxy.core.protocol.MinecraftLoginSuccess;
+import dev.strataproxy.core.protocol.MinecraftLoginDisconnect;
 import dev.strataproxy.core.protocol.MinecraftHandshake;
 import dev.strataproxy.core.protocol.ProtocolProfile;
 import dev.strataproxy.core.protocol.ProtocolVarInt;
@@ -38,6 +39,7 @@ import io.netty.util.ReferenceCountUtil;
 import java.net.InetSocketAddress;
 import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayDeque;
@@ -52,7 +54,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @io.netty.channel.ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
-    private static final int INITIAL_LOGIN_TIMEOUT_SECONDS = 15;
     private final ProxySessionListener owner;
     private final Channel frontend;
     private volatile Channel backend;
@@ -67,6 +68,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private BackendView selected;
     private CapacityReservation reservation;
     private boolean placementInProgress;
+    private boolean loginDisconnectSent;
     private volatile boolean published;
     private boolean relayStarting;
     private int transitionBufferBytes;
@@ -87,8 +89,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
         if (ctx.channel() == frontend) {
-            initialLoginDeadline = frontend.eventLoop().schedule(this::closePair,
-                    INITIAL_LOGIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            resetLoginDeadline(owner.loginStageTimeout());
         }
     }
 
@@ -217,11 +218,12 @@ final class Session extends ChannelInboundHandlerAdapter {
         view = new PlayerView(identity, username, Optional.empty());
         placementInProgress = true;
         frontend.config().setAutoRead(false);
+        resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
         CompletionStage<Optional<PlacementDecision>> stage = owner.placement().apply(view);
         stage.whenComplete((decision, failure) -> frontend.eventLoop().execute(() -> {
             if (closed.get()) return;
             if (failure != null || decision == null) {
-                closePair();
+                disconnectLogin("Could not select a server. Please try again.");
                 return;
             }
             selectBackend(decision);
@@ -243,6 +245,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void selectBackend(Optional<PlacementDecision> decision) {
         BackendView backendView;
         if (decision.isPresent()) {
+            if (decision.get() instanceof PlacementDecision.Reject rejected) {
+                disconnectLogin(rejected.reason());
+                return;
+            }
             if (!(decision.get() instanceof PlacementDecision.Select selectedDecision)) {
                 closePair();
                 return;
@@ -254,12 +260,12 @@ final class Session extends ChannelInboundHandlerAdapter {
             backendView = owner.catalog().snapshot().stream().filter(candidate -> candidate.availableUnits() > 0).findFirst().orElse(null);
         }
         if (backendView == null) {
-            closePair();
+            disconnectLogin("No server is available.");
             return;
         }
         reservation = owner.catalog().reserve(backendView.handle(), 1).orElse(null);
         if (reservation == null) {
-            closePair();
+            disconnectLogin("The selected server is full or unavailable.");
             return;
         }
         selected = backendView;
@@ -267,6 +273,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
+        resetLoginDeadline(owner.loginStageTimeout());
         Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
@@ -283,7 +290,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             if (!future.isSuccess()) {
-                closePair();
+                disconnectLogin("Could not connect to the selected server.");
                 return;
             }
             ByteBuf handshakeBody = owner.onlineMode()
@@ -300,6 +307,25 @@ final class Session extends ChannelInboundHandlerAdapter {
         pipeline.addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                 ProtocolProfile.minecraft1710(), true));
         pipeline.addLast("minecraft-frame-encoder", new SessionFrameEncoder());
+    }
+
+    private void disconnectLogin(String reason) {
+        if (closed.get() || loginDisconnectSent) return;
+        loginDisconnectSent = true;
+        frontend.config().setAutoRead(false);
+        if (!frontend.isActive()) { closePair(); return; }
+        try {
+            frontend.writeAndFlush(MinecraftLoginDisconnect.encode(frontend.alloc(), reason))
+                    .addListener(ignored -> closePair());
+        } catch (RuntimeException failure) {
+            closePair();
+        }
+    }
+
+    private void resetLoginDeadline(Duration timeout) {
+        if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
+        initialLoginDeadline = frontend.eventLoop().schedule(this::closePair,
+                timeout.toNanos(), TimeUnit.NANOSECONDS);
     }
 
     private void receiveBackend(ByteBuf packet) {

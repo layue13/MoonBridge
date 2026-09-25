@@ -61,6 +61,7 @@ public final class ProxyMain {
         var configuration = new ProxyConfigurationLoader().load(configPath);
         var catalog = new InMemoryBackendCatalog();
         StaticBackends.register(configuration, catalog);
+        Duration placementTimeout = Duration.ofSeconds(configuration.plugins().initialPlacementTimeoutSeconds());
         ExecutorService verifierWorkers = configuration.authentication() == ProxyConfiguration.Authentication.ONLINE_BUNGEE
                 ? Executors.newFixedThreadPool(2, task -> {
                     Thread thread = new Thread(task, "strataproxy-session-verify");
@@ -68,11 +69,10 @@ public final class ProxyMain {
                     return thread;
                 }) : null;
         var listener = verifierWorkers == null
-                ? new ProxySessionListener(configuration.listenAddress(), catalog)
+                ? new ProxySessionListener(configuration.listenAddress(), catalog, null, placementTimeout)
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
-                        new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers));
-        try (var plugins = new PluginHost(catalog, listener,
-                Duration.ofSeconds(configuration.plugins().initialPlacementTimeoutSeconds()))) {
+                        new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
+        try (var plugins = new PluginHost(catalog, listener, placementTimeout)) {
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();

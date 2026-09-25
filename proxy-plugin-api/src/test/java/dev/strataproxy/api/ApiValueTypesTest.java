@@ -34,4 +34,11 @@ class ApiValueTypesTest {
         assertTrue(!new PlayerIdentity(id, 1).equals(new PlayerIdentity(id, 2)));
         assertThrows(IllegalArgumentException.class, () -> new PlayerIdentity(id, -1));
     }
+
+    @Test
+    void placementRejectionBoundsTheClientVisibleReason() {
+        assertEquals("Try again later", ((PlacementDecision.Reject) PlacementDecision.reject("Try again later")).reason());
+        assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject(" "));
+        assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject("x".repeat(1025)));
+    }
 }

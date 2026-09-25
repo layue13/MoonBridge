@@ -23,6 +23,7 @@ import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -40,6 +41,8 @@ public final class ProxySessionListener implements Players {
     private final SocketAddress bindAddress;
     private final BackendCatalog catalog;
     private final SessionVerifier verifier;
+    private final Duration loginStageTimeout;
+    private final Duration placementTimeout;
     private final KeyPair encryptionKeys;
     private final SecureRandom random = new SecureRandom();
     private final EventLoopGroup boss = new NioEventLoopGroup(1, namedFactory("strataproxy-session-accept"));
@@ -54,14 +57,32 @@ public final class ProxySessionListener implements Players {
     private volatile CompletableFuture<Void> shutdown;
 
     public ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog) {
-        this(bindAddress, catalog, null);
+        this(bindAddress, catalog, null, Duration.ofSeconds(15));
     }
 
     /** A non-null verifier enables online authentication and trusted legacy identity forwarding. */
     public ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier) {
+        this(bindAddress, catalog, verifier, Duration.ofSeconds(15));
+    }
+
+    public ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog,
+                                SessionVerifier verifier, Duration placementTimeout) {
+        this(bindAddress, catalog, verifier, Duration.ofSeconds(15), placementTimeout);
+    }
+
+    ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                         Duration loginStageTimeout, Duration placementTimeout) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.verifier = verifier;
+        this.loginStageTimeout = Objects.requireNonNull(loginStageTimeout, "loginStageTimeout");
+        this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
+        if (loginStageTimeout.isZero() || loginStageTimeout.isNegative()
+                || placementTimeout.isZero() || placementTimeout.isNegative()
+                || loginStageTimeout.compareTo(Duration.ofMinutes(3)) > 0
+                || placementTimeout.compareTo(Duration.ofMinutes(3)) > 0) {
+            throw new IllegalArgumentException("login stage and placement timeouts must be within three minutes");
+        }
         try {
             if (verifier == null) encryptionKeys = null;
             else {
@@ -176,6 +197,8 @@ public final class ProxySessionListener implements Players {
     BackendCatalog catalog() { return catalog; }
     boolean onlineMode() { return verifier != null; }
     SessionVerifier verifier() { return verifier; }
+    Duration loginStageTimeout() { return loginStageTimeout; }
+    Duration placementTimeout() { return placementTimeout; }
     KeyPair encryptionKeys() { return encryptionKeys; }
     MinecraftEncryptionRequest newEncryptionRequest() {
         return MinecraftEncryptionRequest.create("", encryptionKeys.getPublic(), random);
