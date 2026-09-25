@@ -3,7 +3,8 @@ param(
     [int]$Messages = 1000,
     [int]$Warmup = 100,
     [int]$Payload = 1024,
-    [int]$Repeats = 2
+    [int]$Repeats = 2,
+    [int]$Window = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +22,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
 
     & java -cp "$classes;$installLib\*" RelayBenchmark `
-        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats
+        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats --window $Window
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
 }
 finally {

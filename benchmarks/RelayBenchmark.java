@@ -25,8 +25,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.AtomicReference;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -45,9 +48,10 @@ public final class RelayBenchmark {
         int warmup = intArg(args, "warmup", 100);
         int payload = intArg(args, "payload", 1024);
         int repeats = intArg(args, "repeats", 2);
+        int window = intArg(args, "window", 1);
         if (connections < 1 || messages < 1 || warmup < 0 || payload < 1 || payload > 1_048_576
-                || repeats < 1 || repeats > 10)
-            throw new IllegalArgumentException("connections/messages/payload must be positive; warmup nonnegative; payload <= 1048576; repeats 1..10");
+                || repeats < 1 || repeats > 10 || window < 1 || window > 1024)
+            throw new IllegalArgumentException("connections/messages/payload must be positive; warmup nonnegative; payload <= 1048576; repeats 1..10; window 1..1024");
 
         var benchmark = new RelayBenchmark();
         try {
@@ -55,20 +59,20 @@ public final class RelayBenchmark {
             int rawPort = benchmark.startRelay(backendPort, false);
             int framedPort = benchmark.startRelay(backendPort, true);
             byte[] body = frame(payload);
-            System.out.printf("Synthetic loopback TCP echo; frame_payload=%d bytes wire_frame=%d bytes connections=%d measured_messages_per_connection=%d warmup_per_connection=%d repeats=%d%n",
-                    payload, body.length, connections, messages, warmup, repeats);
+            System.out.printf("Synthetic loopback TCP echo; frame_payload=%d bytes wire_frame=%d bytes connections=%d measured_messages_per_connection=%d warmup_per_connection=%d repeats=%d window=%d%n",
+                    payload, body.length, connections, messages, warmup, repeats, window);
             System.out.println("Comparison: direct echo, byte-stream RawRelay, and Session-style framed RawRelay; connect/setup time excluded.");
-            benchmark.run("baseline-start", backendPort, connections, messages, warmup, body);
+            benchmark.run("baseline-start", backendPort, connections, messages, warmup, window, body);
             for (int round = 1; round <= repeats; round++) {
                 if ((round & 1) == 1) {
-                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, body);
-                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, body);
+                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, window, body);
+                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, window, body);
                 } else {
-                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, body);
-                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, body);
+                    benchmark.run("framed-relay-" + round, framedPort, connections, messages, warmup, window, body);
+                    benchmark.run("raw-relay-" + round, rawPort, connections, messages, warmup, window, body);
                 }
             }
-            benchmark.run("baseline-end", backendPort, connections, messages, warmup, body);
+            benchmark.run("baseline-end", backendPort, connections, messages, warmup, window, body);
             long expectedBytes = (long) connections * (messages + warmup) * body.length * (2 + 2L * repeats);
             if (RELAYED.get() != expectedBytes) throw new IllegalStateException("backend byte count mismatch");
             System.out.printf("backend_received_wire_bytes_all_phases=%d%n", RELAYED.get());
@@ -140,7 +144,8 @@ public final class RelayBenchmark {
         return bytes;
     }
 
-    private void run(String label, int port, int connections, int messages, int warmup, byte[] body) throws Exception {
+    private void run(String label, int port, int connections, int messages, int warmup, int window,
+                     byte[] body) throws Exception {
         List<Worker> workers = new ArrayList<>();
         CountDownLatch ready = new CountDownLatch(connections);
         CountDownLatch start = new CountDownLatch(1);
@@ -150,7 +155,7 @@ public final class RelayBenchmark {
         long[] gcBefore = gcTotals();
         long wallStart;
         for (int i = 0; i < connections; i++) {
-            Worker worker = new Worker(port, messages, warmup, body, ready, start, finished);
+            Worker worker = new Worker(port, messages, warmup, window, body, ready, start, finished);
             workers.add(worker);
             new Thread(worker, "bench-" + label + "-" + i).start();
         }
@@ -201,39 +206,83 @@ public final class RelayBenchmark {
     }
 
     private static final class Worker implements Runnable {
-        private final int port, messages, warmup;
+        private final int port, messages, warmup, window;
         private final byte[] body;
         private final CountDownLatch ready, start, finished;
         private long[] latencies;
         private volatile Exception failure;
-        Worker(int port, int messages, int warmup, byte[] body, CountDownLatch ready, CountDownLatch start, CountDownLatch finished) {
-            this.port = port; this.messages = messages; this.warmup = warmup; this.body = body;
+        Worker(int port, int messages, int warmup, int window, byte[] body,
+               CountDownLatch ready, CountDownLatch start, CountDownLatch finished) {
+            this.port = port; this.messages = messages; this.warmup = warmup; this.window = window; this.body = body;
             this.ready = ready; this.start = start; this.finished = finished;
             this.latencies = new long[messages];
         }
         @Override public void run() {
             try (Socket socket = new Socket()) {
                 socket.setTcpNoDelay(true);
+                socket.setSoTimeout(30_000);
                 socket.connect(new InetSocketAddress("127.0.0.1", port), 10_000);
                 InputStream in = socket.getInputStream();
                 OutputStream out = socket.getOutputStream();
                 byte[] response = new byte[body.length];
-                for (int i = 0; i < warmup; i++) exchange(out, in, body, response);
+                exchangeMessages(socket, out, in, body, response, warmup, window, null);
                 ready.countDown();
                 start.await();
-                for (int i = 0; i < messages; i++) {
-                    long before = System.nanoTime();
-                    exchange(out, in, body, response);
-                    latencies[i] = System.nanoTime() - before;
-                }
+                exchangeMessages(socket, out, in, body, response, messages, window, latencies);
             } catch (Exception failure) {
                 this.failure = failure;
                 ready.countDown();
                 latencies = new long[0];
             } finally { finished.countDown(); }
         }
-        private static void exchange(OutputStream out, InputStream in, byte[] body, byte[] response) throws Exception {
-            out.write(body); out.flush();
+        private static void exchangeMessages(Socket socket, OutputStream out, InputStream in,
+                                             byte[] body, byte[] response, int count, int window,
+                                             long[] latencies) throws Exception {
+            if (window == 1) {
+                for (int i = 0; i < count; i++) {
+                    long sentAt = latencies == null ? 0 : System.nanoTime();
+                    out.write(body);
+                    out.flush();
+                    readEcho(in, body, response);
+                    if (latencies != null) latencies[i] = System.nanoTime() - sentAt;
+                }
+                return;
+            }
+
+            Semaphore inFlight = new Semaphore(window);
+            AtomicLongArray sentAt = latencies == null ? null : new AtomicLongArray(count);
+            AtomicReference<Exception> writerFailure = new AtomicReference<>();
+            Thread writer = new Thread(() -> {
+                try {
+                    for (int i = 0; i < count; i++) {
+                        inFlight.acquire();
+                        if (sentAt != null) sentAt.set(i, System.nanoTime());
+                        out.write(body);
+                        out.flush();
+                    }
+                } catch (Exception failure) {
+                    writerFailure.set(failure);
+                    try { socket.close(); } catch (Exception ignored) { }
+                }
+            }, "bench-pipelined-writer");
+            writer.start();
+            try {
+                for (int i = 0; i < count; i++) {
+                    readEcho(in, body, response);
+                    if (latencies != null) latencies[i] = System.nanoTime() - sentAt.get(i);
+                    inFlight.release();
+                }
+            } catch (Exception failure) {
+                writer.interrupt();
+                socket.close();
+                throw failure;
+            } finally {
+                writer.join();
+            }
+            if (writerFailure.get() != null) throw writerFailure.get();
+        }
+
+        private static void readEcho(InputStream in, byte[] body, byte[] response) throws Exception {
             int offset = 0;
             while (offset < response.length) {
                 int read = in.read(response, offset, response.length - offset);
