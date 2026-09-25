@@ -3,11 +3,14 @@ package dev.strataproxy.core.relay;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -15,6 +18,60 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RawRelayTest {
+    @Test
+    void pauseDuringStartupDrainLeavesTheRelayPaused() throws Exception {
+        var holdFirst = new AtomicBoolean(true);
+        var heldContext = new AtomicReference<ChannelHandlerContext>();
+        var heldMessage = new AtomicReference<Object>();
+        var heldPromise = new AtomicReference<ChannelPromise>();
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                if (holdFirst.compareAndSet(true, false)) {
+                    heldContext.set(ctx);
+                    heldMessage.set(message);
+                    heldPromise.set(promise);
+                } else {
+                    ctx.write(message, promise);
+                }
+            }
+        });
+        try {
+            var link = RawRelay.attach(client, backend);
+            pump(client, backend);
+            var first = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(first);
+            pump(client, backend);
+
+            link.start();
+            pump(client, backend);
+            assertSame(first, heldMessage.get());
+            var pausing = link.pause().toCompletableFuture();
+            pump(client, backend);
+            assertTrue(!pausing.isDone());
+
+            Object pending = heldMessage.getAndSet(null);
+            heldContext.get().writeAndFlush(pending, heldPromise.get());
+            for (int i = 0; i < 8 && !pausing.isDone(); i++) pump(client, backend);
+            assertTrue(heldPromise.get().isDone(), "held outbound promise must complete");
+            pausing.get(1, TimeUnit.SECONDS);
+            var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
+            assertSame(first, forwarded);
+            forwarded.release();
+
+            var second = Unpooled.wrappedBuffer(new byte[] {2});
+            client.writeInbound(second);
+            pump(client, backend);
+            assertNull(backend.readOutbound());
+            assertEquals(1, second.refCnt());
+        } finally {
+            Object pending = heldMessage.getAndSet(null);
+            if (pending != null) io.netty.util.ReferenceCountUtil.release(pending);
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
     @Test
     void holdsAnInFlightReadUntilTheRelayStarts() {
         var client = new EmbeddedChannel();

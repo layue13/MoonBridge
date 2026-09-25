@@ -214,6 +214,14 @@ public final class RawRelay {
                     result.completeExceptionally(new IllegalStateException("relay is closed"));
                     return;
                 }
+                if (resumeComplete != null) {
+                    // A replay owns the queued buffers until its last write completes.
+                    resumeComplete.whenComplete((ignored, failure) -> {
+                        if (failure != null) result.completeExceptionally(failure);
+                        else pause().whenComplete((unused, pauseFailure) -> completeFrom(result, pauseFailure));
+                    });
+                    return;
+                }
                 if (paused && pauseComplete != null) {
                     pauseComplete.whenComplete((ignored, failure) -> {
                         if (failure == null) result.complete(null);
