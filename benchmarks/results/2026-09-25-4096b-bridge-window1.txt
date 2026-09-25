@@ -1,0 +1,37 @@
+Reusing configuration cache.
+> Task :proxy-plugin-api:processResources NO-SOURCE
+> Task :dns-discovery:processResources UP-TO-DATE
+> Task :proxy-core:processResources UP-TO-DATE
+> Task :agent-discovery:processResources UP-TO-DATE
+> Task :proxy-plugin-api:compileJava UP-TO-DATE
+> Task :proxy-plugin-api:classes UP-TO-DATE
+> Task :dns-discovery:compileJava UP-TO-DATE
+> Task :agent-discovery:compileJava UP-TO-DATE
+> Task :proxy-core:compileJava UP-TO-DATE
+> Task :proxy-plugin-api:jar UP-TO-DATE
+> Task :agent-discovery:classes UP-TO-DATE
+> Task :proxy-core:classes UP-TO-DATE
+> Task :dns-discovery:classes UP-TO-DATE
+> Task :agent-discovery:jar UP-TO-DATE
+> Task :proxy-core:jar UP-TO-DATE
+> Task :dns-discovery:jar UP-TO-DATE
+> Task :proxy-core:startScripts UP-TO-DATE
+> Task :proxy-core:installDist UP-TO-DATE
+
+BUILD SUCCESSFUL in 20s
+13 actionable tasks: 13 up-to-date
+Configuration cache entry reused.
+Synthetic loopback TCP echo; frame_payload=4096 bytes wire_frame=4098 bytes connections=8 measured_messages_per_connection=2000 warmup_per_connection=200 repeats=3 window=1
+Comparison: direct echo, byte-stream RawRelay, framed RawRelay, and framed RawRelay with the real KeepAliveBridge; connect/setup time excluded.
+baseline-start: 129654.3 roundtrips/s, 506.71 MiB/s one-way-wire-bytes, latency_ms p50=0.057 p95=0.090 p99=0.123, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=16777216
+raw-relay-1: 60834.1 roundtrips/s, 237.75 MiB/s one-way-wire-bytes, latency_ms p50=0.110 p95=0.220 p99=0.360, gc_collections=1 gc_time_ms=2 heap_used_delta_bytes=-8028144
+framed-relay-1: 74569.7 roundtrips/s, 291.43 MiB/s one-way-wire-bytes, latency_ms p50=0.096 p95=0.154 p99=0.208, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=33554432
+framed-keepalive-1: 87329.3 roundtrips/s, 341.30 MiB/s one-way-wire-bytes, latency_ms p50=0.088 p95=0.109 p99=0.126, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+framed-keepalive-2: 93127.7 roundtrips/s, 363.96 MiB/s one-way-wire-bytes, latency_ms p50=0.083 p95=0.101 p99=0.117, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+framed-relay-2: 89560.8 roundtrips/s, 350.02 MiB/s one-way-wire-bytes, latency_ms p50=0.086 p95=0.107 p99=0.124, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=25165824
+raw-relay-2: 92840.1 roundtrips/s, 362.83 MiB/s one-way-wire-bytes, latency_ms p50=0.083 p95=0.101 p99=0.115, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=25165824
+raw-relay-3: 95185.0 roundtrips/s, 372.00 MiB/s one-way-wire-bytes, latency_ms p50=0.082 p95=0.097 p99=0.110, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+framed-relay-3: 93896.9 roundtrips/s, 366.96 MiB/s one-way-wire-bytes, latency_ms p50=0.083 p95=0.099 p99=0.112, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+framed-keepalive-3: 93707.0 roundtrips/s, 366.22 MiB/s one-way-wire-bytes, latency_ms p50=0.082 p95=0.098 p99=0.111, gc_collections=1 gc_time_ms=2 heap_used_delta_bytes=-196526944
+baseline-end: 189510.6 roundtrips/s, 740.64 MiB/s one-way-wire-bytes, latency_ms p50=0.041 p95=0.052 p99=0.061, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=12582912
+backend_received_wire_bytes_all_phases=793372800

@@ -1,0 +1,34 @@
+Reusing configuration cache.
+> Task :proxy-plugin-api:processResources NO-SOURCE
+> Task :proxy-core:processResources UP-TO-DATE
+> Task :agent-discovery:processResources UP-TO-DATE
+> Task :dns-discovery:processResources UP-TO-DATE
+> Task :proxy-plugin-api:compileJava UP-TO-DATE
+> Task :proxy-plugin-api:classes UP-TO-DATE
+> Task :agent-discovery:compileJava UP-TO-DATE
+> Task :proxy-core:compileJava UP-TO-DATE
+> Task :dns-discovery:compileJava UP-TO-DATE
+> Task :proxy-plugin-api:jar UP-TO-DATE
+> Task :agent-discovery:classes UP-TO-DATE
+> Task :proxy-core:classes UP-TO-DATE
+> Task :dns-discovery:classes UP-TO-DATE
+> Task :agent-discovery:jar UP-TO-DATE
+> Task :dns-discovery:jar UP-TO-DATE
+> Task :proxy-core:jar UP-TO-DATE
+> Task :proxy-core:startScripts UP-TO-DATE
+> Task :proxy-core:installDist UP-TO-DATE
+
+BUILD SUCCESSFUL in 20s
+13 actionable tasks: 13 up-to-date
+Configuration cache entry reused.
+Synthetic loopback TCP echo; frame_payload=4096 bytes wire_frame=4098 bytes connections=8 measured_messages_per_connection=2000 warmup_per_connection=200 repeats=3 window=1
+Comparison: direct echo, byte-stream RawRelay, and Session-style framed RawRelay; connect/setup time excluded.
+baseline-start: 125881.2 roundtrips/s, 491.96 MiB/s one-way-wire-bytes, latency_ms p50=0.056 p95=0.094 p99=0.140, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+raw-relay-1: 41820.2 roundtrips/s, 163.44 MiB/s one-way-wire-bytes, latency_ms p50=0.158 p95=0.335 p99=0.523, gc_collections=1 gc_time_ms=2 heap_used_delta_bytes=-8060912
+framed-relay-1: 44576.5 roundtrips/s, 174.21 MiB/s one-way-wire-bytes, latency_ms p50=0.166 p95=0.266 p99=0.370, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+framed-relay-2: 65524.1 roundtrips/s, 256.08 MiB/s one-way-wire-bytes, latency_ms p50=0.118 p95=0.148 p99=0.173, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=25165824
+raw-relay-2: 68612.3 roundtrips/s, 268.15 MiB/s one-way-wire-bytes, latency_ms p50=0.113 p95=0.139 p99=0.160, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+raw-relay-3: 68765.7 roundtrips/s, 268.75 MiB/s one-way-wire-bytes, latency_ms p50=0.114 p95=0.138 p99=0.156, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+framed-relay-3: 66515.4 roundtrips/s, 259.95 MiB/s one-way-wire-bytes, latency_ms p50=0.117 p95=0.144 p99=0.164, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+baseline-end: 198244.5 roundtrips/s, 774.77 MiB/s one-way-wire-bytes, latency_ms p50=0.040 p95=0.048 p99=0.056, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=4194304
+backend_received_wire_bytes_all_phases=576998400

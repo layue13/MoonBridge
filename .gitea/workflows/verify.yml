@@ -1,0 +1,24 @@
+name: Verify StrataProxy
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: https://github.com/actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: https://github.com/actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: zulu
+          java-version: '25'
+      - name: Check
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon check

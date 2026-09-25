@@ -26,7 +26,7 @@ class StrataProxyJavaLibraryConventionsPlugin : Plugin<Project> {
             "testImplementation"(project.dependencies.platform(project.libs.findLibrary("junit-bom").get()))
             "testImplementation"(project.libs.findLibrary("junit-jupiter").get())
             "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
-            "testRuntimeOnly"(project.libs.findLibrary("slf4j-simple").get())
+            "testRuntimeOnly"(project.libs.findLibrary("logback-classic").get())
         }
     }
 }

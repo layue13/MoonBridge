@@ -1,194 +1,120 @@
 # StrataProxy
 
-StrataProxy 是一个 Java 25 的 Minecraft 后端代理。它只做代理该做的事：接受玩家连接、选择可用后端、维持后端健康状态，并处理认证、转发、压缩及必要的 Forge/Bungee 协议兼容。
+StrataProxy 是面向 Minecraft 1.7.10 Forge 的玩家会话代理。项目正在从零重写；当前分支已有离线和在线模式的登录、协议转发与跨后端切换路径，尚未达到生产可用标准。
 
-项目没有管理后台、HTTP Admin API、管理 CLI、查询协议、数据包分析或监控面板。运行期扩缩容通过代理插件 API 或受限的 Bukkit 后端适配器完成；两者都只能操作后端注册表，不能管理代理进程或读取玩家数据。
+## 核心边界
 
-## 工程与产物
+- **玩家会话**：代理负责入服、连接后端、转发、切换后端和断线清理。玩家身份包含 UUID 与连接代次，避免旧连接的异步结果作用到新连接。在线玩家视图由 Session 持有，监听器只保留按 UUID 查找会话的索引。
+- **服务器目录**：静态配置与插件调用同一个注册接口。`ServerView` 只包含名称、地址、标签和插件元数据。目录不采集或暴露后端负载、连接占用和容量；玩法插件自行获取选服所需的数据。同名重注册生成新句柄，旧异步结果不能修改新条目。一次连接使用选定时的地址快照，后续注册更新只影响新选择。
+- **插件 API**：插件可查询 `PlayerView`、`ServerView`，动态注册后端，并以一个异步回调决定初始落点。空岛分配、实例唤醒和玩法数据由插件自行实现。单次选服失败或超时只结束当前请求，不停用插件；玩家断线会取消未决请求并移除尚未执行的回调，已启动的插件异步任务只做尽力取消。宿主关闭时会结束未决选服请求并撤销插件注册。插件返回的拒绝原因会作为登录断开消息发给玩家。
+- **发现方式**：DNS 是独立插件，核心不认识 DNS 或 Agent。配置只启用列出的插件；插件关闭时其注册会清理。普通 DNS 主机名通过独立解析器查询 A 与 AAAA 地址，不使用 JVM 的进程级地址缓存；`localhost` 按系统回环地址解析。最小默认选路按注册顺序选取后端，因此 DNS 插件先注册 IPv4 地址。一次查询失败会保留已有注册，连续三次失败会移除旧地址，恢复解析后重新注册。
+- **协议热路径**：同一玩家的前端和后端通道绑定同一个 Netty 事件循环，会话控制状态在该循环上串行更新。会话始终保留协议 5 的帧边界，普通数据包不重新编码并尽量复用 Netty `ByteBuf`；Keep Alive ID 在会话内转换，可同时跟踪多个未回复请求，转服后旧后端的迟到回复会被丢弃；转服后只改写少数与玩家实体 ID 相关的包，并按目标通道可写状态控制读取。后端主机名由 Netty 异步解析，避免把 DNS 等待放在玩家 I/O 线程上。
+- **日志**：SLF4J API 与 Logback 运行时。
 
-工程包含三个 Gradle 模块：
+## 当前可运行范围
 
-- `proxy-core`：可运行的代理、配置、网络转发与插件加载器。
-- `proxy-plugin-api`：第三方代理插件唯一需要依赖的公开 API。
-- `backend-agent-api`：后端服务端插件使用的 Java 8、平台无关通道 API。
+配置必须显式选择 `authentication: OFFLINE` 或 `ONLINE_BUNGEE`。两种模式均解析协议 5 Handshake 与 Login Start，等待异步落点，连接后端，确认 Login Success，然后转发普通字节流。在线模式执行加密握手、异步会话校验，并向可信的 Bungee 兼容后端转发已验证身份。状态查询由代理直接回答：在线数是本代理已登录的会话数；协议必需的最大值至少为 1，且不低于在线数，不代表后端容量。登录阶段的后端拒绝消息会在前端写出后再清理会话；后端关闭或读失败时，已提交给客户端的写入也会先排空再关闭前端，这两种等待最多 5 秒。`Players.transfer` 会在旧后端继续服务时登录候选后端；普通候选后端收到 Join Game 后即可开始交接，Forge 候选后端收到 ServerHello 后先切换握手链路，待客户端完成握手并收到 Join Game 时再合成 Respawn。`NETWORK_READY` 等待这次协议握手和世界切换包写出，但不表示目标服的插件已完成空岛或副本加载。切换后的玩家实体 ID 会映射到原客户端 ID；候选登录失败时保留旧链路。Forge 重置包写出后若目标拒绝握手，代理结束会话并返回失败，不能恢复旧链路。DNS 与 Agent 是调用通用注册 API 的独立插件。
 
-`integrations/bukkit-backend-agent` 是独立的 Java 8 Bukkit 插件；它以 Spigot 1.8 API 编译，只使用 Bukkit 1.7.10 已有的基础 API，因此可用于 1.7.10 Bukkit 派生服务端。
+**验证边界**：跨后端切换已通过普通协议与 Forge 握手的合成 TCP 测试，包括切换前失败回退、候选服 Join Game 后立即断开时保留旧会话、切换后 Forge 握手拒绝、维度变化后再转服、Forge 到普通后端的切换、握手后 Join Game、维度覆盖、玩家实体 ID 映射和中途断线清理。从 Forge 切换到普通后端会发送一次 FML 重置以恢复客户端注册表；随后进入 Forge 时不会重复发送重置。转服固定发送中间维度和目标维度两次 Respawn，避免依赖已经过期的客户端维度记录；交接期间客户端与旧后端的帧分别进入有上限的缓冲区。成功时，客户端帧在世界切换包写出后转发，旧后端帧丢弃；切换前失败恢复旧链路后，两侧暂存的帧都会回放。这些时序已通过合成 TCP 测试。在线认证及其加密连接上的 Forge 转服已通过注入会话校验器的合成 TCP 测试，尚未调用真实 Mojang 会话服务。最小 Uranium 1.7.10 后端已通过代理完成协议探针登录和保持连接，两台 Uranium 间的 Forge 转服探针也已通过。Prism 中的真实 Minecraft 1.7.10 + Forge 10.13.4.1614 客户端已通过最小 Uranium 的首次登录与两台 Uranium 间的插件触发转服，见 [真实客户端联机记录](smoke/results/2026-09-25-prism-forge-client.md)。目标 1.7.10 整合包、Mojang 在线认证、跨主机部署和目标流量下的性能验收仍未验证；当前不能宣称生产可用或目标整合包实服兼容。
 
-## 构建与启动
+真实 Prism Forge 客户端在同一版本下完成过旧服→新服→旧服往返，但也出现过候选 Uranium 登录帧写出后 15 秒无回包的失败。现阶段只证明转服路径可运行，尚未通过稳定性验收；调查记录见 [Uranium 登录停滞](smoke/results/2026-09-26-uranium-login-stalls.md)，服务端线索已提交 [Uranium#585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
 
-需要 JDK 25。执行：
+## 配置与运行
+
+默认配置：`proxy-core/src/main/resources/config/strataproxy.yml`。安装包包含静态后端示例和 `strataproxy-dns.example.yml`；后者通过 `plugins.enabled` 启用 DNS 插件，`backends: []` 表示不使用静态后端。相对插件目录从配置文件所在目录解析；安装包示例中的 `../plugins` 指向同一安装包的插件目录。`ONLINE_BUNGEE` 只能连接已启用旧版 Bungee 身份转发、且限制直连的可信后端。
+
+`--validate-config` 检查核心配置和静态后端注册；启用插件的自定义设置由插件在启动时检查。
+
+`plugins.initialPlacementTimeoutSeconds` 控制初始选服回调的等待时间，默认 15 秒，可配置为 1–120 秒。握手与身份验证、后端连接与登录各有独立的 15 秒期限；选服阶段不会消耗这两个阶段的时间。后端 Login Success 后，客户端必须在 2 分钟内完成初次 PLAY/Forge 握手，否则代理断开会话。插件可以异步查询或准备后端；超过时限的当前玩家登录会失败，后续玩家仍可调用该插件。客户端和后端自身也可能提前断开等待中的连接。
+
+未认证客户端的单帧上限为 4 KiB；后端确认 Login Success 后恢复协议 5 的 PLAY 帧上限。在线模式若已验证的玩家资料无法编码为后端转发握手，会立即结束本次登录。
+
+在线模式最多同时保留 256 个 Mojang 会话校验请求（包括等待响应和解析的请求）；超过上限的新登录会立即失败，避免请求与解析任务无限积压。此限制只约束代理的认证资源，与后端负载无关。
+
+候选后端就绪后的切换阶段另有 15 秒期限。如果旧链路的写入持续未完成，代理会以失败结果结束转服并断开该会话，避免玩家与插件调用无限等待。Forge 切换包写出后，目标握手和 Join Game 最多再等待 30 秒；超时会结束玩家会话并返回失败。
 
 ```powershell
-.\gradlew.bat --no-daemon check :proxy-core:installDist
+.\gradlew.bat :proxy-core:installDist
+.\proxy-core\build\install\strataproxy\bin\strataproxy.bat --validate-config .\proxy-core\build\install\strataproxy\config\strataproxy.yml
+.\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\proxy-core\build\install\strataproxy\config\strataproxy.yml
 ```
 
-运行目录位于 `proxy-core\build\install\strataproxy\`。先复制默认配置并校验：
+使用 DNS 插件时，把示例配置中的主机名换成自己的 DNS 主机名；相对插件目录随配置文件位置一起解析。A 和 AAAA 记录分别刷新：一个地址族查询超时会暂时保留其上次结果，连续三次失败后只撤销该地址族；明确返回无记录会清除该地址族的缓存。两族均无记录时，目录在连续三次查询失败后撤销旧注册。
 
-```powershell
-Copy-Item proxy-core\src\main\resources\config\strataproxy.yml .\strataproxy.yml
-.\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\strataproxy.yml --validate-config
-.\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\strataproxy.yml
-```
+### Agent 动态注册插件
 
-`network.bind` 是玩家入口，`servers` 至少需要一个静态后端；若启用了 `backendAgent`，可以只通过动态注册提供后端。每次修改 YAML 后重启代理。
-
-## 最小配置
-
-下面是一个本机大厅的最小可用配置。其余字段可保留默认值：
+Agent 插件同样由 `plugins.enabled` 显式启用。它通过一个独立 HTTP 端点接收实例注册和续租，再调用通用 `Servers` API；代理核心不包含 Agent 协议或云平台发现逻辑。端点默认只绑定 `127.0.0.1:28080`，请求使用至少 32 字节的共享密钥做 HMAC-SHA256 签名，带 60 秒时间窗和一次性随机 nonce。请求体、并发请求数、实例数和租约时长都有上限。每个 Agent 进程使用新的 UUID generation；活动租约不能被其他 generation 覆盖。注销或过期的 generation 会保留到最大租约时长加 60 秒签名时间窗之后，再由周期清理器删除；这能拦截在租约切换期间延迟到达的旧请求，同时避免 Agent 重启次数累积导致注册耗尽。异常退出后，租约到期会移除后端。
 
 ```yaml
-network:
-  bind: "0.0.0.0:25577"
-
-registry:
-  staticServers: true
-  healthCheckEnabled: true
-  healthCheckMode: "minecraft-status"
-
-servers:
-  - name: "lobby-1"
-    address: "127.0.0.1:25565"
-    tags: ["lobby"]
-    weight: 100
-    softCapacity: 500
-    hardCapacity: 600
-    drainMode: false
+plugins:
+  directory: ../plugins
+  enabled:
+    dev.strataproxy.plugins.agent.AgentDiscoveryPlugin:
+      secret: "replace-with-a-private-random-secret-of-32-bytes-or-more"
+      # host: 127.0.0.1
+      # port: "28080"
+      # concurrency: "4"
+      # maxBodyBytes: "4096"
+      # maxLeaseSeconds: "60"
+      # maxInstances: "128"
 ```
 
-常用配置边界：
+密钥不要提交到仓库；插件和 Agent 必须使用同一个值。跨主机部署时，应绑定到私有网络，并通过可信 TLS 终止器或私有链路保护传输；HMAC 验证身份和请求完整性，但不加密流量。`AgentRegistrationClient` 是仅依赖 JDK 的示例客户端：设置 `STRATAPROXY_AGENT_SECRET`，然后运行 `AgentExampleMain <http-endpoint> <agent-id> <backend-name> <tcp-address>`，其中端点形如 `http://127.0.0.1:28080/registration`。示例每 10 秒续租一次，租约 30 秒；网络故障和服务端暂时不可用时继续重试，租约过期导致旧 generation 被拒绝时换用新 generation 注册；认证或请求格式错误则退出。正常退出时尝试注销，异常退出由租约过期清理。Agent 协议只注册后端名称与地址，不需要消息队列。
 
-- 默认入服选择按后端名称排序，在健康、未排空、协议匹配且未达到硬容量的后端中取第一个。若请求域名匹配后端名称、标签或 `metadata.host` / `metadata.route`，只在匹配的后端中选择；已配置的玩法入口没有可用后端时不会回退到其他玩法。`weight` 和软容量不参与默认选择，可由插件路由策略使用。
-- `healthCheckMode: tcp` 只检查 TCP 可连接；`minecraft-status` 还要求后端能正常回复服务器列表状态。
-- `forwarding.mode` 可选 `none`、`velocity-modern`、`bungee-legacy`、`bungee-guard`。使用 `velocity-modern` 或 `bungee-guard` 时必须同时设置 `forwarding.secret`，并在后端配置相同密钥。
-- `registry.persistenceEnabled: true` 会将标记为持久化的动态后端写入 `registry.persistencePath`；临时后端不会跨重启保留。
-- `network.proxyProtocol` 只能用于可信的 HAProxy 或负载均衡器之后，并且上游确实发送 PROXY protocol v1。
-
-## 动态后端：Bukkit 服务端
-
-官方 Bukkit 适配器用于让一个 Bukkit 服务端在启动时注册、定期发送心跳，并在停止时注销。代理端先启用一个仅监听本机的受限端点：
-
-```yaml
-backendAgent:
-  enabled: true
-  bind: "127.0.0.1:25578"
-  sharedSecret: "所有受信任子服共用的至少 32 字符随机密钥"
-  heartbeatTimeout: "30s"
-  maxConnections: 32
-  maxQueuedConnections: 64
-  maxNonces: 4096
-```
-
-构建适配器：
+## 开发验证
 
 ```powershell
-.\gradlew.bat -p integrations\bukkit-backend-agent clean jar
+.\gradlew.bat check
+.\gradlew.bat :proxy-core:installedDistSmokeTest
+.\smoke\installed-discovery.ps1
+.\smoke\container-network.ps1
 ```
 
-将 `integrations\bukkit-backend-agent\build\libs\strataproxy-bukkit-backend-agent-*.jar` 放入 Bukkit 的 `plugins/` 目录。首次启动后编辑 `plugins/StrataProxyBackendAgent/config.yml`：
+`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它验证两种发现方式下玩家完成离线登录和 PLAY 帧转发。Agent 注销时，已连接玩家继续收发 PLAY 帧，新玩家无法选到已注销的后端；原玩家离开后在线数归零。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。最小 Forge 客户端实测已通过；目标整合包尚未提供，合成测试和最小实例测试不能替代目标环境验收。
 
-```yaml
-proxy:
-  host: "127.0.0.1"
-  port: 25578
-  sharedSecret: "与代理 backendAgent.sharedSecret 完全相同的至少 32 字符随机密钥"
+`smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置、DNS 插件和 Agent 插件的注册、登录及 PLAY 转发；Agent 模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。一次结果见 [容器网络烟测记录](smoke/results/2026-09-25-container-network.md)。它验证跨容器网络与 DNS，不能代替跨物理主机或目标 Forge 整合包实测。
 
-backend:
-  name: "survival-1"
-  address: "127.0.0.1:25565"
-  tags: ["survival"]
-  weight: 100
-  persistent: false
+PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Maven 发布凭据。`.gitea/workflows/ci.yml` 保留默认分支的构建发布入口；发布工作流所需的跨仓库可复用工作流权限和 Maven 凭据由 Gitea 仓库配置提供，不能用本地 `check` 的结果代替远端发布验收。
 
-heartbeatSeconds: 10
-unregisterOnDisable: true
-```
+如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](smoke/results/2026-09-25-local-uranium.md)。这项测试使用协议探针，目标整合包客户端与实服转服仍待验证。
 
-所有受信任 backend agent 共用 `sharedSecret`；每个 `backend.name` 仍必须唯一。插件每次启动会生成 instance ID，旧实例的心跳或注销不能影响新实例。端点限制请求长度、并发连接、排队和 replay nonce；建议保持 `bind` 在环回地址，或以防火墙限制到可信 Bukkit 主机。
+`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
-`backend-agent-api` 是平台无关的业务消息契约：Bukkit agent 会将其作为服务发布，未来 Forge agent 实现同一接口即可。业务插件应仅依赖该 API，并在服务端插件描述中声明依赖。通过 `ServicesManager` 获取 `BackendAgentApi` 后，使用 `publish(channel, payload, correlationId, idempotencyKey, mode)` 发布不透明字节载荷，使用 `listen(channel, listener)` 订阅消息；消息由代理生成唯一 `messageId`，可用 `correlationId` 关联业务请求，可靠消息在处理成功后由 agent 自动 ACK。通道是后端 agent 与代理之间的独立长连接，不经过玩家连接，也不依赖 Bukkit 的 Messenger API。API 不引用 Bukkit、Forge 或代理内部实现。
+安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](smoke/results/2026-09-26-uranium-login-stalls.md)。
 
-代理插件使用 `PluginContext.channels()` 访问同一 broker，可发布到所有订阅后端或指定后端，并订阅后端发来的消息。`DeliveryMode.RELIABLE` 只保证代理在有界未确认窗口内持续重试到 agent；它不替业务协议定义事务，调用方应使用稳定的幂等键处理超时重试。`BEST_EFFORT` 适合不需要重放的通知。通道名限制为 ASCII 字母、数字、`_`、`.`、`:`、`-`，载荷上限为 48 KiB。
+## 合成 relay 基准
 
-## 代理插件
-
-代理会从配置文件同级的 `plugins/` 目录加载插件 JAR。插件仅依赖 `dev.strataproxy:proxy-plugin-api`，不要依赖 `proxy-core` 的实现类。
-
-本仓库开发时可先发布 API 到本机 Maven：
+`benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
 
 ```powershell
-.\gradlew.bat :proxy-plugin-api:publishToMavenLocal
+.\benchmarks\run-relay.ps1 -Connections 8 -Messages 2000 -Warmup 200 -Payload 4096
+.\benchmarks\run-relay.ps1 -Connections 8 -Messages 2000 -Warmup 200 -Payload 4096 -Window 16
 ```
 
-后端业务插件的公共契约可同样发布到本机 Maven：
+该基准只覆盖本机 TCP 回声和三种 relay 数据路径。不同窗口使用不同的客户端发送方式，应在相同窗口内比较。负载是合成帧，不含登录、Forge 握手、模组流量、转服时的实体 ID 改写或真实客户端/后端行为；结果不代表 1.7.10 整合包等价性能，也不设 CI 性能门槛。堆变化是阶段前后的粗略观测，不是分配速率；请在目标机器、JDK 和连接规模上多轮运行并记录环境，避免把单次结果当成容量承诺。
+
+本地一次测量的环境、参数与原始输出见 `benchmarks/results/2026-09-25-local-relay.md`。
+加入实际 `KeepAliveBridge` 后的配对测量见 `benchmarks/results/2026-09-25-keepalive-bridge.md`；两份结果使用的 relay 事件循环安排不同，不能直接视为前后性能对比。
+
+## 合成会话基准
+
+`benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。`-Window` 设置每个客户端允许的在途请求数，默认 `1`（stop-and-wait）；大于 `1` 时客户端最多连续发送 Window 个帧，再按 TCP 顺序读取回声并逐条校验，每收到一条便补发一条。预热和计时阶段、直连和代理都使用相同的发送算法。测得的单条延迟从该请求写出前计时到其回声读完；延迟样本和在途时间戳都使用有界数组，受 `Connections`、`Messages` 和 Window 上限约束。出现错误回声或阶段超时时基准以失败退出。
 
 ```powershell
-.\gradlew.bat :backend-agent-api:publishToMavenLocal
+.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1
+.\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1 -Mode post-transfer
 ```
 
-插件项目依赖：
+当前提交的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](benchmarks/results/2026-09-25-session-after-lifecycle.md)。之前提交的测量见 [原会话基准记录](benchmarks/results/2026-09-25-current-session-benchmark.md)。这些是代理自身的合成流量性能验证，不是后端负载观测。
 
-```kotlin
-repositories {
-    mavenLocal()
-    mavenCentral()
-}
+`-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
 
-dependencies {
-    compileOnly("dev.strataproxy:proxy-plugin-api:0.2.0-SNAPSHOT")
-}
-```
+加入 Forge 握手阶段旧世界数据包过滤后，在当前代码上重跑的 [转服后基准](benchmarks/results/2026-09-25-forge-transfer-gate-followup.md) 与先前结果的范围重叠；合成流量没有显示稳定的大幅退化，目标整合包仍需单独测量。
 
-### 0.2 API 与兼容性验证
+同一提交在独立 Linux 容器中的 [转服后会话基准](benchmarks/results/2026-09-25-linux-container-post-transfer.md) 也完成了窗口 1 和 16 的各五轮对照与逐包校验。该结果仅验证另一运行环境中的合成路径；目标整合包和跨主机网络仍需实测。
 
-`0.2.0-SNAPSHOT` 是破坏性 API 版本：`PlayerView` 与转服事件新增 UUID/连接 ID，转服结果明确为代理网络层 `NETWORK_READY`，不承诺 Bukkit 业务已完成；旧的 `PlayerService.sendPluginMessage` 玩家转发 API 已移除。核心与 proxy/plugin API 使用 Java 25；backend-agent-api 与 Bukkit agent 保持 Java 8 字节码。
+当前会话路径的 [JFR 采样记录](benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
 
-发布前必须在目标 1.7.10 Forge 整合包执行连续转服、目标后端不可用、代理/后端重启恢复和至少 24 小时运行测试，并保存版本、mod 列表、日志和结果。单元测试及配置 smoke test 不能替代该门禁。
+将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
 
-JAR 根目录需要 `strataproxy-plugin.properties`：
-
-```properties
-id=example
-name=Example Plugin
-version=1.0.0
-main=com.example.ExamplePlugin
-```
-
-入口实现 `ProxyPlugin`。`PluginContext` 提供命令、事件、分阶段路由、玩家查询/转服、后端查询/注册、调度器和插件日志。动态后端默认是临时的；选择 `ServerPersistence.PERSISTENT` 才会写入持久化注册表。插件只能修改自己创建的后端，不能覆盖 YAML 静态后端或其他插件的后端。
-
-```java
-public final class ExamplePlugin implements ProxyPlugin {
-    @Override
-    public void onLoad(PluginContext context) {
-        context.events().subscribe(ProxyStartedEvent.class,
-                event -> context.logger().info("Example plugin ready"));
-    }
-}
-```
-
-不要在事件回调或命令处理中阻塞 Netty 线程；耗时操作请交给 `context.scheduler()`。代理内置玩家命令为 `/server <server>`、`/hub`、`/lobby`、`/servers` 和 `/glist`。
-
-### 分阶段路由
-
-插件通过 `context.routes().registerInitial(timeout, policy)` 注册唯一的入服处理器，通过 `registerTransfer(routeKey, timeout, policy)` 为每种转服意图注册一个处理器；同一意图只能由一个插件负责。入服处理器在代理获得玩家身份后、连接第一个后端前执行：离线模式读取 LoginStart 后触发，在线模式完成会话验证后触发。转服处理器在已连接玩家调用 `context.players().route(playerIdentity, routeKey)` 时触发；它不会因为负载变化自动迁移玩家。直接指定目标的 `transfer(...)` 仍可用，不经过路由处理器。
-
-处理器返回 `CompletionStage<RouteDecision>`，可以异步查询数据库、唤醒服务器并等待玩法插件确认就绪。`select(serverName)` 选定后端；`reject(reason)` 拒绝本次路由；`pass()` 在入服时使用最小默认选择，在转服时表示没有选出目标。每个处理器在注册时声明等待超时。代理会在建立连接前再次检查目标后端的健康、排空、硬容量与协议兼容性。
-
-```java
-context.routes().registerInitial(Duration.ofSeconds(3), route ->
-        playerSettings.findSpawn(route.playerIdentity(), route.playerName())
-                .thenApply(spawn -> spawn == null
-                        ? RouteDecision.pass()
-                        : RouteDecision.select(spawn)));
-```
-
-路由回调在 Netty 事件循环之外运行；异常或超时会拒绝本次路由。`RouteContext` 只描述此次路由请求。插件可随时通过 `PluginContext.servers().find(name)`、`firstWithTag(tag)` 或 `servers()` 获取 `ServerView`，自行按玩法、玩家配置或负载选服。`ServerView` 包含健康状态、排空状态、容量、协议范围、标签、元数据和负载；每次查询返回当前快照，不会随状态更新而改变。负载中的玩家数取自代理当前连接，流量是代理侧采样值；它不代表后端 CPU、TPS 或业务队列。插件卸载或加载失败时，代理会注销其路由处理器。
-
-## 发布
-
-`release` 会生成代理发行包、插件 API JAR、SBOM、校验和及元数据：
-
-```powershell
-.\gradlew.bat --no-daemon release
-```
-
-`publish` 会向已配置的 Gitea Maven 仓库发布 `proxy-plugin-api` 和 Bukkit 后端适配器。CI 使用同一套 Gradle 任务；不要把密钥写入配置样例或提交到仓库。
+原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。

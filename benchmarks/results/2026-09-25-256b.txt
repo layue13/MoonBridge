@@ -1,0 +1,11 @@
+Synthetic loopback TCP echo; frame_payload=256 bytes wire_frame=258 bytes connections=8 measured_messages_per_connection=2000 warmup_per_connection=200 repeats=3
+Comparison: direct echo, byte-stream RawRelay, and Session-style framed RawRelay; connect/setup time excluded.
+baseline-start: 146167.7 roundtrips/s, 35.96 MiB/s one-way-wire-bytes, latency_ms p50=0.048 p95=0.088 p99=0.125, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=12582912
+raw-relay-1: 47151.4 roundtrips/s, 11.60 MiB/s one-way-wire-bytes, latency_ms p50=0.136 p95=0.318 p99=0.536, gc_collections=1 gc_time_ms=2 heap_used_delta_bytes=-8028144
+framed-relay-1: 58310.6 roundtrips/s, 14.35 MiB/s one-way-wire-bytes, latency_ms p50=0.117 p95=0.236 p99=0.374, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=33554432
+framed-relay-2: 80638.0 roundtrips/s, 19.84 MiB/s one-way-wire-bytes, latency_ms p50=0.097 p95=0.124 p99=0.141, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+raw-relay-2: 83549.1 roundtrips/s, 20.56 MiB/s one-way-wire-bytes, latency_ms p50=0.094 p95=0.119 p99=0.134, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+raw-relay-3: 83540.7 roundtrips/s, 20.56 MiB/s one-way-wire-bytes, latency_ms p50=0.093 p95=0.120 p99=0.137, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=20971520
+framed-relay-3: 78226.5 roundtrips/s, 19.25 MiB/s one-way-wire-bytes, latency_ms p50=0.098 p95=0.132 p99=0.158, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=29360128
+baseline-end: 225168.5 roundtrips/s, 55.40 MiB/s one-way-wire-bytes, latency_ms p50=0.035 p95=0.044 p99=0.052, gc_collections=0 gc_time_ms=0 heap_used_delta_bytes=8388608
+backend_received_wire_bytes_all_phases=36326400

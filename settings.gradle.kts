@@ -20,7 +20,11 @@ dependencyResolutionManagement {
 rootProject.name = "strataproxy"
 
 include(
-    "backend-agent-api",
     "proxy-core",
     "proxy-plugin-api",
+    "dns-discovery",
+    "agent-discovery",
 )
+
+project(":dns-discovery").projectDir = file("plugins/dns-discovery")
+project(":agent-discovery").projectDir = file("plugins/agent-discovery")
