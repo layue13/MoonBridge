@@ -2,10 +2,13 @@
 param(
     [Parameter(Mandatory)][string]$BundlePath,
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
-    [switch]$InstalledPlugin
+    [switch]$InstalledPlugin,
+    [switch]$PrismClient,
+    [string]$PrismPath = (Join-Path $env:LOCALAPPDATA 'Programs\PrismLauncher\prismlauncher.exe')
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
 $proxyLib = Join-Path $repoRoot 'proxy-core\build\install\strataproxy\lib'
@@ -110,6 +113,8 @@ $newPort = FreePort
 while ($newPort -eq $oldPort) { $newPort = FreePort }
 $servers = [System.Collections.Generic.List[object]]::new()
 $proxy = $null
+$initialJavawIds = @()
+$clientLaunchAttempted = $false
 try {
     $old = StartUranium (Join-Path $runDir 'old') $oldPort
     $servers.Add($old)
@@ -161,20 +166,71 @@ backends:
         ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $proxyLog `
           -RedirectStandardError (Join-Path $runDir 'proxy.stderr.log')
         WaitForPort $proxyPort $proxy
-        & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe --external $proxyPort
-        if ($LASTEXITCODE -ne 0) { throw "Installed-plugin transfer probe failed: $LASTEXITCODE" }
+        if ($PrismClient) {
+            if (-not (Test-Path -LiteralPath $PrismPath)) { throw "Prism Launcher not found: $PrismPath" }
+            $initialJavawIds = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+                Select-Object -ExpandProperty ProcessId)
+            Start-Process -FilePath $PrismPath -ArgumentList @(
+                '--launch', '1.7.10', '--offline', 'PrismSmoke',
+                '--server', "127.0.0.1:$proxyPort"
+            ) -WindowStyle Hidden | Out-Null
+            $clientLaunchAttempted = $true
+            $deadline = [DateTime]::UtcNow.AddSeconds(120)
+            $oldLog = Join-Path $old.Directory 'logs\latest.log'
+            $newLog = Join-Path $new.Directory 'logs\latest.log'
+            while ([DateTime]::UtcNow -lt $deadline) {
+                $oldJoined = Select-String -LiteralPath $oldLog -Pattern 'PrismSmoke.*logged in' -Quiet
+                $newJoined = Select-String -LiteralPath $newLog -Pattern 'PrismSmoke.*logged in' -Quiet
+                $transferred = Select-String -LiteralPath $proxyLog `
+                    -Pattern 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY' -Quiet
+                if ($oldJoined -and $newJoined -and $transferred) { break }
+                if (Select-String -LiteralPath $proxyLog -Pattern 'SMOKE_PLUGIN_TRANSFER_FAILED' -Quiet) {
+                    throw 'Proxy rejected the Prism Forge transfer; inspect proxy.stdout.log and the target server log'
+                }
+                if (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet) {
+                    throw 'Target Uranium disconnected the Prism Forge client during transfer'
+                }
+                if ($proxy.HasExited) { throw "Proxy exited while Prism was transferring: $($proxy.ExitCode)" }
+                if ($old.Process.HasExited -or $new.Process.HasExited) { throw 'Uranium exited during Prism transfer' }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not $oldJoined -or -not $newJoined -or -not $transferred) {
+                throw 'Prism Forge client did not finish Uranium-to-Uranium transfer within 120 seconds'
+            }
+            Start-Sleep -Seconds 10
+            if (Select-String -LiteralPath $newLog -Pattern 'PrismSmoke lost connection' -Quiet) {
+                throw 'Prism Forge client disconnected from target during the 10-second hold'
+            }
+            $newClient = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+                Where-Object { $_.ProcessId -notin $initialJavawIds -and
+                    $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' })
+            if ($newClient.Count -ne 1) {
+                throw "Expected one new Prism Java client, found $($newClient.Count)"
+            }
+            Write-Output 'REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10'
+        } else {
+            & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe --external $proxyPort
+            if ($LASTEXITCODE -ne 0) { throw "Installed-plugin transfer probe failed: $LASTEXITCODE" }
+            Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
+        }
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new'
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
-        Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
     } else {
         & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $oldPort $newPort
+        if ($LASTEXITCODE -ne 0) { throw "Uranium transfer probe failed: $LASTEXITCODE" }
     }
-    if ($LASTEXITCODE -ne 0) { throw "Uranium transfer probe failed: $LASTEXITCODE" }
-    WaitForLog $old.Directory 'NettyProbe.*logged in'
-    WaitForLog $new.Directory 'NettyProbe.*logged in'
-    WaitForLog $old.Directory 'NettyProbe lost connection'
+    $playerName = if ($PrismClient) { 'PrismSmoke' } else { 'NettyProbe' }
+    WaitForLog $old.Directory "$playerName.*logged in"
+    WaitForLog $new.Directory "$playerName.*logged in"
+    WaitForLog $old.Directory "$playerName lost connection"
     Write-Output 'REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true'
 } finally {
+    if ($clientLaunchAttempted) {
+        Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+            Where-Object { $_.ProcessId -notin $initialJavawIds -and
+                $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
     if ($proxy -and -not $proxy.HasExited) {
         Stop-Process -Id $proxy.Id -Force
         Wait-Process -Id $proxy.Id -ErrorAction SilentlyContinue

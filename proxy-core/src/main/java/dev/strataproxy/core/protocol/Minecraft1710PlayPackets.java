@@ -39,6 +39,15 @@ public final class Minecraft1710PlayPackets {
         return forgeHandshake(packet, true).flatMap(ForgeHandshake::hello);
     }
 
+    /** Control channels needed while a replacement Forge backend negotiates its PLAY state. */
+    public static boolean forgeControlPayload(ByteBuf packet) {
+        ByteBuf input = packet.duplicate();
+        if (ProtocolVarInt.read(input) != CLIENT_CUSTOM_PAYLOAD) return false;
+        String channel = ProtocolStrings.read(input, 20);
+        return "FML|HS".equals(channel) || "REGISTER".equals(channel)
+                || "UNREGISTER".equals(channel);
+    }
+
     public static Optional<ForgeHandshake> forgeHandshake(ByteBuf packet, boolean clientbound) {
         ByteBuf input = packet.duplicate();
         if (ProtocolVarInt.read(input) != (clientbound ? SERVER_CUSTOM_PAYLOAD : CLIENT_CUSTOM_PAYLOAD)) {

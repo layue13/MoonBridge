@@ -1,14 +1,19 @@
 #Requires -Version 7.0
 param(
     [Parameter(Mandatory)][string]$BundlePath,
-    [Parameter(Mandatory)][string]$ProbeClassesPath,
-    [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe'
+    [string]$ProbeClassesPath,
+    [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
+    [switch]$PrismClient,
+    [string]$PrismPath = (Join-Path $env:LOCALAPPDATA 'Programs\PrismLauncher\prismlauncher.exe')
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
-$probeClasses = (Resolve-Path -LiteralPath $ProbeClassesPath).Path
+$probeClasses = if ($PrismClient) { $null } else {
+    if (-not $ProbeClassesPath) { throw 'ProbeClassesPath is required without -PrismClient' }
+    (Resolve-Path -LiteralPath $ProbeClassesPath).Path
+}
 $proxyLib = Join-Path $repoRoot 'proxy-core\build\install\strataproxy\lib'
 if (-not (Test-Path -LiteralPath $Java8Path) -or -not (Test-Path -LiteralPath $proxyLib)) {
     throw 'Java 8 and the installed StrataProxy distribution are required'
@@ -69,6 +74,8 @@ $server = [System.Diagnostics.Process]::Start($serverInfo)
 $serverOutput = $server.StandardOutput.ReadToEndAsync()
 $serverErrors = $server.StandardError.ReadToEndAsync()
 $proxy = $null
+$initialJavawIds = @()
+$clientLaunchAttempted = $false
 try {
     WaitForPort $serverPort $server 120
     $readyLog = Join-Path $runDir 'logs\latest.log'
@@ -105,10 +112,42 @@ backends:
       -RedirectStandardError (Join-Path $runDir 'proxy.stderr.log')
     WaitForPort $proxyPort $proxy 15
 
-    $sourceDir = Join-Path $runDir 'probe-src\cc\uraniummc\rfg\smoke'
-    New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-    $source = Join-Path $sourceDir 'RunThroughProxy.java'
-    @'
+    if ($PrismClient) {
+        if (-not (Test-Path -LiteralPath $PrismPath)) { throw "Prism Launcher not found: $PrismPath" }
+        $initialJavawIds = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+            Select-Object -ExpandProperty ProcessId)
+        Start-Process -FilePath $PrismPath -ArgumentList @(
+            '--launch', '1.7.10', '--offline', 'PrismSmoke',
+            '--server', "127.0.0.1:$proxyPort"
+        ) -WindowStyle Hidden | Out-Null
+        $clientLaunchAttempted = $true
+        $deadline = [DateTime]::UtcNow.AddSeconds(120)
+        $serverLog = Join-Path $runDir 'logs\latest.log'
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if ((Select-String -LiteralPath $serverLog -Pattern 'PrismSmoke.*logged in' -Quiet)) { break }
+            if ($proxy.HasExited) { throw "Proxy exited while Prism was connecting: $($proxy.ExitCode)" }
+            if ($server.HasExited) { throw "Uranium exited while Prism was connecting: $($server.ExitCode)" }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not (Select-String -LiteralPath $serverLog -Pattern 'PrismSmoke.*logged in' -Quiet)) {
+            throw 'Prism Forge client did not log into Uranium within 120 seconds'
+        }
+        Start-Sleep -Seconds 10
+        if ((Select-String -LiteralPath $serverLog -Pattern 'PrismSmoke lost connection' -Quiet)) {
+            throw 'Prism Forge client disconnected during the 10-second hold'
+        }
+        $newClient = @(Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+            Where-Object { $_.ProcessId -notin $initialJavawIds -and
+                $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' })
+        if ($newClient.Count -ne 1) {
+            throw "Expected one new Prism Java client, found $($newClient.Count)"
+        }
+        Write-Output "REAL_PRISM_URANIUM_PASS serverPort=$serverPort proxyPort=$proxyPort holdSeconds=10"
+    } else {
+        $sourceDir = Join-Path $runDir 'probe-src\cc\uraniummc\rfg\smoke'
+        New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+        $source = Join-Path $sourceDir 'RunThroughProxy.java'
+        @'
 package cc.uraniummc.rfg.smoke;
 public final class RunThroughProxy {
     public static void main(String[] args) throws Exception {
@@ -116,14 +155,21 @@ public final class RunThroughProxy {
     }
 }
 '@ | Set-Content -LiteralPath $source -Encoding utf8
-    $probeOutput = Join-Path $runDir 'probe-classes'
-    New-Item -ItemType Directory -Path $probeOutput -Force | Out-Null
-    & javac -cp $probeClasses -d $probeOutput $source
-    if ($LASTEXITCODE -ne 0) { throw 'Could not compile Uranium protocol probe wrapper' }
-    & java -cp "$probeOutput;$probeClasses" cc.uraniummc.rfg.smoke.RunThroughProxy $proxyPort
-    if ($LASTEXITCODE -ne 0) { throw "Protocol probe failed through StrataProxy: $LASTEXITCODE" }
-    Write-Output "REAL_URANIUM_PROXY_PASS serverPort=$serverPort proxyPort=$proxyPort"
+        $probeOutput = Join-Path $runDir 'probe-classes'
+        New-Item -ItemType Directory -Path $probeOutput -Force | Out-Null
+        & javac -cp $probeClasses -d $probeOutput $source
+        if ($LASTEXITCODE -ne 0) { throw 'Could not compile Uranium protocol probe wrapper' }
+        & java -cp "$probeOutput;$probeClasses" cc.uraniummc.rfg.smoke.RunThroughProxy $proxyPort
+        if ($LASTEXITCODE -ne 0) { throw "Protocol probe failed through StrataProxy: $LASTEXITCODE" }
+        Write-Output "REAL_URANIUM_PROXY_PASS serverPort=$serverPort proxyPort=$proxyPort"
+    }
 } finally {
+    if ($clientLaunchAttempted) {
+        Get-CimInstance Win32_Process -Filter "Name = 'javaw.exe'" |
+            Where-Object { $_.ProcessId -notin $initialJavawIds -and
+                $_.CommandLine -like '*PrismLauncher*instances*1.7.10*' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
     if ($proxy -and -not $proxy.HasExited) {
         Stop-Process -Id $proxy.Id -Force
         Wait-Process -Id $proxy.Id -ErrorAction SilentlyContinue

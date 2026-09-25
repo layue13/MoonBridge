@@ -41,6 +41,16 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
 
         CompletableFuture<Void> worldReady() { return worldReady; }
 
+        private boolean awaitingForgeWorld() {
+            return observation.forgeSeen() && (!observation.ready().isDone() || !worldReady.isDone());
+        }
+
+        private boolean forgeControlPacket(ByteBuf packet, int packetId) {
+            if (packetId == 0) return true; // The keep-alive bridge has already translated this reply.
+            if (packetId != Minecraft1710PlayPackets.CLIENT_CUSTOM_PAYLOAD) return false;
+            return Minecraft1710PlayPackets.forgeControlPayload(packet);
+        }
+
         private void joinGame(ByteBuf packet) {
             if (joined) throw new IllegalArgumentException("duplicate replacement Join Game");
             Minecraft1710PlayPackets.JoinGame join = Minecraft1710PlayPackets.joinGame(packet)
@@ -92,6 +102,13 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
             int packetId = ProtocolVarInt.read(body.duplicate());
             if (clientbound && packetId == Minecraft1710PlayPackets.JOIN_GAME) {
                 state.joinGame(body);
+                return;
+            }
+            if (!clientbound && state.awaitingForgeWorld()
+                    && !state.forgeControlPacket(body, packetId)) {
+                // Frames from the previous world may have been queued during cutover. Sending
+                // movement or gameplay to a backend still joining the player is unsafe.
+                RawRelay.continueAfterDrop(ctx.channel());
                 return;
             }
             Integer serverId = state.serverEntityId;

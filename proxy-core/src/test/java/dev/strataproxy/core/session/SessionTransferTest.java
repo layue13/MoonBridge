@@ -981,6 +981,10 @@ final class SessionTransferTest {
                     sendJoinGame(output, 0, 200);
                     sendPosition.get(5, TimeUnit.SECONDS);
                     writeFrame(output, new byte[]{0x03, 0x44});
+                    byte[] newWorldPosition = new byte[42];
+                    newWorldPosition[0] = 0x06;
+                    newWorldPosition[41] = 1;
+                    assertArrayEquals(newWorldPosition, readFrame(input));
                     newNegotiated.complete(null);
                     while (input.read() != -1) { }
                 } catch (Throwable failure) { newNegotiated.completeExceptionally(failure); }
@@ -1013,6 +1017,11 @@ final class SessionTransferTest {
                     assertArrayEquals(largeRegistryPacket, readFrame(input));
                     assertThrows(TimeoutException.class, () -> transfer.get(100, TimeUnit.MILLISECONDS),
                             "a Forge ServerHello is not a completed backend handshake");
+                    // A real client can keep sending its old-world position while FML resets.
+                    // The replacement backend must see the handshake response first.
+                    byte[] oldWorldPosition = new byte[42];
+                    oldWorldPosition[0] = 0x06;
+                    writeFrame(output, oldWorldPosition);
                     writeFrame(output, clientForgeAck());
                     assertArrayEquals(serverForgeAck(), readFrame(input));
                     assertEquals(-1, respawnDimension(readFrame(input))); // Force a world reload despite stale observation.
@@ -1021,6 +1030,10 @@ final class SessionTransferTest {
                     assertEquals(TransferStatus.NETWORK_READY, result.status(), result.detail().orElse(""));
                     sendPosition.complete(null);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
+                    byte[] newWorldPosition = new byte[42];
+                    newWorldPosition[0] = 0x06;
+                    newWorldPosition[41] = 1;
+                    writeFrame(output, newWorldPosition);
                     newNegotiated.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
                 }
