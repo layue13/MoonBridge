@@ -89,6 +89,8 @@ plugins:
 .\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1
 ```
 
+当前代码的多轮、同条件本机测量及原始输出见 [2026-09-25 会话基准记录](benchmarks/results/2026-09-25-current-session-benchmark.md)。这是代理自身的合成流量性能验证，不是后端负载观测。
+
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
 
 原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
