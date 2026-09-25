@@ -30,6 +30,8 @@ The same class of stall occurred with the Prism Launcher Minecraft 1.7.10 / Forg
 
 This demonstrates that the issue is not limited to the synthetic protocol probe. It does not prove that Uranium is the sole cause; the direct Uranium login checks above did not reproduce it, and the exact server-side lifecycle of the failed connection was not recorded.
 
+The next real-client roundtrip, with the same StrataProxy commit `b432074` and the same Uranium bundle, passed in `build/local-uranium-transfer-8454541ae9954e869b302efe053103b9`. PrismSmoke logged into `old`, transferred to `new`, returned to `old`, and remained connected for the 10-second hold. Both candidate connections received Login Success; each backend printed `Login attempt` and the expected player login, and the new backend recorded the player's departure on return. This successful control shows the rewrite can complete the full Forge roundtrip under the tested setup. Together with the previous failure it establishes an intermittent pre-transfer-login problem, not a deterministic failure of the Forge handoff path.
+
 ## Uranium source audit
 
 In the inspected Uranium source, `CauldronConfig.userLogin` defaults to false. `NetHandlerLoginServer.processLoginStart` logs `Login attempt` only when that option is true; the usual `logged in with entity id` line comes much later in `ServerConfigurationManager.initializeConnectionToPlayer`. Therefore the latter line cannot be used to decide whether Uranium received the initial login packet. In the failing runs, the option was explicitly true on the target server, so the absence of `Login attempt` means `processLoginStart` was not reached.
