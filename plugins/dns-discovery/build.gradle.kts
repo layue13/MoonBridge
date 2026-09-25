@@ -4,4 +4,5 @@ plugins {
 
 dependencies {
     implementation(project(":proxy-plugin-api"))
+    implementation(libs.findLibrary("netty-resolver-dns").get())
 }

@@ -6,16 +6,25 @@ import dev.strataproxy.api.ServerDefinition;
 import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.ServerView;
 import dev.strataproxy.api.Servers;
+import io.netty.resolver.dns.DnsServerAddresses;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +35,7 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -107,6 +117,112 @@ class DnsDiscoveryPluginTest {
         assertEquals(1, servers.unregisterCalls.get());
         plugin.onDisable();
         assertTrue(servers.definitions.isEmpty());
+    }
+
+    @Test
+    void repeatedMissingDnsAnswerExpiresStaleRegistrationAndRecoveryRegistersAgain() throws Exception {
+        InetAddress first = address(192, 0, 2, 20);
+        InetAddress replacement = address(192, 0, 2, 21);
+        AtomicReference<InetAddress[]> answer = new AtomicReference<>(new InetAddress[]{first});
+        AtomicInteger misses = new AtomicInteger();
+        DnsDiscoveryPlugin plugin = new DnsDiscoveryPlugin(host -> {
+            InetAddress[] current = answer.get();
+            if (current != null) return current;
+            misses.incrementAndGet();
+            throw new UnknownHostException(host);
+        });
+        FakeServers servers = new FakeServers();
+        plugin.onLoad(context(servers, Map.of("host", "pool.example", "refreshSeconds", "1")));
+        try {
+            plugin.onEnable();
+            await(() -> servers.definitions.containsKey(name("dns-pool-example-", first)));
+            answer.set(null);
+            await(() -> misses.get() >= 1);
+            assertEquals(1, servers.definitions.size(), "one transient lookup miss should retain the backend");
+            await(servers.definitions::isEmpty);
+            assertTrue(misses.get() >= 3);
+            assertEquals(1, servers.unregisterCalls.get());
+
+            answer.set(new InetAddress[]{replacement});
+            await(() -> servers.definitions.containsKey(name("dns-pool-example-", replacement)));
+            assertEquals(2, servers.registerCalls.get());
+        } finally {
+            plugin.onDisable();
+        }
+    }
+
+    @Test
+    void uncachedResolverQueriesBothAddressFamiliesOnEveryRefresh() throws Exception {
+        InetAddress firstV4 = address(192, 0, 2, 10);
+        InetAddress secondV4 = address(192, 0, 2, 11);
+        InetAddress firstV6 = InetAddress.getByAddress(new byte[]{
+                0x20, 0x01, 0x0d, (byte) 0xb8, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 10});
+        InetAddress secondV6 = InetAddress.getByAddress(new byte[]{
+                0x20, 0x01, 0x0d, (byte) 0xb8, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 11});
+        AtomicReference<byte[]> v4 = new AtomicReference<>(firstV4.getAddress());
+        AtomicReference<byte[]> v6 = new AtomicReference<>(firstV6.getAddress());
+        AtomicReference<Throwable> dnsFailure = new AtomicReference<>();
+        try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+            Thread dnsThread = new Thread(() -> {
+                while (!socket.isClosed()) {
+                    try {
+                        DatagramPacket query = new DatagramPacket(new byte[4096], 4096);
+                        socket.receive(query);
+                        byte[] response = dnsAnswer(query, v4.get(), v6.get());
+                        socket.send(new DatagramPacket(response, response.length, query.getSocketAddress()));
+                    } catch (java.net.SocketException closed) {
+                        if (!socket.isClosed()) dnsFailure.set(closed);
+                        return;
+                    } catch (Throwable failure) {
+                        dnsFailure.set(failure);
+                        return;
+                    }
+                }
+            }, "fake-dns-answer-server");
+            dnsThread.setDaemon(true);
+            dnsThread.start();
+            InetSocketAddress endpoint = new InetSocketAddress("127.0.0.1", socket.getLocalPort());
+            try (var resolver = new DnsDiscoveryPlugin.UncachedAddressResolver(
+                    hostname -> DnsServerAddresses.singleton(endpoint).stream())) {
+                assertEquals(Set.of(firstV4, firstV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+                v4.set(secondV4.getAddress());
+                v6.set(secondV6.getAddress());
+                assertEquals(Set.of(secondV4, secondV6),
+                        Set.copyOf(Arrays.asList(resolver.resolve("backend.dynamic.test"))));
+            }
+            assertNull(dnsFailure.get());
+        }
+    }
+
+    private static byte[] dnsAnswer(DatagramPacket query, byte[] v4, byte[] v6) throws IOException {
+        byte[] request = query.getData();
+        int length = query.getLength();
+        int offset = 12;
+        while (offset < length && request[offset] != 0) offset += 1 + (request[offset] & 0xff);
+        if (offset + 5 > length) throw new IOException("truncated DNS question");
+        int type = ((request[offset + 1] & 0xff) << 8) | (request[offset + 2] & 0xff);
+        int questionLength = offset + 5 - 12;
+        byte[] address = type == 1 ? v4 : type == 28 ? v6 : null;
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        var output = new DataOutputStream(bytes);
+        output.write(request, 0, 2); // Transaction ID.
+        output.writeShort(0x8180); // Standard successful response.
+        output.writeShort(1);
+        output.writeShort(address == null ? 0 : 1);
+        output.writeInt(0);
+        output.write(request, 12, questionLength);
+        if (address != null) {
+            output.writeShort(0xc00c); // Name pointer to the question.
+            output.writeShort(type);
+            output.writeShort(1); // IN class.
+            output.writeInt(0); // TTL: a new DNS answer must be consulted on refresh.
+            output.writeShort(address.length);
+            output.write(address);
+        }
+        return bytes.toByteArray();
     }
 
     @Test

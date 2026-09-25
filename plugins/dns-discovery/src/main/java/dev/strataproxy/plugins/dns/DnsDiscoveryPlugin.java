@@ -4,13 +4,22 @@ import dev.strataproxy.api.Plugin;
 import dev.strataproxy.api.PluginContext;
 import dev.strataproxy.api.ServerDefinition;
 import dev.strataproxy.api.ServerRegistration;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.resolver.ResolvedAddressTypes;
+import io.netty.resolver.dns.DnsNameResolver;
+import io.netty.resolver.dns.DnsNameResolverBuilder;
+import io.netty.resolver.dns.DnsServerAddressStreamProvider;
+import io.netty.resolver.dns.NoopDnsCache;
+import io.netty.resolver.dns.NoopDnsCnameCache;
 import org.slf4j.Logger;
 
 import java.net.IDN;
-import java.net.InetAddress;
 import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -26,6 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Discovers TCP backends from the A and AAAA records of a configured DNS name. */
 public final class DnsDiscoveryPlugin implements Plugin {
+    private static final int MAX_CONSECUTIVE_LOOKUP_FAILURES = 3;
     private final AddressResolver resolver;
     private final Object lifecycleLock = new Object();
     private final Map<String, OwnedRegistration> registrations = new LinkedHashMap<>();
@@ -34,11 +44,10 @@ public final class DnsDiscoveryPlugin implements Plugin {
     private PluginContext context;
     private Configuration configuration;
     private ScheduledExecutorService scheduler;
+    private int consecutiveLookupFailures;
     private volatile boolean closed;
 
-    public DnsDiscoveryPlugin() {
-        this(InetAddress::getAllByName);
-    }
+    public DnsDiscoveryPlugin() { this(new UncachedAddressResolver()); }
 
     DnsDiscoveryPlugin(AddressResolver resolver) {
         this.resolver = Objects.requireNonNull(resolver, "resolver");
@@ -103,6 +112,12 @@ public final class DnsDiscoveryPlugin implements Plugin {
             }
         }
 
+        try {
+            resolver.close();
+        } catch (Exception failure) {
+            logger().warn("Could not close DNS resolver", failure);
+        }
+
         synchronized (lifecycleLock) {
             for (Map.Entry<String, OwnedRegistration> entry : registrations.entrySet()) {
                 unregisterQuietly(entry.getKey(), entry.getValue().registration());
@@ -116,10 +131,7 @@ public final class DnsDiscoveryPlugin implements Plugin {
         try {
             resolved = Objects.requireNonNull(resolver.resolve(configuration.host()), "resolver result");
         } catch (Exception failure) {
-            if (!closed) {
-                logger().warn("DNS lookup failed for {}; retaining {} previously discovered backend(s)",
-                        configuration.host(), registrationCount(), failure);
-            }
+            lookupFailed(failure);
             return;
         }
 
@@ -127,8 +139,7 @@ public final class DnsDiscoveryPlugin implements Plugin {
         try {
             desired = definitionsFor(resolved, configuration);
         } catch (RuntimeException invalidResult) {
-            logger().warn("Ignoring invalid DNS answer for {}; retaining previous backend registrations",
-                    configuration.host(), invalidResult);
+            lookupFailed(invalidResult);
             return;
         }
 
@@ -136,7 +147,27 @@ public final class DnsDiscoveryPlugin implements Plugin {
             if (closed) {
                 return;
             }
+            consecutiveLookupFailures = 0;
             reconcile(desired);
+        }
+    }
+
+    private void lookupFailed(Exception failure) {
+        synchronized (lifecycleLock) {
+            if (closed) return;
+            int previousFailures = consecutiveLookupFailures;
+            if (consecutiveLookupFailures < MAX_CONSECUTIVE_LOOKUP_FAILURES) consecutiveLookupFailures++;
+            if (consecutiveLookupFailures == 1) {
+                logger().warn("DNS lookup failed for {}; retaining {} previously discovered backend(s)",
+                        configuration.host(), registrations.size(), failure);
+            } else if (consecutiveLookupFailures == MAX_CONSECUTIVE_LOOKUP_FAILURES
+                    && (previousFailures < MAX_CONSECUTIVE_LOOKUP_FAILURES || !registrations.isEmpty())) {
+                if (previousFailures < MAX_CONSECUTIVE_LOOKUP_FAILURES) {
+                    logger().warn("DNS lookup for {} has failed {} consecutive times; removing stale backends",
+                            configuration.host(), consecutiveLookupFailures);
+                }
+                reconcile(Map.of());
+            }
         }
     }
 
@@ -178,12 +209,6 @@ public final class DnsDiscoveryPlugin implements Plugin {
                     }
                 }
             }
-        }
-    }
-
-    private int registrationCount() {
-        synchronized (lifecycleLock) {
-            return registrations.size();
         }
     }
 
@@ -231,8 +256,80 @@ public final class DnsDiscoveryPlugin implements Plugin {
     }
 
     @FunctionalInterface
-    interface AddressResolver {
+    interface AddressResolver extends AutoCloseable {
         InetAddress[] resolve(String host) throws Exception;
+        @Override default void close() throws Exception { }
+    }
+
+    /** A separate event loop with disabled DNS caches avoids the JVM's process-wide address cache. */
+    static final class UncachedAddressResolver implements AddressResolver {
+        private final DnsServerAddressStreamProvider nameServers;
+        private NioEventLoopGroup eventLoops;
+        private DnsNameResolver ipv4;
+        private DnsNameResolver ipv6;
+
+        UncachedAddressResolver() { this(null); }
+
+        UncachedAddressResolver(DnsServerAddressStreamProvider nameServers) {
+            this.nameServers = nameServers;
+        }
+
+        @Override public synchronized InetAddress[] resolve(String host) throws Exception {
+            // Netty's localhost hosts-file shortcut returns IPv4 even for an IPv6-only resolver.
+            // This reserved local name is not a dynamic DNS record; retain both system loopback addresses.
+            if ("localhost".equals(host)) return InetAddress.getAllByName(host);
+            if (ipv4 == null) {
+                eventLoops = new NioEventLoopGroup(1, task -> {
+                    Thread thread = new Thread(task, "strataproxy-dns-query");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+                ipv4 = newResolver(ResolvedAddressTypes.IPV4_ONLY);
+                ipv6 = newResolver(ResolvedAddressTypes.IPV6_ONLY);
+            }
+            var ipv4Result = ipv4.resolveAll(host);
+            var ipv6Result = ipv6.resolveAll(host);
+            var addresses = new ArrayList<InetAddress>();
+            Exception firstFailure = null;
+            try { addresses.addAll(ipv4Result.get(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException interrupted) {
+                ipv4Result.cancel(true);
+                ipv6Result.cancel(true);
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            catch (Exception failure) { firstFailure = failure; }
+            try { addresses.addAll(ipv6Result.get(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException interrupted) {
+                ipv6Result.cancel(true);
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            catch (Exception failure) {
+                if (firstFailure == null) firstFailure = failure;
+            }
+            if (addresses.isEmpty() && firstFailure != null) throw firstFailure;
+            return addresses.toArray(InetAddress[]::new);
+        }
+
+        private DnsNameResolver newResolver(ResolvedAddressTypes family) {
+            var builder = new DnsNameResolverBuilder(eventLoops.next())
+                    .datagramChannelType(NioDatagramChannel.class)
+                    .queryTimeoutMillis(3000)
+                    .resolveCache(NoopDnsCache.INSTANCE)
+                    .cnameCache(NoopDnsCnameCache.INSTANCE)
+                    .resolvedAddressTypes(family);
+            if (nameServers != null) builder.nameServerProvider(nameServers);
+            return builder.build();
+        }
+
+        @Override public synchronized void close() {
+            if (ipv4 != null) ipv4.close();
+            if (ipv6 != null) ipv6.close();
+            if (eventLoops != null) {
+                eventLoops.shutdownGracefully(0, 5, TimeUnit.SECONDS).awaitUninterruptibly(5, TimeUnit.SECONDS);
+            }
+        }
     }
 
     private record OwnedRegistration(ServerDefinition definition, ServerRegistration registration) {
