@@ -146,7 +146,11 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    acceptLogin(input, output, 0, 200);
+                    acceptHandshakeAndLogin(input, output);
+                    sendLoginSuccess(output);
+                    sendJoinGame(output, 0, 200);
+                    writeFrame(output, new byte[]{0x1C, 0, 0, 0, (byte) 200, 0x7F});
+                    writeFrame(output, new byte[]{0x08});
                     assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
                     assertArrayEquals(new byte[]{0x0B, 0, 0, 0, (byte) 200, 1}, readFrame(input));
                     writeFrame(output, new byte[]{0x1A, 0, 0, 0, (byte) 200, 1});
@@ -176,6 +180,7 @@ final class SessionTransferTest {
                     assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
                     assertEquals(7, packetId(readFrame(input))); // Dummy respawn for same dimension.
                     assertEquals(7, packetId(readFrame(input))); // Target dimension.
+                    assertArrayEquals(new byte[]{0x1C, 0, 0, 0, 100, 0x7F}, readFrame(input));
                     assertEquals(8, packetId(readFrame(input))); // Target Position and Look, no second Login Success.
                     writeFrame(output, new byte[]{0x01, 0x33});
                     writeFrame(output, new byte[]{0x0B, 0, 0, 0, 100, 1});

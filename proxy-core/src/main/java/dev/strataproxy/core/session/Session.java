@@ -17,6 +17,7 @@ import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.CapacityReservation;
 import dev.strataproxy.core.forwarding.BungeeLegacyForwarding;
 import dev.strataproxy.core.protocol.LoginStart;
+import dev.strataproxy.core.protocol.Minecraft1710EntityIds;
 import dev.strataproxy.core.protocol.Minecraft1710PlayPackets;
 import dev.strataproxy.core.protocol.MinecraftLoginSuccess;
 import dev.strataproxy.core.protocol.MinecraftLoginDisconnect;
@@ -783,7 +784,13 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (mapped == null) continue;
                 try {
                     ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), mapped);
-                    try { output.writeBytes(frame); } finally { frame.release(); }
+                    try {
+                        ByteBuf outgoing = attempt.candidate.joinGame() == null ? frame
+                                : Minecraft1710EntityIds.rewrite(frontend.alloc(), frame, true,
+                                        attempt.candidate.joinGame().entityId(), clientEntityId);
+                        try { output.writeBytes(outgoing); }
+                        finally { if (outgoing != frame) outgoing.release(); }
+                    } finally { frame.release(); }
                 } finally {
                     if (mapped != packet) mapped.release();
                 }

@@ -2,9 +2,7 @@ package dev.strataproxy.core.auth;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -19,6 +17,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Asynchronous client for Mojang's sessionserver hasJoined endpoint. */
 public final class MojangSessionVerifier implements SessionVerifier {
@@ -68,23 +68,24 @@ public final class MojangSessionVerifier implements SessionVerifier {
         }
         HttpRequest request = HttpRequest.newBuilder(uri).timeout(timeout).GET()
                 .header("Accept", "application/json").build();
-        return client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
-                .thenApplyAsync(response -> parseResponse(username, response), parseExecutor);
+        CompletableFuture<HttpResponse<byte[]>> pending = client.sendAsync(request,
+                HttpResponse.BodyHandlers.limiting(HttpResponse.BodyHandlers.ofByteArray(), MAX_RESPONSE_BYTES));
+        CompletableFuture<HttpResponse<byte[]>> deadline = pending.copy()
+                .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        deadline.whenComplete((ignored, failure) -> {
+            if (failure instanceof TimeoutException) pending.cancel(true);
+        });
+        return deadline.thenApplyAsync(response -> parseResponse(username, response), parseExecutor);
     }
 
-    private static Optional<VerifiedProfile> parseResponse(String requestedName, HttpResponse<InputStream> response) {
+    private static Optional<VerifiedProfile> parseResponse(String requestedName, HttpResponse<byte[]> response) {
         int status = response.statusCode();
-        if (status == 204 || status == 404) {
-            closeQuietly(response.body());
-            return Optional.empty();
-        }
+        if (status == 204 || status == 404) return Optional.empty();
         if (status != 200) {
-            closeQuietly(response.body());
             throw new IllegalStateException("session server returned HTTP " + status);
         }
-        try (InputStream body = response.body()) {
-            byte[] bytes = readBounded(body);
-            JsonNode profile = JSON.readTree(bytes);
+        try {
+            JsonNode profile = JSON.readTree(response.body());
             if (profile == null || !profile.isObject()) throw new IllegalStateException("session server returned invalid profile JSON");
             JsonNode id = profile.get("id");
             JsonNode name = profile.get("name");
@@ -124,17 +125,6 @@ public final class MojangSessionVerifier implements SessionVerifier {
         return List.copyOf(result);
     }
 
-    private static byte[] readBounded(InputStream input) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[4096];
-        int count;
-        while ((count = input.read(buffer)) != -1) {
-            if (output.size() + count > MAX_RESPONSE_BYTES) throw new IOException("session profile exceeds response size limit");
-            output.write(buffer, 0, count);
-        }
-        return output.toByteArray();
-    }
-
     private static UUID parseUuid(String value) {
         try {
             if (value.length() == 32) {
@@ -152,7 +142,4 @@ public final class MojangSessionVerifier implements SessionVerifier {
 
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
 
-    private static void closeQuietly(InputStream body) {
-        try { body.close(); } catch (IOException ignored) { }
-    }
 }
