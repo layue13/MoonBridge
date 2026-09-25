@@ -60,6 +60,7 @@ class DnsDiscoveryPluginTest {
         assertEquals("tcp://[2001:db8:0:0:0:0:0:1]:25570", servers.definitions.get(ipv6Name).address().toString());
         assertEquals(48, servers.definitions.get(ipv6Name).capacity());
         assertEquals(3, servers.registerCalls.get());
+        assertEquals(List.of(firstName, secondName, ipv6Name), servers.registrationOrder);
 
         answer.set(new InetAddress[]{thirdAddress, secondAddress, ipv6Address});
         await(() -> servers.definitions.size() == 3 && servers.definitions.containsKey(thirdName)
@@ -179,6 +180,7 @@ class DnsDiscoveryPluginTest {
 
     private static final class FakeServers implements Servers {
         private final Map<String, ServerDefinition> definitions = new ConcurrentHashMap<>();
+        private final List<String> registrationOrder = new java.util.concurrent.CopyOnWriteArrayList<>();
         private final AtomicInteger registerCalls = new AtomicInteger();
         private final AtomicInteger updateCalls = new AtomicInteger();
         private final AtomicInteger unregisterCalls = new AtomicInteger();
@@ -198,6 +200,7 @@ class DnsDiscoveryPluginTest {
             if (definitions.putIfAbsent(definition.name(), definition) != null) {
                 throw new IllegalStateException("duplicate backend " + definition.name());
             }
+            registrationOrder.add(definition.name());
             registerCalls.incrementAndGet();
             return new ServerRegistration() {
                 private boolean active = true;
