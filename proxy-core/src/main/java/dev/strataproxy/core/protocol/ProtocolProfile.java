@@ -8,7 +8,8 @@ public record ProtocolProfile(
         int maxLoginNameCharacters) {
 
     public static final int PROTOCOL_1_7_10 = 5;
-    private static final ProtocolProfile MINECRAFT_1_7_10 = new ProtocolProfile(5, 2 * 1024 * 1024, 255, 16);
+    // 1.7.10's length decoder accepts at most three VarInt bytes.
+    private static final ProtocolProfile MINECRAFT_1_7_10 = new ProtocolProfile(5, 0x1FFFFF, 255, 16);
 
     public ProtocolProfile {
         if (protocolVersion < 0) throw new IllegalArgumentException("protocolVersion must be non-negative");

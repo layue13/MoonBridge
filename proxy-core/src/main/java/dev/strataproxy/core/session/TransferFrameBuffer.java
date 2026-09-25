@@ -10,7 +10,8 @@ import java.util.ArrayDeque;
 
 /** Holds decoded frames on either side of the old session during backend cutover. */
 final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
-    private static final int MAX_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
+    // The decoder retains the three-byte length prefix on a maximum-sized protocol 5 frame.
+    private static final int MAX_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes() + 3;
     private static final int MAX_MESSAGES = 1024;
 
     private final ArrayDeque<ByteBuf> frames = new ArrayDeque<>();

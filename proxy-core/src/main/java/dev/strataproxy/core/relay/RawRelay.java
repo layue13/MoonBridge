@@ -1,5 +1,6 @@
 package dev.strataproxy.core.relay;
 
+import dev.strataproxy.core.protocol.ProtocolProfile;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -17,8 +18,8 @@ import java.util.function.Consumer;
 
 /** Relays already negotiated protocol bytes without copying payload buffers. */
 public final class RawRelay {
-    // Per direction: bound retained in-flight reads while a backend is being replaced.
-    static final int MAX_PAUSED_BYTES = 2 * 1024 * 1024;
+    // Per direction: allow one maximum protocol 5 frame, including its length prefix.
+    static final int MAX_PAUSED_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes() + 3;
     static final int MAX_PAUSED_MESSAGES = 1024;
 
     private RawRelay() {

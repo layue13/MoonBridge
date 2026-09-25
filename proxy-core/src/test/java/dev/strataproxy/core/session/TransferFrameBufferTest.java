@@ -1,5 +1,6 @@
 package dev.strataproxy.core.session;
 
+import dev.strataproxy.core.protocol.ProtocolProfile;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -51,7 +52,7 @@ final class TransferFrameBufferTest {
         var overflows = new AtomicInteger();
         var channel = new EmbeddedChannel(new TransferFrameBuffer(overflows::incrementAndGet));
         try {
-            ByteBuf first = Unpooled.wrappedBuffer(new byte[2 * 1024 * 1024]);
+            ByteBuf first = Unpooled.wrappedBuffer(new byte[ProtocolProfile.minecraft1710().maxFrameBytes() + 3]);
             ByteBuf overflow = Unpooled.wrappedBuffer(new byte[]{4});
             channel.writeInbound(first, overflow);
             assertEquals(1, overflows.get());

@@ -50,6 +50,7 @@ class MinecraftProtocolTest {
 
     @Test void rejectsOversizedNegativeNonCanonicalAndOverlongFrameLengths() {
         assertBadFrame(new byte[] {3}, new ProtocolProfile(5, 2, 255, 16));
+        assertBadFrame(new byte[] {(byte) 0x80, (byte) 0x80, (byte) 0x80, 0x01}, profile);
         assertBadFrame(new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x0F}, profile);
         assertBadFrame(new byte[] {(byte) 0x81, 0}, profile);
         assertBadFrame(new byte[] {(byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80}, profile);
