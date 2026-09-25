@@ -858,6 +858,7 @@ final class SessionTransferTest {
     @Test
     void forgeTransferResetsHandshakeAndUsesServerHelloDimensionOverride() throws Exception {
         var catalog = new InMemoryBackendCatalog();
+        byte[] registration = serverForgeRegistration();
         byte[] largeRegistryPacket = serverForgeRegistryData();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
@@ -870,6 +871,7 @@ final class SessionTransferTest {
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
                     acceptHandshakeAndLogin(input, output);
                     sendLoginSuccess(output);
+                    writeFrame(output, registration);
                     writeFrame(output, serverForgeHello(5));
                     writeFrame(output, serverForgeAck());
                     assertArrayEquals(clientForgeAck(), readFrame(input));
@@ -886,6 +888,7 @@ final class SessionTransferTest {
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
                     acceptHandshakeAndLogin(input, output);
                     sendLoginSuccess(output);
+                    writeFrame(output, registration);
                     writeFrame(output, serverForgeHello(7));
                     writeFrame(output, largeRegistryPacket);
                     assertArrayEquals(clientForgeAck(), readFrame(input));
@@ -909,6 +912,7 @@ final class SessionTransferTest {
                     DataOutputStream output = new DataOutputStream(client.getOutputStream());
                     sendLogin(output);
                     assertEquals(2, packetId(readFrame(input)));
+                    assertArrayEquals(registration, readFrame(input));
                     assertArrayEquals(serverForgeHello(5), readFrame(input));
                     assertArrayEquals(serverForgeAck(), readFrame(input));
                     writeFrame(output, clientForgeAck());
@@ -919,6 +923,7 @@ final class SessionTransferTest {
                     byte[] reset = readFrame(input);
                     assertEquals(0x3f, packetId(reset));
                     assertEquals((byte) 0xfe, reset[reset.length - 1]);
+                    assertArrayEquals(registration, readFrame(input));
                     assertArrayEquals(serverForgeHello(7), readFrame(input));
                     assertArrayEquals(largeRegistryPacket, readFrame(input));
                     assertThrows(TimeoutException.class, () -> transfer.get(100, TimeUnit.MILLISECONDS),
@@ -1330,6 +1335,18 @@ final class SessionTransferTest {
         output.writeByte(0);
         output.writeByte(2);
         output.writeInt(dimensionOverride);
+        return payload.toByteArray();
+    }
+
+    private static byte[] serverForgeRegistration() throws Exception {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        var output = new DataOutputStream(payload);
+        // FMLHandshakeServerState.START sends this channel registration before ServerHello.
+        byte[] channels = "FML|HS\0FML".getBytes(StandardCharsets.UTF_8);
+        writeVarInt(output, 0x3f);
+        writeString(output, "REGISTER");
+        output.writeShort(channels.length);
+        output.write(channels);
         return payload.toByteArray();
     }
 
