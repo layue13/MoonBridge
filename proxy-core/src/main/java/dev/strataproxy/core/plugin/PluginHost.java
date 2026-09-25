@@ -306,6 +306,8 @@ public final class PluginHost implements AutoCloseable {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
         }
+        callbacks.shutdownNow();
+        timer.shutdownNow();
         for (int index = plugins.size() - 1; index >= 0; index--) {
             LoadedPlugin loaded = plugins.get(index);
             if (loaded.enabled) {
@@ -317,8 +319,6 @@ public final class PluginHost implements AutoCloseable {
             }
             loaded.context.deactivateAndRemove();
         }
-        callbacks.shutdownNow();
-        timer.shutdownNow();
         for (URLClassLoader loader : classLoaders) {
             try {
                 loader.close();

@@ -9,6 +9,10 @@ public interface Plugin {
     default void onEnable() {
     }
 
+    /**
+     * Called after pending placement requests are ended and callback workers are asked to stop.
+     * A callback that ignores interruption may still be running during this method.
+     */
     default void onDisable() {
     }
 

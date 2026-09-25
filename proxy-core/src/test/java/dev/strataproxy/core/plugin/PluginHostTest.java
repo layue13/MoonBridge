@@ -38,6 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -232,6 +233,47 @@ class PluginHostTest {
         assertTrue(plugin.decision.isCancelled(), "host close should cancel the plugin's unfinished stage");
         plugin.decision.complete(PlacementDecision.select("late"));
         assertTrue(placement.isCompletedExceptionally());
+    }
+
+    @Test
+    void closingHostInterruptsRunningPlacementBeforePluginDisable() throws Exception {
+        CountDownLatch callbackStarted = new CountDownLatch(1);
+        CountDownLatch callbackInterrupted = new CountDownLatch(1);
+        AtomicBoolean interruptedBeforeDisable = new AtomicBoolean();
+        Plugin plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+
+            @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
+                return Optional.of((player, servers) -> {
+                    callbackStarted.countDown();
+                    try {
+                        Thread.sleep(30_000);
+                        return CompletableFuture.failedFuture(new IllegalStateException("callback was not interrupted"));
+                    } catch (InterruptedException interrupted) {
+                        callbackInterrupted.countDown();
+                        Thread.currentThread().interrupt();
+                        return CompletableFuture.failedFuture(interrupted);
+                    }
+                });
+            }
+
+            @Override public void onDisable() {
+                try {
+                    interruptedBeforeDisable.set(callbackInterrupted.await(1, TimeUnit.SECONDS));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(5), 1, 1)) {
+            host.load(List.of(plugin));
+            host.enable();
+            var placement = host.placeInitial(PLAYER).toCompletableFuture();
+            assertTrue(callbackStarted.await(5, TimeUnit.SECONDS));
+            host.close();
+            assertTrue(interruptedBeforeDisable.get(), "plugin callback should be interrupted before onDisable");
+            assertTrue(placement.isCompletedExceptionally());
+        }
     }
 
     @Test
