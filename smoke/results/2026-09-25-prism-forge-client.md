@@ -31,3 +31,15 @@ After the smoke scripts gained `-PrismInstance` and instance-specific process cl
 The final parameterized first-login script was rerun with the default instance and reported `REAL_PRISM_URANIUM_PASS` with a 10-second hold; its raw logs are in `build/local-uranium-proxy-97465608db9a419eb1328b3f4bbbfd4b`. Cleanup left no matching client process. For a Prism instance whose displayed launch name differs from its directory name, pass both `-PrismInstance` and `-PrismInstanceFolder` so the smoke scripts can identify the game process precisely.
 
 This verifies one real, minimal Forge client transferring between local Uranium backends through the installed plugin API. It does not verify the target modpack, mod-specific plugin channels, Mojang online authentication, cross-host deployment, or production capacity and latency.
+
+## Revalidation on the current greenfield branch
+
+On 2026-09-25 at commit `7925b868afb72cad3d26a5b6a6861bc76648a940`, after the initial-placement cancellation fix, the installed distribution was tested again with:
+
+```powershell
+.\smoke\local-uranium-transfer.ps1 -BundlePath 'C:\Users\layue\Documents\ChatGPT\tdlm 2\Uranium\rfg\build\rfg-netty-compat-bundle' -InstalledPlugin -PrismClient
+```
+
+The Uranium server JAR had SHA-256 `B16747D08BAD4B7C67DB8F1F41C9C31066FEAAAC22B527775F604BDFA885BAD2`, matching the earlier run. The script reported `REAL_PRISM_URANIUM_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY holdSeconds=10` and `REAL_URANIUM_BACKEND_LOGS_PASS oldLogin=true newLogin=true oldDisconnected=true`. The proxy log recorded `SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY`; both FML logs recorded handshake acknowledgements 2 through 5. The old backend logged the player in at 23:52:06 and disconnected at 23:52:07; the replacement logged in at 23:52:07 and stayed connected until the script stopped the client at 23:52:18. The script left no matching Prism 1.7.10 game process. Raw logs are in the ignored local `build/local-uranium-transfer-aa802d503ade43ac94aacbcdc4ac8189` directory.
+
+This revalidation confirms the current branch still handles this minimal Forge transfer. The target modpack and real online authentication remain unverified.
