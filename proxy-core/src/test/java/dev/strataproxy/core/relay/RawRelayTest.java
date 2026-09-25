@@ -158,6 +158,37 @@ final class RawRelayTest {
     }
 
     @Test
+    void lateArrivalDuringRemovalCannotHalfDetachOrLoseOwnership() throws Exception {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var link = RawRelay.attach(client, backend);
+            link.start();
+            pump(client, backend);
+            var paused = link.pause().toCompletableFuture();
+            pump(client, backend);
+            paused.get(1, TimeUnit.SECONDS);
+
+            var detaching = link.detach().toCompletableFuture();
+            client.runPendingTasks();
+            backend.runPendingTasks();
+            var queued = Unpooled.wrappedBuffer(new byte[] {9});
+            client.eventLoop().execute(() -> client.writeInbound(queued));
+            pump(client, backend);
+
+            detaching.get(1, TimeUnit.SECONDS);
+            assertNull(client.pipeline().get("raw-relay"));
+            assertNull(backend.pipeline().get("raw-relay"));
+            var forwarded = (io.netty.buffer.ByteBuf) client.readInbound();
+            assertSame(queued, forwarded);
+            forwarded.release();
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     void pausedQueueOverflowClosesBothSidesAndReleasesEveryBuffer() throws Exception {
         var client = new EmbeddedChannel();
         var backend = new EmbeddedChannel();
