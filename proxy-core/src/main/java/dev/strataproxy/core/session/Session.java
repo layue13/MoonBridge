@@ -61,6 +61,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class Session extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
+    private static final int MAX_TRANSITION_BUFFER_FRAMES = 1024;
     private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
     private final ProxySessionListener owner;
@@ -527,7 +528,8 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void bufferTransitionFrame(boolean fromFrontend, ByteBuf packet) {
         int bytes = packet.readableBytes();
-        if (transitionBufferBytes + bytes > MAX_TRANSITION_BUFFER_BYTES) {
+        if (transitionBuffer.size() >= MAX_TRANSITION_BUFFER_FRAMES
+                || transitionBufferBytes + bytes > MAX_TRANSITION_BUFFER_BYTES) {
             closePair();
             return;
         }
