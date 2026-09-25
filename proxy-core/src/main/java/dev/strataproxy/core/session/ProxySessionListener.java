@@ -50,6 +50,7 @@ public final class ProxySessionListener implements Players {
     private final Duration loginStageTimeout;
     private final Duration placementTimeout;
     private final Duration transferCutoverTimeout;
+    private final Duration initialPlayTimeout;
     private final KeyPair encryptionKeys;
     private final SecureRandom random = new SecureRandom();
     private final EventLoopGroup boss = new NioEventLoopGroup(1, namedFactory("strataproxy-session-accept"));
@@ -87,6 +88,14 @@ public final class ProxySessionListener implements Players {
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout) {
         this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
+                Duration.ofMinutes(2));
+    }
+
+    ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                         Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
+                         Duration initialPlayTimeout) {
+        this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
+                initialPlayTimeout,
                 new DnsAddressResolverGroup(new DnsNameResolverBuilder()
                         .datagramChannelType(NioDatagramChannel.class).queryTimeoutMillis(3000)));
     }
@@ -94,6 +103,13 @@ public final class ProxySessionListener implements Players {
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
                          AddressResolverGroup<InetSocketAddress> backendResolver) {
+        this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
+                Duration.ofMinutes(2), backendResolver);
+    }
+
+    ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                         Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
+                         Duration initialPlayTimeout, AddressResolverGroup<InetSocketAddress> backendResolver) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.verifier = verifier;
@@ -101,12 +117,15 @@ public final class ProxySessionListener implements Players {
         this.loginStageTimeout = Objects.requireNonNull(loginStageTimeout, "loginStageTimeout");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         this.transferCutoverTimeout = Objects.requireNonNull(transferCutoverTimeout, "transferCutoverTimeout");
+        this.initialPlayTimeout = Objects.requireNonNull(initialPlayTimeout, "initialPlayTimeout");
         if (loginStageTimeout.isZero() || loginStageTimeout.isNegative()
                 || placementTimeout.isZero() || placementTimeout.isNegative()
                 || transferCutoverTimeout.isZero() || transferCutoverTimeout.isNegative()
+                || initialPlayTimeout.isZero() || initialPlayTimeout.isNegative()
                 || loginStageTimeout.compareTo(Duration.ofMinutes(3)) > 0
                 || placementTimeout.compareTo(Duration.ofMinutes(3)) > 0
-                || transferCutoverTimeout.compareTo(Duration.ofMinutes(3)) > 0) {
+                || transferCutoverTimeout.compareTo(Duration.ofMinutes(3)) > 0
+                || initialPlayTimeout.compareTo(Duration.ofMinutes(3)) > 0) {
             throw new IllegalArgumentException("session timeouts must be within three minutes");
         }
         try {
@@ -229,6 +248,7 @@ public final class ProxySessionListener implements Players {
     Duration loginStageTimeout() { return loginStageTimeout; }
     Duration placementTimeout() { return placementTimeout; }
     Duration transferCutoverTimeout() { return transferCutoverTimeout; }
+    Duration initialPlayTimeout() { return initialPlayTimeout; }
     KeyPair encryptionKeys() { return encryptionKeys; }
     MinecraftEncryptionRequest newEncryptionRequest() {
         return MinecraftEncryptionRequest.create("", encryptionKeys.getPublic(), random);

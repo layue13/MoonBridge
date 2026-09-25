@@ -78,6 +78,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private ScheduledFuture<?> initialLoginDeadline;
+    private ScheduledFuture<?> initialPlayDeadline;
     private PlayObservation playObservation;
     private KeepAliveBridge.State keepAlives;
     private RawRelay.Link relay;
@@ -394,9 +395,17 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         playObservation = new PlayObservation();
         keepAlives = new KeepAliveBridge.State();
-        playObservation.ready().whenComplete((ignored, failure) ->
-                frontend.eventLoop().execute(this::tryStartPendingTransfer));
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
+        initialPlayDeadline = frontend.eventLoop().schedule(() -> {
+            if (!closed.get() && !playObservation.ready().isDone()) closePair();
+        }, owner.initialPlayTimeout().toNanos(), TimeUnit.NANOSECONDS);
+        playObservation.ready().whenComplete((ignored, failure) -> {
+            if (closed.get()) return;
+            frontend.eventLoop().execute(() -> {
+                initialPlayDeadline.cancel(false);
+                if (failure == null) tryStartPendingTransfer();
+            });
+        });
         view = new PlayerView(identity, view.username(), selected.handle().id().value());
         published = true;
         owner.sessionPublished();
@@ -930,6 +939,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (!closed.compareAndSet(false, true)) return;
         Runnable cleanup = () -> {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
+            if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();

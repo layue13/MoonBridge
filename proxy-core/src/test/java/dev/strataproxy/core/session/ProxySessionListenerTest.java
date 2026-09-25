@@ -371,6 +371,130 @@ final class ProxySessionListenerTest {
     }
 
     @Test
+    void stalledInitialPlayHandshakeClosesSessionAndReleasesCapacity() throws Exception {
+        String username = "StalledWorld";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var backendClosed = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertEquals(-1, input.read());
+                    backendClosed.complete(null);
+                } catch (Throwable failure) {
+                    backendClosed.completeExceptionally(failure);
+                }
+            }, "fake-stalled-world-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            var registered = catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                    Duration.ofMillis(250));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    var input = new DataInputStream(client.getInputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    assertEquals(-1, input.read());
+                }
+                backendClosed.get(5, TimeUnit.SECONDS);
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while ((!listener.online().isEmpty()
+                        || catalog.find(registered.handle().id()).orElseThrow().availableUnits() != 1)
+                        && System.nanoTime() < deadline) Thread.sleep(5);
+                assertTrue(listener.online().isEmpty());
+                assertEquals(1, catalog.find(registered.handle().id()).orElseThrow().availableUnits());
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void completedInitialPlayHandshakeDoesNotExpire() throws Exception {
+        String username = "ReadyWorld";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var backendDone = new CompletableFuture<Void>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    writeFrame(output, new byte[]{0x01, 0, 0, 0, 42, 0, 0, 1, 20,
+                            7, 'd', 'e', 'f', 'a', 'u', 'l', 't'});
+                    var position = new ByteArrayOutputStream();
+                    var positionData = new DataOutputStream(position);
+                    positionData.writeByte(0x08);
+                    positionData.writeDouble(0);
+                    positionData.writeDouble(64);
+                    positionData.writeDouble(0);
+                    positionData.writeFloat(0);
+                    positionData.writeFloat(0);
+                    positionData.writeByte(0);
+                    writeFrame(output, position.toByteArray());
+                    Thread.sleep(750);
+                    writeFrame(output, new byte[]{0x03, 0x55});
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-ready-world-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), 1, Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    catalog, null, Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                    Duration.ofMillis(500));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    var input = new DataInputStream(client.getInputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    assertEquals(1, readVarInt(readFrame(input)));
+                    assertEquals(8, readVarInt(readFrame(input)));
+                    assertArrayEquals(new byte[]{0x03, 0x55}, readFrame(input));
+                }
+                backendDone.get(5, TimeUnit.SECONDS);
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void rejectsSecondConnectionForSamePlayerIdentity() throws Exception {
         String username = "SamePlayer";
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
