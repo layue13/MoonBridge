@@ -94,7 +94,9 @@ final class SessionTransferTest {
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
                     newRelayed.get(5, TimeUnit.SECONDS);
                     oldClosed.get(5, TimeUnit.SECONDS);
-                    assertEquals("new", listener.find(player.identity()).orElseThrow().currentServer().orElseThrow());
+                    var current = listener.find(player.identity()).orElseThrow();
+                    assertEquals("new", current.currentServer().orElseThrow());
+                    assertEquals(current, listener.online().get(0));
                     assertEquals(1, catalog.find(oldHandle.id()).orElseThrow().availableUnits());
                     assertEquals(0, catalog.find(newHandle.id()).orElseThrow().availableUnits());
                 }

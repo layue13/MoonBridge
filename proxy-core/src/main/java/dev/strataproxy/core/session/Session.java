@@ -63,11 +63,11 @@ final class Session extends ChannelInboundHandlerAdapter {
     private boolean verifyingIdentity;
     private PlayerIdentity identity;
     private boolean identityClaimed;
-    private PlayerView view;
+    private volatile PlayerView view;
     private BackendView selected;
     private CapacityReservation reservation;
     private boolean placementInProgress;
-    private boolean published;
+    private volatile boolean published;
     private boolean relayStarting;
     private int transitionBufferBytes;
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
@@ -332,13 +332,12 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
-        published = true;
         playObservation = new PlayObservation();
         playObservation.ready().whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(this::tryStartPendingTransfer));
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
-        owner.onlineMap().put(identity, new PlayerView(identity, view.username(), selected.handle().id().value()));
-        owner.sessions().put(identity, this);
+        view = new PlayerView(identity, view.username(), selected.handle().id().value());
+        published = true;
         relayStarting = true;
         frontend.config().setAutoRead(false);
         backend.config().setAutoRead(false);
@@ -680,8 +679,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 playObservation = nextObservation;
                 relay = next;
                 frameState = attempt.frameState;
-                owner.onlineMap().put(identity,
-                        new PlayerView(identity, view.username(), selected.handle().id().value()));
+                view = new PlayerView(identity, view.username(), selected.handle().id().value());
                 transfer = null;
                 attempt.finished = true;
                 oldBackend.close();
@@ -790,10 +788,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             PendingFrame pending;
             while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();
             transitionBufferBytes = 0;
-            if (published && selected != null) {
-                owner.onlineMap().remove(identity);
-                owner.sessions().remove(identity, this);
-            }
         };
         if (frontend.eventLoop().inEventLoop()) cleanup.run();
         else frontend.eventLoop().execute(cleanup);
@@ -805,6 +799,11 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         closePair();
+    }
+
+    Optional<PlayerView> onlineView() {
+        if (!published || closed.get()) return Optional.empty();
+        return Optional.of(view);
     }
 
     private static final class TransferAttempt {
