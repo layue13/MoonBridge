@@ -3,9 +3,13 @@ package dev.strataproxy.core.session;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.ConnectionCheck;
-import dev.strataproxy.api.LoginCheck;
-import dev.strataproxy.api.LoginRequest;
+import dev.strataproxy.api.event.AccessEvent;
+import dev.strataproxy.api.event.ConnectionEvent;
+import dev.strataproxy.api.event.LoginEvent;
+import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import dev.strataproxy.api.Plugin;
 import dev.strataproxy.api.PluginContext;
 import dev.strataproxy.core.plugin.PluginHost;
@@ -79,18 +83,17 @@ final class ProxySessionListenerTest {
                 });
         try (var host = new PluginHost(catalog, listener, Duration.ofSeconds(5))) {
             host.load(List.of(new Plugin() {
-                @Override public void onLoad(PluginContext context) { }
-                @Override public Optional<ConnectionCheck> connectionCheck() {
-                    return Optional.of(address -> {
+                @Override public void onLoad(PluginContext context) {
+                    context.events().subscribe(ConnectionEvent.class, event -> {
                         assertFalse(Thread.currentThread().getName().startsWith("strataproxy-session-io"));
-                        called.complete(address);
+                        called.complete(event.remoteAddress());
                         return decision;
                     });
                 }
             }));
             host.enable();
             listener.setPlacement(player -> { placementCalled.set(true); return CompletableFuture.completedFuture(Optional.empty()); });
-            listener.setAccessChecks(host::checkConnection, null, Duration.ofSeconds(5));
+            listener.setEvents(host, Duration.ofSeconds(5));
             int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
                 client.setSoTimeout(5000);
@@ -109,23 +112,20 @@ final class ProxySessionListenerTest {
         var catalog = new InMemoryBackendCatalog();
         var connected = new CompletableFuture<Void>();
         var connectionDecision = new CompletableFuture<AccessDecision>();
-        var login = new CompletableFuture<LoginRequest>();
+        var login = new CompletableFuture<LoginEvent>();
         var loginDecision = new CompletableFuture<AccessDecision>();
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         try (var host = new PluginHost(catalog, listener, Duration.ofSeconds(5))) {
             host.load(List.of(new Plugin() {
-                @Override public void onLoad(PluginContext context) { }
-                @Override public Optional<ConnectionCheck> connectionCheck() {
-                    return Optional.of(address -> { connected.complete(null); return connectionDecision; });
-                }
-                @Override public Optional<LoginCheck> loginCheck() {
-                    return Optional.of(request -> { login.complete(request); return loginDecision; });
+                @Override public void onLoad(PluginContext context) {
+                    context.events().subscribe(ConnectionEvent.class, event -> { connected.complete(null); return connectionDecision; });
+                    context.events().subscribe(LoginEvent.class, event -> { login.complete(event); return loginDecision; });
                 }
             }));
             host.enable();
             listener.setPlacement(player -> { placementCalled.set(true); return CompletableFuture.completedFuture(Optional.empty()); });
-            listener.setAccessChecks(host::checkConnection, host::checkLogin, Duration.ofSeconds(5));
+            listener.setEvents(host, Duration.ofSeconds(5));
             int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
                 client.setSoTimeout(5000);
@@ -133,7 +133,7 @@ final class ProxySessionListenerTest {
                 sendLogin(client, "BannedUser");
                 assertFalse(login.isDone());
                 connectionDecision.complete(AccessDecision.allow());
-                LoginRequest request = login.get(5, TimeUnit.SECONDS);
+                LoginEvent request = login.get(5, TimeUnit.SECONDS);
                 assertEquals(client.getLocalSocketAddress(), request.remoteAddress());
                 assertFalse(request.authenticated());
                 assertEquals("BannedUser", request.player().username());
@@ -158,7 +158,7 @@ final class ProxySessionListenerTest {
             var invoked = new CompletableFuture<Void>();
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), new InMemoryBackendCatalog());
             listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
-            listener.setAccessChecks(address -> { invoked.complete(null); return decision; }, null, Duration.ofSeconds(5));
+            listener.setEvents(accessEvents(event -> { invoked.complete(null); return decision; }, null), Duration.ofSeconds(5));
             try {
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
@@ -184,7 +184,7 @@ final class ProxySessionListenerTest {
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), new InMemoryBackendCatalog());
         listener.setPlacement(player -> { placementCalled.set(true); return CompletableFuture.completedFuture(Optional.empty()); });
-        listener.setAccessChecks(null, request -> { invoked.complete(null); return decision; }, Duration.ofSeconds(5));
+        listener.setEvents(accessEvents(null, event -> { invoked.complete(null); return decision; }), Duration.ofSeconds(5));
         try {
             int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
@@ -203,7 +203,7 @@ final class ProxySessionListenerTest {
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), new InMemoryBackendCatalog());
         listener.setPlacement(player -> { placementCalled.set(true); return CompletableFuture.completedFuture(Optional.empty()); });
-        listener.setAccessChecks(null, request -> CompletableFuture.failedFuture(new IOException("DB unavailable")), Duration.ofSeconds(5));
+        listener.setEvents(accessEvents(null, event -> CompletableFuture.failedFuture(new IOException("DB unavailable"))), Duration.ofSeconds(5));
         try {
             int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
@@ -221,18 +221,35 @@ final class ProxySessionListenerTest {
         assertTrue(condition.getAsBoolean());
     }
 
+    private static EventDispatcher accessEvents(
+            java.util.function.Function<ConnectionEvent, java.util.concurrent.CompletionStage<AccessDecision>> connection,
+            java.util.function.Function<LoginEvent, java.util.concurrent.CompletionStage<AccessDecision>> login) {
+        return new EventDispatcher() {
+            @Override public boolean hasSubscribers(Class<?> type) {
+                return type == ConnectionEvent.class && connection != null || type == LoginEvent.class && login != null;
+            }
+            @Override public java.util.concurrent.CompletionStage<AccessDecision> check(AccessEvent event) {
+                return switch (event) {
+                    case ConnectionEvent connected -> connection.apply(connected);
+                    case LoginEvent loggingIn -> login.apply(loggingIn);
+                };
+            }
+            @Override public void publish(NotificationEvent event) { throw new AssertionError("Unexpected notification"); }
+        };
+    }
+
     @Test
     void onlineBanUsesVerifiedIdentityAndEncryptedDisconnectBeforePlacement() throws Exception {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var verification = new CompletableFuture<Optional<VerifiedProfile>>();
         var verificationStarted = new CountDownLatch(1);
-        var checked = new CompletableFuture<LoginRequest>();
+        var checked = new CompletableFuture<LoginEvent>();
         var decision = new CompletableFuture<AccessDecision>();
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
                 new InMemoryBackendCatalog(), (name, hash, ip) -> { verificationStarted.countDown(); return verification; });
         listener.setPlacement(player -> { placementCalled.set(true); return CompletableFuture.completedFuture(Optional.empty()); });
-        listener.setAccessChecks(null, request -> { checked.complete(request); return decision; }, Duration.ofSeconds(5));
+        listener.setEvents(accessEvents(null, event -> { checked.complete(event); return decision; }), Duration.ofSeconds(5));
         try {
             int port = ((InetSocketAddress) listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS).localAddress()).getPort();
             try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
@@ -257,7 +274,7 @@ final class ProxySessionListenerTest {
                 assertTrue(verificationStarted.await(5, TimeUnit.SECONDS));
                 assertFalse(checked.isDone());
                 verification.complete(Optional.of(new VerifiedProfile(uuid, "Alice", List.of())));
-                LoginRequest request = checked.get(5, TimeUnit.SECONDS);
+                LoginEvent request = checked.get(5, TimeUnit.SECONDS);
                 assertTrue(request.authenticated());
                 assertEquals(uuid, request.player().identity().playerId());
                 assertEquals("Alice", request.player().username());
@@ -318,6 +335,9 @@ final class ProxySessionListenerTest {
         var catalog = new InMemoryBackendCatalog();
         var handlerThread = new CompletableFuture<String>();
         var accessCalls = new java.util.concurrent.atomic.AtomicInteger();
+        var connected = new CompletableFuture<ServerConnectedEvent>();
+        var disconnected = new CompletableFuture<PlayerDisconnectedEvent>();
+        var notificationCount = new java.util.concurrent.atomic.AtomicInteger();
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
             var received = new CompletableFuture<List<byte[]>>();
             Thread backendThread = new Thread(() -> {
@@ -361,15 +381,20 @@ final class ProxySessionListenerTest {
                             handlerThread.complete(Thread.currentThread().getName());
                             invocation.reply(invocation.player().username() + ":" + invocation.arguments());
                         });
-                    }
-                    @Override public Optional<ConnectionCheck> connectionCheck() {
-                        return Optional.of(address -> {
+                        context.events().subscribe(ServerConnectedEvent.class, event -> {
+                            assertFalse(Thread.currentThread().getName().startsWith("strataproxy-session-io"));
+                            notificationCount.incrementAndGet();
+                            connected.complete(event);
+                        });
+                        context.events().subscribe(PlayerDisconnectedEvent.class, event -> {
+                            notificationCount.incrementAndGet();
+                            disconnected.complete(event);
+                        });
+                        context.events().subscribe(ConnectionEvent.class, event -> {
                             accessCalls.incrementAndGet();
                             return CompletableFuture.completedFuture(AccessDecision.allow());
                         });
-                    }
-                    @Override public Optional<LoginCheck> loginCheck() {
-                        return Optional.of(request -> {
+                        context.events().subscribe(LoginEvent.class, event -> {
                             accessCalls.incrementAndGet();
                             return CompletableFuture.completedFuture(AccessDecision.allow());
                         });
@@ -377,7 +402,7 @@ final class ProxySessionListenerTest {
                 }));
                 plugins.enable();
                 listener.setPlacement(plugins::placeInitial);
-                listener.setAccessChecks(plugins::checkConnection, plugins::checkLogin, Duration.ofSeconds(5));
+                listener.setEvents(plugins, Duration.ofSeconds(5));
                 listener.setCommandDispatcher(plugins::dispatchCommand);
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress()).getPort();
@@ -389,6 +414,9 @@ final class ProxySessionListenerTest {
                     assertEquals(2, readVarInt(readFrame(input)));
                     assertEquals(1, readVarInt(readFrame(input)));
                     assertEquals(8, readVarInt(readFrame(input)));
+                    var initial = connected.get(5, TimeUnit.SECONDS);
+                    assertEquals(Optional.empty(), initial.previousServer());
+                    assertEquals(Optional.of("lobby"), initial.player().currentServer());
                     writeFrame(output, chatPacket("/where lobby"));
                     var reply = new java.io.ByteArrayInputStream(readFrame(input));
                     assertEquals(2, readVarInt(reply));
@@ -402,6 +430,9 @@ final class ProxySessionListenerTest {
                     assertArrayEquals(chatPacket("hello"), backendChat.get(0));
                     assertArrayEquals(chatPacket("/unknown arg"), backendChat.get(1));
                 }
+                var departed = disconnected.get(5, TimeUnit.SECONDS);
+                assertEquals(connected.join().player().identity(), departed.player().identity());
+                assertEquals(2, notificationCount.get());
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }

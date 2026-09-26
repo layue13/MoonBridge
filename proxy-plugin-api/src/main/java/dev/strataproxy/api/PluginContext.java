@@ -1,7 +1,8 @@
 package dev.strataproxy.api;
 
-import org.slf4j.Logger;
+import dev.strataproxy.api.event.Events;
 import java.util.Map;
+import org.slf4j.Logger;
 
 /** Services available to a loaded proxy plugin. Retained player and server handles expire after disable. */
 public interface PluginContext {
@@ -10,6 +11,8 @@ public interface PluginContext {
     Servers servers();
 
     Commands commands();
+
+    Events events();
 
     Logger logger();
 

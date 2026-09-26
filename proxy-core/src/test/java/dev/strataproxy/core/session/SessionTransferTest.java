@@ -2,6 +2,12 @@ package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.TransferStatus;
+import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.event.AccessEvent;
+import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendHandle;
@@ -35,6 +41,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -488,6 +496,16 @@ final class SessionTransferTest {
             var oldHandle = register(catalog, "old", oldServer);
             var newHandle = register(catalog, "new", newServer);
             var listener = listener(catalog);
+            var notifications = new LinkedBlockingQueue<NotificationEvent>();
+            listener.setEvents(new EventDispatcher() {
+                @Override public boolean hasSubscribers(Class<?> type) {
+                    return type == ServerConnectedEvent.class || type == PlayerDisconnectedEvent.class;
+                }
+                @Override public CompletionStage<AccessDecision> check(AccessEvent event) {
+                    throw new AssertionError("Unexpected access event");
+                }
+                @Override public void publish(NotificationEvent event) { notifications.add(event); }
+            }, Duration.ofSeconds(5));
             try {
                 InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress();
@@ -501,6 +519,11 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input))); // Initial Position and Look.
                     var player = awaitPlayer(listener);
                     assertEquals("old", player.currentServer().orElseThrow());
+                    var entered = (ServerConnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+                    assertEquals(Optional.empty(), entered.previousServer());
+                    assertEquals(player, entered.player());
+                    assertEquals(TransferStatus.SERVER_UNAVAILABLE,
+                            listener.transfer(player.identity(), "missing").toCompletableFuture().get(5, TimeUnit.SECONDS).status());
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
@@ -517,8 +540,17 @@ final class SessionTransferTest {
                     var current = listener.find(player.identity()).orElseThrow();
                     assertEquals("new", current.currentServer().orElseThrow());
                     assertEquals(current, listener.online().get(0));
+                    var switched = (ServerConnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+                    assertEquals(Optional.of("old"), switched.previousServer());
+                    assertEquals(current, switched.player());
+                    assertEquals(TransferStatus.NETWORK_READY,
+                            listener.transfer(current.identity(), "new").toCompletableFuture().get(5, TimeUnit.SECONDS).status());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+            var departed = (PlayerDisconnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+            assertEquals(Optional.of("new"), departed.player().currentServer());
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(notifications.isEmpty(), "failed/no-op transfers and repeated close do not publish events");
         }
     }
 

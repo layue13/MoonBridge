@@ -80,8 +80,7 @@ public final class ProxyMain {
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
-            listener.setAccessChecks(plugins.hasConnectionChecks() ? plugins::checkConnection : null,
-                    plugins.hasLoginChecks() ? plugins::checkLogin : null, accessTimeout);
+            listener.setEvents(plugins, accessTimeout);
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
             var serverChannel = listener.start().toCompletableFuture().join();

@@ -58,18 +58,4 @@ class ApiValueTypesTest {
         assertThrows(IllegalArgumentException.class, () -> AccessDecision.deny(" "));
         assertThrows(IllegalArgumentException.class, () -> AccessDecision.deny("x".repeat(1025)));
     }
-
-    @Test
-    void loginRequestRequiresPeerAndPlayerAndCarriesAuthenticationState() {
-        var player = new PlayerView(new PlayerIdentity(UUID.randomUUID(), 1), "TestPlayer", (String) null);
-        var address = new java.net.InetSocketAddress("127.0.0.1", 25565);
-
-        var request = new LoginRequest(player, address, false);
-
-        assertEquals(player, request.player());
-        assertEquals(address, request.remoteAddress());
-        assertEquals(false, request.authenticated());
-        assertThrows(NullPointerException.class, () -> new LoginRequest(null, address, false));
-        assertThrows(NullPointerException.class, () -> new LoginRequest(player, null, false));
-    }
 }

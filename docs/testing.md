@@ -21,7 +21,17 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](../smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](../smoke/results/2026-09-26-uranium-login-stalls.md)。
 
-## 访问检查验证记录（2026-09-26）
+## 类型化事件验证记录（2026-09-26）
+
+事件 API、派发器与会话接入完成后运行 `./gradlew.bat check --offline`。最终报告共 174 项测试（API 7、核心 154、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。
+
+原访问检查回归已迁移到事件订阅 API，继续验证认证前/认证后拒绝、加密断开消息、异步等待与取消、超时和容量上限。新增验证覆盖启动阶段注册与冻结、异步准入期间注销订阅、通知顺序/异常隔离/有界队列、启动失败时撤销订阅。合成 TCP 流程还核对首次进入后端、转服提交与断线通知，以及失败/同服转服和重复关闭不会多发通知。普通 PLAY 聊天与代理命令回归仍通过。
+
+此轮没有运行吞吐对比或目标整合包测试；在线认证测试使用注入的会话验证器。测试通过仅支持上述功能与资源边界，不能推出事件系统无开销或已达到生产容量。
+
+## 历史访问检查验证记录（2026-09-26）
+
+以下记录验证的是 2026-09-26 当时基于专用访问钩子的实现。它是历史结果；类型化事件 API 的验证见上一节。
 
 新增访问检查时先运行 `./gradlew.bat check --offline --rerun-tasks`；最后的并发清理修正后，再运行 `./gradlew.bat check --offline`，重新执行受影响的核心测试与发行包烟测。最终报告共 167 项测试（API 6、核心 148、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本与核心配置校验通过。
 
@@ -50,7 +60,7 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 .\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1 -Mode post-transfer
 ```
 
-2026-09-25 的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](../benchmarks/results/2026-09-25-session-after-lifecycle.md)。更早的测量见 [原会话基准记录](../benchmarks/results/2026-09-25-current-session-benchmark.md)。这些记录对应各自注明的源码版本，不是当前访问检查改动的性能结果，也不代表后端负载观测。
+2026-09-25 的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](../benchmarks/results/2026-09-25-session-after-lifecycle.md)。更早的测量见 [原会话基准记录](../benchmarks/results/2026-09-25-current-session-benchmark.md)。这些记录对应各自注明的源码版本，不是当前事件 API 的性能结果，也不代表后端负载观测。
 
 `-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](../benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
 

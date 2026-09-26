@@ -308,6 +308,7 @@ class DnsDiscoveryPluginTest {
             @Override public dev.strataproxy.api.Commands commands() {
                 return (name, handler) -> { throw new UnsupportedOperationException(); };
             }
+            @Override public dev.strataproxy.api.event.Events events() { throw new UnsupportedOperationException(); }
 
             @Override
             public org.slf4j.Logger logger() {

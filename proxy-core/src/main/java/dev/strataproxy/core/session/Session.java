@@ -2,7 +2,7 @@ package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.LoginRequest;
+import dev.strataproxy.api.event.LoginEvent;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.TransferResult;
@@ -115,7 +115,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
         if (ctx.channel() == frontend) {
-            resetLoginDeadline(owner.connectionCheck() == null ? owner.loginStageTimeout()
+            resetLoginDeadline(ctx.pipeline().get(ConnectionGate.class) == null ? owner.loginStageTimeout()
                     : owner.accessTimeout().plusSeconds(1));
         }
     }
@@ -257,14 +257,14 @@ final class Session extends ChannelInboundHandlerAdapter {
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         observeWaitingClient();
-        if (owner.loginCheck() == null) {
+        if (!owner.hasSubscribers(LoginEvent.class)) {
             beginPlacement();
             return;
         }
         resetLoginDeadline(owner.accessTimeout().plusSeconds(1));
         try {
-            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.loginCheck().check(
-                    new LoginRequest(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
+            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.checkAccess(
+                    new LoginEvent(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
                     "login check stage").toCompletableFuture();
             loginAccessRequest = request;
             request.whenComplete((decision, failure) -> {
@@ -509,6 +509,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         view = new PlayerView(identity, view.username(), selected.handle().id().value());
         published = true;
         owner.sessionPublished();
+        owner.serverConnected(view, Optional.empty());
         relayStarting = true;
         frontend.config().setAutoRead(false);
         if (frontend.pipeline().get("login-wait-guard") != null) {
@@ -1005,6 +1006,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     return;
                 }
                 Channel oldBackend = backend;
+                Optional<String> previousServer = view.currentServer();
                 PlayObservation oldObservation = playObservation;
                 TransferFrameHandler.State oldFrameState = frameState;
                 backend = attempt.channel;
@@ -1013,6 +1015,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 relay = next;
                 frameState = attempt.frameState;
                 view = new PlayerView(identity, view.username(), selected.handle().id().value());
+                owner.serverConnected(view, previousServer);
                 oldBackend.close();
                 oldObservation.close();
                 if (oldFrameState != null) oldFrameState.close();
@@ -1185,7 +1188,10 @@ final class Session extends ChannelInboundHandlerAdapter {
                 activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
             if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
-            if (published) owner.sessionUnpublished();
+            if (published) {
+                owner.sessionUnpublished();
+                owner.playerDisconnected(view);
+            }
             owner.allSessions().remove(this);
             owner.sessionClosed();
             PendingFrame pending;

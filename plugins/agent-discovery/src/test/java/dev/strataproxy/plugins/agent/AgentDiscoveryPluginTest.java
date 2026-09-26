@@ -211,6 +211,7 @@ class AgentDiscoveryPluginTest {
             @Override public dev.strataproxy.api.Commands commands() {
                 return (name, handler) -> { throw new UnsupportedOperationException(); };
             }
+            @Override public dev.strataproxy.api.event.Events events() { throw new UnsupportedOperationException(); }
             @Override public org.slf4j.Logger logger() { return org.slf4j.LoggerFactory.getLogger("agent-test"); }
             @Override public Map<String, String> settings() {
                 return Map.of("secret", new String(SECRET, StandardCharsets.UTF_8), "port", Integer.toString(port),

@@ -4,7 +4,7 @@
 
 ## 模块
 
-- `proxy-plugin-api` 定义插件外部接口：生命周期、玩家/服务器只读视图、后端注册、访问检查、初始选服、命令和转服。核心实现位于 `proxy-core`；可选发现器位于 `plugins/`。
+- `proxy-plugin-api` 定义插件外部接口：生命周期、玩家/服务器只读视图、后端注册、类型化事件、初始选服、命令和转服。核心实现位于 `proxy-core`；可选发现器位于 `plugins/`。
 - `ProxyMain` 读取严格 YAML 配置，先注册静态后端，再加载配置启用的插件，连接插件选服回调，最后启动 Netty 监听器。插件以 `META-INF/services/dev.strataproxy.api.Plugin` 声明，通过独立类加载器加载。
 - 核心支持 Minecraft 1.7.10（协议 5）登录和转发。`OFFLINE` 信任客户端提交的名字；`ONLINE_BUNGEE` 在代理执行加密与会话验证，并将身份转发给受信任的旧版 Bungee 后端。
 
@@ -14,14 +14,14 @@
 
 `ProxySessionListener` 负责接入限额、监听器生命周期和 UUID 到当前会话的索引；每个 `Session` 持有该连接的前端/后端通道和协议状态。玩家身份由 UUID 与连接代次组成。插件查询使用不可变 `PlayerView`；异步工作返回时会核对当前连接身份，避免旧连接结果作用于重连后的同 UUID 玩家。在线列表来自活动会话，不另存一份可竞争的玩家状态。
 
-连接首先经过可选的 IP 检查，再解析 Handshake/Login Start。在线模式完成加密与会话验证，离线模式生成离线身份；随后经过可选玩家访问检查、异步初始选服，再连接后端并写入 Login Start。后端 Login Success 校验通过后发布在线玩家视图、向客户端提交登录成功并进入双向转发。此时初次 PLAY/Forge 握手可能尚未完成；转服还要等待该握手就绪。身份冲突、协议错误、登录阶段失败和断线会关闭本次连接并释放索引与资源。登录失败原因可以编码成客户端断开消息；网络关闭或帧处理错误则清理连接。
+连接首先派发 `ConnectionEvent`（如有订阅），再解析 Handshake/Login Start。在线模式完成加密与会话验证，离线模式生成离线身份；随后派发 `LoginEvent`（如有订阅）、执行异步初始选服，再连接后端并写入 Login Start。后端 Login Success 校验通过后发布在线玩家视图，并派发 `ServerConnectedEvent`，再向客户端提交登录成功并进入双向转发。此时初次 PLAY/Forge 握手可能尚未完成；转服还要等待该握手就绪。身份冲突、协议错误、登录阶段失败和断线会关闭本次连接并释放索引与资源。登录失败原因可以编码成客户端断开消息；网络关闭或帧处理错误则清理连接。曾发布的玩家关闭时恰好派发一次 `PlayerDisconnectedEvent`。
 
 ```mermaid
 flowchart LR
-    A[TCP 建连] --> B{连接检查}
+    A[TCP 建连] --> B{ConnectionEvent 决策}
     B -->|允许| C[协议与身份验证]
     B -->|拒绝或失败| X[关闭连接]
-    C --> D{玩家访问检查}
+    C --> D{LoginEvent 决策}
     D -->|允许| E[初始选服]
     D -->|拒绝或失败| Y[登录断开消息]
     E --> F[后端登录]
@@ -51,7 +51,7 @@ flowchart LR
 
 ## 登录访问策略扩展
 
-玩家名/UUID 和来源 IP 的允许/拒绝判断及其封禁数据库属于 Ban 插件策略，不应放进后端目录或发现插件。插件可选实现类型化的 `connectionCheck()` 与 `loginCheck()`：前者在协议解析前收到 TCP 对端地址，拒绝时直接关闭连接；后者在模式相关身份建立后、初始选服前收到 `LoginRequest`（含 `authenticated` 标志），拒绝原因作为 Minecraft Login Disconnect 文本返回。多个插件按加载顺序依次检查，全部允许才继续；异常、空结果、超时和队列过载均按拒绝处理。检查在有界工作池中运行，整个检查阶段共用一个期限；没有注册检查时不派发工作。检查只发生在连接接入和登录阶段，不进入 PLAY 包热路径。API 示例与配置细节见[插件接入说明](plugins.md)。
+玩家名/UUID 和来源 IP 的允许/拒绝判断及其封禁数据库属于 Ban 插件策略，不应放进后端目录或发现插件。插件通过 `PluginContext.events()` 订阅 `ConnectionEvent` 与 `LoginEvent`，返回 `CompletionStage<AccessDecision>`。检查按注册顺序执行，首个拒绝即停止；异常、空结果、超时和队列过载均按拒绝处理。访问引擎有界（队列 128、最多 1024 个未决请求，默认期限 5 秒，范围 1–30 秒）；没有订阅者时跳过派发。检查只发生在连接接入和登录阶段，不进入 PLAY 包热路径。`ServerConnectedEvent` 与 `PlayerDisconnectedEvent` 是单 worker 有界 FIFO 的尽力通知，会话不等待，过载可丢弃。订阅只能在 `onLoad`/`onEnable` 注册，监听器启动前冻结；插件停用或失败时自动清理。API 示例与配置细节见[插件接入说明](plugins.md)。
 
 ## 相关源码
 

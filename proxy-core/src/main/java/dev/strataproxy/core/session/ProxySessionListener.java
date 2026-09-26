@@ -1,8 +1,12 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.ConnectionCheck;
-import dev.strataproxy.api.LoginCheck;
+import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.event.AccessEvent;
+import dev.strataproxy.api.event.ConnectionEvent;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Players;
@@ -71,10 +75,8 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile CommandDispatcher commandDispatcher;
-    private ConnectionCheck connectionCheck;
-    private LoginCheck loginCheck;
+    private EventDispatcher events;
     private Duration accessTimeout = Duration.ofSeconds(5);
-    private boolean accessConfigured;
     private int maxConnections = 4096;
     private volatile Channel listener;
     private volatile boolean closed;
@@ -179,23 +181,27 @@ public final class ProxySessionListener implements Players {
         maxConnections = limit;
     }
 
-    /** Installs host dispatchers before start; absent checks add no worker dispatch or gate. */
-    public synchronized void setAccessChecks(ConnectionCheck connectionCheck, LoginCheck loginCheck, Duration timeout) {
-        if (started || closed || accessConfigured) {
-            throw new IllegalStateException("Access checks must be configured once before listener start");
+    /** Installs the plugin event runtime before start; events without subscribers skip dispatch. */
+    public synchronized void setEvents(EventDispatcher events, Duration timeout) {
+        if (started || closed || this.events != null) {
+            throw new IllegalStateException("Events must be configured once before listener start");
         }
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofMinutes(3)) > 0) {
             throw new IllegalArgumentException("access timeout must be positive and within three minutes");
         }
-        this.connectionCheck = connectionCheck;
-        this.loginCheck = loginCheck;
+        this.events = Objects.requireNonNull(events, "events");
         this.accessTimeout = timeout;
-        accessConfigured = true;
     }
 
-    ConnectionCheck connectionCheck() { return connectionCheck; }
-    LoginCheck loginCheck() { return loginCheck; }
+    boolean hasSubscribers(Class<?> eventType) { return events != null && events.hasSubscribers(eventType); }
+    CompletionStage<AccessDecision> checkAccess(AccessEvent event) { return events.check(event); }
+    void serverConnected(PlayerView player, Optional<String> previousServer) {
+        if (hasSubscribers(ServerConnectedEvent.class)) events.publish(new ServerConnectedEvent(player, previousServer));
+    }
+    void playerDisconnected(PlayerView player) {
+        if (hasSubscribers(PlayerDisconnectedEvent.class)) events.publish(new PlayerDisconnectedEvent(player));
+    }
     Duration accessTimeout() { return accessTimeout; }
 
     public synchronized CompletionStage<Channel> start() {
@@ -211,8 +217,8 @@ public final class ProxySessionListener implements Players {
                     @Override protected void initChannel(SocketChannel channel) {
                         Session session = registerSession(channel);
                         if (session == null) return;
-                        if (connectionCheck != null) {
-                            channel.pipeline().addLast("connection-access", new ConnectionGate(connectionCheck,
+                        if (hasSubscribers(ConnectionEvent.class)) {
+                            channel.pipeline().addLast("connection-access", new ConnectionGate(events,
                                     accessTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
                         }
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
