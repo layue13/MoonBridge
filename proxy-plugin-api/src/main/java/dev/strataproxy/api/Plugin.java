@@ -11,7 +11,8 @@ public interface Plugin {
 
     /**
      * Called after pending placement requests are ended and callback workers are asked to stop.
-     * A callback that ignores interruption may still be running during this method.
+     * A callback that ignores interruption may still be running during this method. The proxy
+     * allows a total of ten seconds for all plugins to finish their disable hooks.
      */
     default void onDisable() {
     }

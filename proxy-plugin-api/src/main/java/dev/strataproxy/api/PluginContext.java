@@ -9,6 +9,8 @@ public interface PluginContext {
 
     Servers servers();
 
+    Commands commands();
+
     Logger logger();
 
     /** Immutable configuration assigned to this plugin by the proxy. */

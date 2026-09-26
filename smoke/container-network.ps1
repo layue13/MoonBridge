@@ -88,6 +88,7 @@ backends:
         @"
 listen: "0.0.0.0:25577"
 authentication: OFFLINE
+allowOfflinePublicAccess: true
 plugins:
   directory: "/opt/strataproxy/plugins"
 $enabled

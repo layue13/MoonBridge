@@ -75,10 +75,12 @@ public final class ProxyMain {
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
         try (var plugins = new PluginHost(catalog, listener, placementTimeout)) {
+            listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
             listener.setPlacement(plugins::placeInitial);
+            listener.setCommandDispatcher(plugins::dispatchCommand);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
             var shutdown = new Thread(() -> {

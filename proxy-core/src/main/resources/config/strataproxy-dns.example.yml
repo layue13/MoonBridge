@@ -1,7 +1,8 @@
 # Example: enable the DNS plugin instead of configured static backends.
 # Replace the host with a DNS name that resolves to your backend nodes.
-listen: "0.0.0.0:25577"
+listen: "127.0.0.1:25577"
 authentication: OFFLINE
+maxConnections: 4096
 backends: []
 plugins:
   directory: "../plugins"

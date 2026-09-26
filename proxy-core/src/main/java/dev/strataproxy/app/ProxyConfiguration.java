@@ -1,11 +1,14 @@
 package dev.strataproxy.app;
 
+import io.netty.util.NetUtil;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
 
 /** Configuration understood by the new proxy runtime. */
-public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends, Plugins plugins) {
+public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                                 Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     public ProxyConfiguration {
@@ -16,8 +19,16 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         if (authentication == null) {
             throw new IllegalArgumentException("authentication is required: OFFLINE or ONLINE_BUNGEE");
         }
+        if (authentication == Authentication.OFFLINE && !allowOfflinePublicAccess
+                && !isLiteralLoopback(listen)) {
+            throw new IllegalArgumentException("OFFLINE requires a literal loopback listen IP or allowOfflinePublicAccess: true");
+        }
         backends = backends == null ? List.of() : List.copyOf(backends);
         plugins = plugins == null ? new Plugins("plugins", Map.of(), null) : plugins;
+        maxConnections = maxConnections == null ? 4096 : maxConnections;
+        if (maxConnections < 1 || maxConnections > 1_000_000) {
+            throw new IllegalArgumentException("maxConnections must be between 1 and 1000000");
+        }
         var names = new java.util.HashSet<String>();
         for (var backend : backends) {
             if (!names.add(backend.name())) {
@@ -27,11 +38,28 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends) {
-        this(listen, authentication, backends, null);
+        this(listen, authentication, backends, null, null, false);
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends, Plugins plugins) {
+        this(listen, authentication, backends, plugins, null, false);
     }
 
     public InetSocketAddress listenAddress() {
         return parseAddress(listen);
+    }
+
+    private static boolean isLiteralLoopback(String listen) {
+        String value = listen.trim();
+        String host = value.substring(0, value.lastIndexOf(':'));
+        if (host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length() - 1);
+        byte[] bytes = NetUtil.createByteArrayFromIpAddressString(host);
+        if (bytes == null) return false;
+        try {
+            return InetAddress.getByAddress(bytes).isLoopbackAddress();
+        } catch (java.net.UnknownHostException impossible) {
+            throw new AssertionError(impossible);
+        }
     }
 
     public static InetSocketAddress parseAddress(String text) {

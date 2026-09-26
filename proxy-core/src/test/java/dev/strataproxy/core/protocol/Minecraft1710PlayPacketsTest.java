@@ -11,6 +11,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class Minecraft1710PlayPacketsTest {
     @Test
+    void readsOnlyChatFramesWithoutChangingTheirReaderIndex() {
+        ByteBuf chatBody = Unpooled.buffer();
+        ByteBuf ordinaryBody = Unpooled.buffer();
+        ByteBuf chat = null;
+        ByteBuf ordinary = null;
+        try {
+            ProtocolVarInt.write(chatBody, Minecraft1710PlayPackets.CLIENT_CHAT);
+            ProtocolStrings.write(chatBody, "/where 岛屿", 100);
+            chat = Minecraft1710PlayPackets.frame(UnpooledByteBufAllocator.DEFAULT, chatBody);
+            int start = chat.readerIndex();
+            assertEquals("/where 岛屿", Minecraft1710PlayPackets.playerChat(chat).orElseThrow());
+            assertEquals(start, chat.readerIndex());
+
+            ProtocolVarInt.write(ordinaryBody, 0x03);
+            ordinaryBody.writeByte(0x55);
+            ordinary = Minecraft1710PlayPackets.frame(UnpooledByteBufAllocator.DEFAULT, ordinaryBody);
+            start = ordinary.readerIndex();
+            assertTrue(Minecraft1710PlayPackets.playerChat(ordinary).isEmpty());
+            assertEquals(start, ordinary.readerIndex());
+        } finally {
+            chatBody.release();
+            ordinaryBody.release();
+            if (chat != null) chat.release();
+            if (ordinary != null) ordinary.release();
+        }
+    }
+    @Test
     void readsStockJoinGameAndForgeDimensionOverride() {
         ByteBuf join = Unpooled.buffer();
         ByteBuf hello = Unpooled.buffer();
