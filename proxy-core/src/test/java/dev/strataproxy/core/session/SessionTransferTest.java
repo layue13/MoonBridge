@@ -2,6 +2,10 @@ package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.TransferStatus;
+import dev.strataproxy.api.event.Event;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendHandle;
@@ -35,6 +39,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -488,6 +494,17 @@ final class SessionTransferTest {
             var oldHandle = register(catalog, "old", oldServer);
             var newHandle = register(catalog, "new", newServer);
             var listener = listener(catalog);
+            var notifications = new LinkedBlockingQueue<Event<?>>();
+            listener.setEvents(new EventDispatcher() {
+                @Override public boolean hasSubscribers(Class<?> type) {
+                    return type == ServerConnectedEvent.class || type == PlayerDisconnectedEvent.class;
+                }
+                @Override public <R> CompletionStage<R> dispatch(Event<R> event) {
+                    assertTrue(event instanceof ServerConnectedEvent || event instanceof PlayerDisconnectedEvent);
+                    notifications.add(event);
+                    return CompletableFuture.completedFuture(null);
+                }
+            }, Duration.ofSeconds(5));
             try {
                 InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress();
@@ -501,6 +518,11 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input))); // Initial Position and Look.
                     var player = awaitPlayer(listener);
                     assertEquals("old", player.currentServer().orElseThrow());
+                    var entered = (ServerConnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+                    assertEquals(Optional.empty(), entered.previousServer());
+                    assertEquals(player, entered.player());
+                    assertEquals(TransferStatus.SERVER_UNAVAILABLE,
+                            listener.transfer(player.identity(), "missing").toCompletableFuture().get(5, TimeUnit.SECONDS).status());
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
@@ -517,8 +539,17 @@ final class SessionTransferTest {
                     var current = listener.find(player.identity()).orElseThrow();
                     assertEquals("new", current.currentServer().orElseThrow());
                     assertEquals(current, listener.online().get(0));
+                    var switched = (ServerConnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+                    assertEquals(Optional.of("old"), switched.previousServer());
+                    assertEquals(current, switched.player());
+                    assertEquals(TransferStatus.NETWORK_READY,
+                            listener.transfer(current.identity(), "new").toCompletableFuture().get(5, TimeUnit.SECONDS).status());
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+            var departed = (PlayerDisconnectedEvent) notifications.poll(5, TimeUnit.SECONDS);
+            assertEquals(Optional.of("new"), departed.player().currentServer());
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(notifications.isEmpty(), "failed/no-op transfers and repeated close do not publish events");
         }
     }
 
@@ -1252,7 +1283,7 @@ final class SessionTransferTest {
     }
 
     @Test
-    void clientDisconnectWhileOldRelayIsPausedCompletesTransferAndReleasesBothReservations() throws Exception {
+    void playerDisconnectWhileOldRelayIsPausedCompletesTransferAndReleasesBothReservations() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
@@ -1264,6 +1295,9 @@ final class SessionTransferTest {
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
                     acceptLogin(input, output, 0);
+                    if (!java.util.Arrays.equals(new byte[]{0x01, 0x55}, readFrame(input))) {
+                        throw new AssertionError("held client frame did not drain to the old backend");
+                    }
                     if (input.read() != -1) throw new AssertionError("unexpected old backend data");
                     oldClosed.complete(null);
                 } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
@@ -1308,10 +1342,12 @@ final class SessionTransferTest {
                     var heldWrite = new CompletableFuture<Void>();
                     var heldMessage = new AtomicReference<Object>();
                     var heldPromise = new AtomicReference<ChannelPromise>();
+                    var heldContext = new AtomicReference<ChannelHandlerContext>();
                     oldChannel.eventLoop().submit(() -> oldChannel.pipeline().addFirst("hold-cutover-write",
                             new ChannelDuplexHandler() {
                                 @Override public void write(ChannelHandlerContext ctx, Object message,
                                                             ChannelPromise promise) {
+                                    heldContext.set(ctx);
                                     heldMessage.set(message);
                                     heldPromise.set(promise);
                                     heldWrite.complete(null);
@@ -1340,7 +1376,15 @@ final class SessionTransferTest {
                     }
                     assertTrue(buffersInstalled, "cutover buffers should be installed while old write is held");
 
-                    client.close();
+                    var disconnect = listener.disconnect(player.identity(), "转服期间断开");
+                    oldChannel.eventLoop().submit(() -> heldContext.get().writeAndFlush(
+                            heldMessage.getAndSet(null), heldPromise.getAndSet(null))).get(5, TimeUnit.SECONDS);
+                    var kick = new ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x40, readVarInt(kick));
+                    assertEquals("{\"text\":\"转服期间断开\"}",
+                            new String(kick.readNBytes(readVarInt(kick)), StandardCharsets.UTF_8));
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                            disconnect.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
                     oldClosed.get(5, TimeUnit.SECONDS);
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

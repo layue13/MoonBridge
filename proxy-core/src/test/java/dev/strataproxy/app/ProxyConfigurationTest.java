@@ -1,11 +1,19 @@
 package dev.strataproxy.app;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.strataproxy.core.protocol.ProtocolVarInt;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
+import java.awt.image.BufferedImage;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import javax.imageio.ImageIO;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ProxyConfigurationTest {
@@ -112,7 +120,7 @@ final class ProxyConfigurationTest {
             var plugins = new ProxyConfigurationLoader().load(config).plugins();
             assertEquals("extensions", plugins.directory());
             assertEquals(15, plugins.initialPlacementTimeoutSeconds());
-            assertEquals(5, plugins.accessTimeoutSeconds());
+            assertEquals(5, plugins.eventTimeoutSeconds());
             assertEquals("_minecraft._tcp.example.net",
                     plugins.enabled().get("dev.example.DnsPlugin").get("record"));
             assertThrows(UnsupportedOperationException.class,
@@ -141,13 +149,13 @@ final class ProxyConfigurationTest {
     }
 
     @Test
-    void readsAndBoundsAccessTimeout() throws Exception {
-        var config = Files.createTempFile("strataproxy-access-timeout", ".yml");
+    void readsAndBoundsEventTimeout() throws Exception {
+        var config = Files.createTempFile("strataproxy-event-timeout", ".yml");
         try {
             String prefix = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nplugins:\n"
-                    + "  directory: plugins\n  accessTimeoutSeconds: ";
+                    + "  directory: plugins\n  eventTimeoutSeconds: ";
             Files.writeString(config, prefix + "3\n");
-            assertEquals(3, new ProxyConfigurationLoader().load(config).plugins().accessTimeoutSeconds());
+            assertEquals(3, new ProxyConfigurationLoader().load(config).plugins().eventTimeoutSeconds());
             for (int invalid : new int[]{0, 31}) {
                 Files.writeString(config, prefix + invalid + "\n");
                 assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
@@ -165,5 +173,87 @@ final class ProxyConfigurationTest {
                 ProxyMain.pluginDirectory(config, "../plugins"));
         Path absolute = Path.of("example", "custom-plugins").toAbsolutePath();
         assertEquals(absolute, ProxyMain.pluginDirectory(config, absolute.toString()));
+    }
+
+    @Test
+    void defaultsAndValidatesStatusConfiguration() throws Exception {
+        Path config = Files.createTempFile("strataproxy-status", ".yml");
+        try {
+            Files.writeString(config, "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n");
+            var loader = new ProxyConfigurationLoader();
+            var defaults = loader.load(config).status();
+            assertEquals("StrataProxy", defaults.motd());
+            assertEquals(100, defaults.maxPlayers());
+            assertNull(defaults.icon());
+
+            String base = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nstatus:\n  motd: \"%s\"\n  maxPlayers: %d\n";
+            Files.writeString(config, base.formatted("岛".repeat(1024), 1_000_000));
+            var maxMotd = loader.load(config).status().motd();
+            assertEquals(1024, maxMotd.codePointCount(0, maxMotd.length()));
+            for (int invalid : new int[]{0, -1, 1_000_001}) {
+                Files.writeString(config, base.formatted("ready", invalid));
+                assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> loader.load(config));
+            }
+            Files.writeString(config, base.formatted("x".repeat(1025), 100));
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> loader.load(config));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
+    void validatesOptionalIconPathFormatDimensionsAndSize() throws Exception {
+        Path directory = Files.createTempDirectory("strataproxy-status-icon");
+        Path config = directory.resolve("strataproxy.yml");
+        Path icon = directory.resolve("icon.png");
+        var loader = new ProxyConfigurationLoader();
+        try {
+            String yaml = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n"
+                    + "status:\n  icon: \"%s\"\n";
+            Files.writeString(config, yaml.formatted("icon.png"));
+            Files.write(icon, new byte[]{1, 2, 3});
+            var invalidConfig = loader.load(config);
+            assertThrows(java.io.IOException.class, () -> loader.loadServerListStatus(invalidConfig, config));
+            assertEquals(1, ProxyMain.run(new String[]{"--validate-config", config.toString()}));
+
+            writePng(icon, 32, 64);
+            assertThrows(java.io.IOException.class, () -> loader.loadServerListStatus(invalidConfig, config));
+            Files.write(icon, new byte[64 * 1024 + 1]);
+            assertThrows(java.io.IOException.class, () -> loader.loadServerListStatus(invalidConfig, config));
+
+            Files.writeString(config, yaml.formatted("missing.png"));
+            var missingConfig = loader.load(config);
+            assertThrows(java.io.IOException.class, () -> loader.loadServerListStatus(missingConfig, config));
+            Files.writeString(config, yaml.formatted(icon.toAbsolutePath().toString().replace("\\", "\\\\")));
+            var absoluteConfig = loader.load(config);
+            assertThrows(java.io.IOException.class, () -> loader.loadServerListStatus(absoluteConfig, config));
+
+            writePng(icon, 64, 64);
+            Files.writeString(config, yaml.formatted("icon.png"));
+            var validConfig = loader.load(config);
+            var status = loader.loadServerListStatus(validConfig, config);
+            assertEquals(true, status.faviconDataUrl().startsWith("data:image/png;base64,"));
+            assertEquals(0, ProxyMain.run(new String[]{"--validate-config", config.toString()}));
+            ByteBuf body = status.encode(UnpooledByteBufAllocator.DEFAULT, 4);
+            try {
+                assertEquals(0, ProtocolVarInt.read(body));
+                byte[] jsonBytes = new byte[ProtocolVarInt.read(body)];
+                body.readBytes(jsonBytes);
+                var response = new ObjectMapper().readTree(new String(jsonBytes, StandardCharsets.UTF_8));
+                assertEquals(status.faviconDataUrl(), response.path("favicon").textValue());
+                assertEquals(4, response.path("players").path("online").intValue());
+            } finally {
+                body.release();
+            }
+        } finally {
+            Files.deleteIfExists(icon);
+            Files.deleteIfExists(config);
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    private static void writePng(Path destination, int width, int height) throws Exception {
+        var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        ImageIO.write(image, "PNG", destination.toFile());
     }
 }

@@ -202,6 +202,12 @@ class AgentDiscoveryPluginTest {
                 return new Players() {
                     @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.empty(); }
                     @Override public List<PlayerView> online() { return List.of(); }
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.MessageResult> sendMessage(PlayerIdentity identity, String message) {
+                        return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                    }
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+                        return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                    }
                     @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
                         return CompletableFuture.failedFuture(new UnsupportedOperationException());
                     }
@@ -211,6 +217,7 @@ class AgentDiscoveryPluginTest {
             @Override public dev.strataproxy.api.Commands commands() {
                 return (name, handler) -> { throw new UnsupportedOperationException(); };
             }
+            @Override public dev.strataproxy.api.event.Events events() { throw new UnsupportedOperationException(); }
             @Override public org.slf4j.Logger logger() { return org.slf4j.LoggerFactory.getLogger("agent-test"); }
             @Override public Map<String, String> settings() {
                 return Map.of("secret", new String(SECRET, StandardCharsets.UTF_8), "port", Integer.toString(port),

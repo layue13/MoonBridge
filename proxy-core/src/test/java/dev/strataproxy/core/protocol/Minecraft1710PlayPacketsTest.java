@@ -113,4 +113,45 @@ final class Minecraft1710PlayPacketsTest {
             reset.release();
         }
     }
+
+    @Test
+    void encodesEscapedUnicodeChatAndPlayDisconnectPayloads() {
+        ByteBuf chatFrame = Minecraft1710PlayPackets.chatReply(UnpooledByteBufAllocator.DEFAULT,
+                "引号 \" 和换行\n🙂");
+        ByteBuf disconnect = Minecraft1710PlayPackets.disconnect(UnpooledByteBufAllocator.DEFAULT,
+                "断开：\"维护\"\n稍后再试🙂");
+        try {
+            int chatLength = ProtocolVarInt.read(chatFrame);
+            ByteBuf chat = chatFrame.readSlice(chatLength);
+            assertEquals(Minecraft1710PlayPackets.SERVER_CHAT, ProtocolVarInt.read(chat));
+            String component = ProtocolStrings.read(chat, 32767);
+            assertTrue(component.contains("\\\""));
+            assertTrue(component.contains("\\n"));
+            assertTrue(component.contains("🙂"));
+
+            assertEquals(Minecraft1710PlayPackets.SERVER_DISCONNECT, ProtocolVarInt.read(disconnect));
+            String reason = ProtocolStrings.read(disconnect, 32767);
+            assertTrue(reason.contains("\\\""));
+            assertTrue(reason.contains("\\n"));
+            assertTrue(reason.contains("🙂"));
+        } finally {
+            chatFrame.release();
+            disconnect.release();
+        }
+    }
+
+    @Test
+    void textBoundsCountUnicodeCodePoints() {
+        String withinLimit = "🙂".repeat(1024);
+        ByteBuf accepted = Minecraft1710PlayPackets.chatReply(UnpooledByteBufAllocator.DEFAULT, withinLimit);
+        try {
+            assertTrue(accepted.isReadable());
+        } finally {
+            accepted.release();
+        }
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> Minecraft1710PlayPackets.chatReply(UnpooledByteBufAllocator.DEFAULT, withinLimit + "🙂"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> Minecraft1710PlayPackets.disconnect(UnpooledByteBufAllocator.DEFAULT, " \n"));
+    }
 }

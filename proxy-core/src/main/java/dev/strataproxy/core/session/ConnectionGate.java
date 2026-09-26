@@ -1,7 +1,8 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.ConnectionCheck;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 final class ConnectionGate extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(ConnectionGate.class);
     private static final int MAX_PENDING_BYTES = 4096;
-    private final ConnectionCheck check;
+    private final EventDispatcher events;
     private final Duration timeout;
     private final Runnable accepted;
     private final Runnable closeSession;
@@ -30,8 +31,8 @@ final class ConnectionGate extends ChannelInboundHandlerAdapter {
     private ByteBuf pending;
     private boolean finished;
 
-    ConnectionGate(ConnectionCheck check, Duration timeout, Runnable accepted, Runnable closeSession) {
-        this.check = check;
+    ConnectionGate(EventDispatcher events, Duration timeout, Runnable accepted, Runnable closeSession) {
+        this.events = events;
         this.timeout = timeout;
         this.accepted = accepted;
         this.closeSession = closeSession;
@@ -40,7 +41,7 @@ final class ConnectionGate extends ChannelInboundHandlerAdapter {
     @Override public void channelActive(ChannelHandlerContext ctx) {
         try {
             deadline = ctx.executor().schedule(this::deny, timeout.toNanos(), TimeUnit.NANOSECONDS);
-            request = Objects.requireNonNull(check.check((InetSocketAddress) ctx.channel().remoteAddress()),
+            request = Objects.requireNonNull(events.dispatch(new ConnectionAdmissionEvent((InetSocketAddress) ctx.channel().remoteAddress())),
                     "connection check stage").toCompletableFuture();
             request.whenComplete((decision, failure) -> {
                 try {

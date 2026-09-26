@@ -24,14 +24,4 @@ public interface Plugin {
     default Optional<InitialPlacementHandler> initialPlacementHandler() {
         return Optional.empty();
     }
-
-    /** Returns this plugin's optional check for newly accepted client connections. */
-    default Optional<ConnectionCheck> connectionCheck() {
-        return Optional.empty();
-    }
-
-    /** Returns this plugin's optional check after login identity is known and before placement. */
-    default Optional<LoginCheck> loginCheck() {
-        return Optional.empty();
-    }
 }

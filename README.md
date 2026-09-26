@@ -1,12 +1,12 @@
 # StrataProxy
 
-面向 Minecraft 1.7.10 Forge 的玩家会话代理：登录认证、协议转发、跨后端转服，以及供插件使用的玩家、服务器目录、命令和连接访问检查 API。空岛分配、实例唤醒和 Ban 数据存储由插件实现。
+面向 Minecraft 1.7.10 Forge 的玩家会话代理：登录认证、协议转发、跨后端转服，以及供插件使用的玩家、服务器目录、命令和类型化事件 API。空岛分配、实例唤醒和 Ban 数据存储由插件实现。
 
 ## 文档
 
 - [设计文档索引](docs/README.md)
 - [架构与边界](docs/architecture.md)：会话、协议、线程模型、转服、后端目录。
-- [插件开发](docs/plugins.md)：生命周期、ServerView、选服、Command、玩家/IP 访问检查。
+- [插件开发](docs/plugins.md)：生命周期、ServerView、选服、Command 和统一类型化事件 API。
 - [运行配置](docs/operations.md)与[发现插件](docs/discovery.md)。
 - [测试与性能验证](docs/testing.md)：构建、烟测、真实客户端记录和基准方法。
 

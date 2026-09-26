@@ -8,7 +8,8 @@ import java.util.Map;
 
 /** Configuration understood by the new proxy runtime. */
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
-                                 Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess) {
+                                 Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                                 Status status) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     public ProxyConfiguration {
@@ -29,6 +30,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         if (maxConnections < 1 || maxConnections > 1_000_000) {
             throw new IllegalArgumentException("maxConnections must be between 1 and 1000000");
         }
+        status = status == null ? new Status(null, null, null) : status;
         var names = new java.util.HashSet<String>();
         for (var backend : backends) {
             if (!names.add(backend.name())) {
@@ -38,11 +40,24 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends) {
-        this(listen, authentication, backends, null, null, false);
+        this(listen, authentication, backends, null, null, false, null);
     }
 
-    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends, Plugins plugins) {
-        this(listen, authentication, backends, plugins, null, false);
+    /** User-facing server list values; icon validation needs the config file location and happens in the loader. */
+    public record Status(String motd, Integer maxPlayers, String icon) {
+        public Status {
+            motd = motd == null ? "StrataProxy" : motd;
+            if (motd.codePointCount(0, motd.length()) > 1024) {
+                throw new IllegalArgumentException("status.motd must contain at most 1024 Unicode code points");
+            }
+            maxPlayers = maxPlayers == null ? 100 : maxPlayers;
+            if (maxPlayers < 1 || maxPlayers > 1_000_000) {
+                throw new IllegalArgumentException("status.maxPlayers must be between 1 and 1000000");
+            }
+            if (icon != null && icon.isBlank()) {
+                throw new IllegalArgumentException("status.icon must be a non-empty relative PNG path");
+            }
+        }
     }
 
     public InetSocketAddress listenAddress() {
@@ -107,7 +122,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public record Plugins(String directory, Map<String, Map<String, String>> enabled,
-                          Integer initialPlacementTimeoutSeconds, Integer accessTimeoutSeconds) {
+                          Integer initialPlacementTimeoutSeconds, Integer eventTimeoutSeconds) {
         public Plugins {
             if (directory == null || directory.isBlank()) {
                 throw new IllegalArgumentException("plugin directory is required");
@@ -117,9 +132,9 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             if (initialPlacementTimeoutSeconds < 1 || initialPlacementTimeoutSeconds > 120) {
                 throw new IllegalArgumentException("initialPlacementTimeoutSeconds must be between 1 and 120");
             }
-            accessTimeoutSeconds = accessTimeoutSeconds == null ? 5 : accessTimeoutSeconds;
-            if (accessTimeoutSeconds < 1 || accessTimeoutSeconds > 30) {
-                throw new IllegalArgumentException("accessTimeoutSeconds must be between 1 and 30");
+            eventTimeoutSeconds = eventTimeoutSeconds == null ? 5 : eventTimeoutSeconds;
+            if (eventTimeoutSeconds < 1 || eventTimeoutSeconds > 30) {
+                throw new IllegalArgumentException("eventTimeoutSeconds must be between 1 and 30");
             }
             enabled = enabled == null ? Map.of() : enabled.entrySet().stream().collect(
                     java.util.stream.Collectors.toUnmodifiableMap(

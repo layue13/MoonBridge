@@ -1,16 +1,22 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.ConnectionCheck;
-import dev.strataproxy.api.LoginCheck;
+import dev.strataproxy.api.event.Event;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.core.event.EventDispatcher;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
+import dev.strataproxy.api.MessageResult;
+import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.Players;
 import dev.strataproxy.api.TransferResult;
 import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.auth.MinecraftEncryptionRequest;
 import dev.strataproxy.core.auth.SessionVerifier;
 import dev.strataproxy.core.backend.BackendCatalog;
+import dev.strataproxy.core.protocol.ServerListStatus;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -71,11 +77,10 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile CommandDispatcher commandDispatcher;
-    private ConnectionCheck connectionCheck;
-    private LoginCheck loginCheck;
-    private Duration accessTimeout = Duration.ofSeconds(5);
-    private boolean accessConfigured;
+    private EventDispatcher events;
+    private Duration eventTimeout = Duration.ofSeconds(5);
     private int maxConnections = 4096;
+    private ServerListStatus serverListStatus = ServerListStatus.defaultStatus();
     private volatile Channel listener;
     private volatile boolean closed;
     private boolean started;
@@ -179,24 +184,36 @@ public final class ProxySessionListener implements Players {
         maxConnections = limit;
     }
 
-    /** Installs host dispatchers before start; absent checks add no worker dispatch or gate. */
-    public synchronized void setAccessChecks(ConnectionCheck connectionCheck, LoginCheck loginCheck, Duration timeout) {
-        if (started || closed || accessConfigured) {
-            throw new IllegalStateException("Access checks must be configured once before listener start");
+    /** Sets immutable server-list values before the listener starts. */
+    public synchronized void setServerListStatus(ServerListStatus status) {
+        if (started || closed) throw new IllegalStateException("Server list must be configured before listener start");
+        serverListStatus = Objects.requireNonNull(status, "status");
+    }
+
+    ServerListStatus serverListStatus() { return serverListStatus; }
+
+    /** Installs the plugin event runtime before start; events without subscribers skip dispatch. */
+    public synchronized void setEvents(EventDispatcher events, Duration timeout) {
+        if (started || closed || this.events != null) {
+            throw new IllegalStateException("Events must be configured once before listener start");
         }
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofMinutes(3)) > 0) {
-            throw new IllegalArgumentException("access timeout must be positive and within three minutes");
+            throw new IllegalArgumentException("event timeout must be positive and within three minutes");
         }
-        this.connectionCheck = connectionCheck;
-        this.loginCheck = loginCheck;
-        this.accessTimeout = timeout;
-        accessConfigured = true;
+        this.events = Objects.requireNonNull(events, "events");
+        this.eventTimeout = timeout;
     }
 
-    ConnectionCheck connectionCheck() { return connectionCheck; }
-    LoginCheck loginCheck() { return loginCheck; }
-    Duration accessTimeout() { return accessTimeout; }
+    boolean hasSubscribers(Class<?> eventType) { return events != null && events.hasSubscribers(eventType); }
+    <R> CompletionStage<R> dispatchEvent(Event<R> event) { return events.dispatch(event); }
+    void serverConnected(PlayerView player, Optional<String> previousServer) {
+        if (hasSubscribers(ServerConnectedEvent.class)) events.dispatch(new ServerConnectedEvent(player, previousServer));
+    }
+    void playerDisconnected(PlayerView player) {
+        if (hasSubscribers(PlayerDisconnectedEvent.class)) events.dispatch(new PlayerDisconnectedEvent(player));
+    }
+    Duration eventTimeout() { return eventTimeout; }
 
     public synchronized CompletionStage<Channel> start() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("listener is closed"));
@@ -211,9 +228,9 @@ public final class ProxySessionListener implements Players {
                     @Override protected void initChannel(SocketChannel channel) {
                         Session session = registerSession(channel);
                         if (session == null) return;
-                        if (connectionCheck != null) {
-                            channel.pipeline().addLast("connection-access", new ConnectionGate(connectionCheck,
-                                    accessTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
+                        if (hasSubscribers(ConnectionAdmissionEvent.class)) {
+                            channel.pipeline().addLast("connection-admission", new ConnectionGate(events,
+                                    eventTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
                         }
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                                 dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true,
@@ -272,6 +289,26 @@ public final class ProxySessionListener implements Players {
             return CompletableFuture.completedFuture(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
         }
         return session.transferTo(backendName);
+    }
+
+    @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, String message) {
+        Objects.requireNonNull(identity, "identity");
+        Session.validateMessage(message);
+        Session session = sessionsByPlayerId.get(identity.playerId());
+        if (session == null || !session.matchesIdentity(identity)) {
+            return CompletableFuture.completedFuture(MessageResult.NOT_CONNECTED);
+        }
+        return session.sendMessage(message);
+    }
+
+    @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+        Objects.requireNonNull(identity, "identity");
+        Session.validateDisconnectReason(reason);
+        Session session = sessionsByPlayerId.get(identity.playerId());
+        if (session == null || !session.matchesIdentity(identity)) {
+            return CompletableFuture.completedFuture(DisconnectResult.NOT_CONNECTED);
+        }
+        return session.disconnect(reason);
     }
 
     public synchronized CompletionStage<Void> close() {

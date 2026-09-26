@@ -36,7 +36,10 @@ public final class ProxyMain {
                 return 0;
             }
             if (arguments.length == 2 && arguments[0].equals("--validate-config")) {
-                var configuration = new ProxyConfigurationLoader().load(Path.of(arguments[1]));
+                var loader = new ProxyConfigurationLoader();
+                Path configPath = Path.of(arguments[1]);
+                var configuration = loader.load(configPath);
+                loader.loadServerListStatus(configuration, configPath);
                 StaticBackends.register(configuration, new InMemoryBackendCatalog());
                 System.out.println("Valid core configuration and static backends: " + configuration.listen()
                         + " (enabled plugin settings are checked at startup)");
@@ -60,11 +63,13 @@ public final class ProxyMain {
     }
 
     private static void runProxy(Path configPath) throws Exception {
-        var configuration = new ProxyConfigurationLoader().load(configPath);
+        var loader = new ProxyConfigurationLoader();
+        var configuration = loader.load(configPath);
+        var serverListStatus = loader.loadServerListStatus(configuration, configPath);
         var catalog = new InMemoryBackendCatalog();
         StaticBackends.register(configuration, catalog);
         Duration placementTimeout = Duration.ofSeconds(configuration.plugins().initialPlacementTimeoutSeconds());
-        Duration accessTimeout = Duration.ofSeconds(configuration.plugins().accessTimeoutSeconds());
+        Duration eventTimeout = Duration.ofSeconds(configuration.plugins().eventTimeoutSeconds());
         ExecutorService verifierWorkers = configuration.authentication() == ProxyConfiguration.Authentication.ONLINE_BUNGEE
                 ? Executors.newFixedThreadPool(2, task -> {
                     Thread thread = new Thread(task, "strataproxy-session-verify");
@@ -75,13 +80,13 @@ public final class ProxyMain {
                 ? new ProxySessionListener(configuration.listenAddress(), catalog, null, placementTimeout)
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
-        try (var plugins = new PluginHost(catalog, listener, placementTimeout, accessTimeout)) {
+        listener.setServerListStatus(serverListStatus);
+        try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout)) {
             listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
-            listener.setAccessChecks(plugins.hasConnectionChecks() ? plugins::checkConnection : null,
-                    plugins.hasLoginChecks() ? plugins::checkLogin : null, accessTimeout);
+            listener.setEvents(plugins, eventTimeout);
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
             var serverChannel = listener.start().toCompletableFuture().join();
