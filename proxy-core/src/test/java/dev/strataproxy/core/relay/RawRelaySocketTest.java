@@ -32,6 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Exercises relay backpressure through real loopback TCP sockets and NIO channels. */
 final class RawRelaySocketTest {
     private static final int CHUNK_BYTES = 4 * 1024;
+    // Leave room for TCP window updates while constraining NIO reads and outbound writes.
+    private static final int SOCKET_RECEIVE_BYTES = 64 * 1024;
     private static final int WRITE_LOW_WATER_MARK = 1024;
     private static final int WRITE_HIGH_WATER_MARK = 2 * 1024;
     private static final int PAYLOAD_BYTES = 8 * 1024 * 1024;
@@ -215,7 +217,7 @@ final class RawRelaySocketTest {
             try {
                 bound = new ServerBootstrap().group(boss, io).channel(NioServerSocketChannel.class)
                         .childOption(ChannelOption.AUTO_READ, false)
-                        .childOption(ChannelOption.SO_RCVBUF, CHUNK_BYTES)
+                        .childOption(ChannelOption.SO_RCVBUF, SOCKET_RECEIVE_BYTES)
                         .childOption(ChannelOption.SO_SNDBUF, CHUNK_BYTES)
                         .childOption(ChannelOption.TCP_NODELAY, true)
                         .childHandler(new ChannelInitializer<SocketChannel>() {
@@ -230,13 +232,14 @@ final class RawRelaySocketTest {
                         .sync().channel();
                 server = bound;
                 var address = (InetSocketAddress) server.localAddress();
+                firstPeer.setReceiveBufferSize(SOCKET_RECEIVE_BYTES);
                 firstPeer.setSendBufferSize(CHUNK_BYTES);
                 firstPeer.setSoTimeout((int) TIMEOUT.toMillis());
                 firstPeer.connect(address, (int) TIMEOUT.toMillis());
                 first = accepted.poll(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
                 if (first == null) throw new AssertionError("first relay socket was not accepted");
 
-                secondPeer.setReceiveBufferSize(CHUNK_BYTES);
+                secondPeer.setReceiveBufferSize(SOCKET_RECEIVE_BYTES);
                 secondPeer.setSoTimeout((int) TIMEOUT.toMillis());
                 secondPeer.connect(address, (int) TIMEOUT.toMillis());
                 second = accepted.poll(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
