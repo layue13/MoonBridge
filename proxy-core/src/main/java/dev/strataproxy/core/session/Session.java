@@ -5,6 +5,8 @@ import dev.strataproxy.api.AccessDecision;
 import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
+import dev.strataproxy.api.MessageResult;
+import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.TransferResult;
 import dev.strataproxy.api.TransferStatus;
 import dev.strataproxy.core.auth.AuthenticatedEncryption;
@@ -65,7 +67,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final int MAX_TRANSITION_BUFFER_FRAMES = 1024;
-    private static final int MAX_PENDING_COMMAND_REPLIES = 64;
+    private static final int MAX_PENDING_MESSAGES = 64;
     private static final int COMMAND_BURST = 10;
     private static final long COMMAND_TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
     private static final long COMMAND_NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
@@ -92,7 +94,14 @@ final class Session extends ChannelInboundHandlerAdapter {
     private int transitionBufferBytes;
     private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicInteger pendingCommandReplies = new AtomicInteger();
+    private final AtomicInteger pendingMessages = new AtomicInteger();
+    private boolean frontendPlayPhase;
+    private volatile boolean disconnecting;
+    private boolean disconnectPacketStarted;
+    private boolean disconnectRelayDrained;
+    private String pendingDisconnectReason;
+    private CompletableFuture<DisconnectResult> disconnectResult;
+    private ScheduledFuture<?> disconnectDeadline;
     private int commandTokens = COMMAND_BURST;
     private long commandTokenRefillNanos = System.nanoTime();
     private long lastCommandNoticeNanos;
@@ -129,7 +138,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         try {
-            if (closed.get()) return;
+            if (closed.get() || disconnecting) return;
             ByteBuf body = packet.duplicate();
             int frameLength = ProtocolVarInt.read(body);
             if (frameLength < 1 || frameLength != body.readableBytes()) {
@@ -234,7 +243,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         verification = owner.verifier().verify(loginStart.username(), serverHash, clientIp).toCompletableFuture();
         verification.whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
                     verification = null;
-                    if (closed.get()) return;
+                    if (closed.get() || disconnecting) return;
                     if (failure != null || profile == null || profile.isEmpty()) {
                         closePair();
                         return;
@@ -296,11 +305,11 @@ final class Session extends ChannelInboundHandlerAdapter {
         CompletableFuture<Optional<PlacementDecision>> request = owner.placement().apply(view).toCompletableFuture();
         placementRequest = request;
         request.whenComplete((decision, failure) -> {
-            if (closed.get()) return;
+            if (closed.get() || disconnecting) return;
             try {
                 frontend.eventLoop().execute(() -> {
                     if (placementRequest == request) placementRequest = null;
-                    if (closed.get()) return;
+                    if (closed.get() || disconnecting) return;
                     if (failure != null || decision == null) {
                         disconnectLogin("Could not select a server. Please try again.");
                         return;
@@ -329,17 +338,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void sendStatus() {
-        int online = owner.onlineCount();
-        int max = Math.max(1, online);
-        String json = "{\"version\":{\"name\":\"1.7.10\",\"protocol\":5},\"players\":{\"max\":"
-                + max + ",\"online\":" + online
-                + ",\"sample\":[]},\"description\":{\"text\":\"StrataProxy\"}}";
-        ByteBuf response = frontend.alloc().buffer();
-        ProtocolVarInt.write(response, 0);
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        ProtocolVarInt.write(response, bytes.length);
-        response.writeBytes(bytes);
-        frontend.writeAndFlush(response);
+        frontend.writeAndFlush(owner.serverListStatus().encode(frontend.alloc(), owner.onlineCount()));
     }
 
     private void selectBackend(Optional<PlacementDecision> decision) {
@@ -387,6 +386,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 connect.channel().close();
                 return;
             }
+            if (disconnecting) return;
             if (!future.isSuccess()) {
                 LOGGER.debug("Backend connection failed for player {} to {}", view.username(), selected.address(),
                         future.cause());
@@ -429,18 +429,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void disconnectLogin(String reason) {
-        if (closed.get() || loginDisconnectStarted) return;
-        LOGGER.debug("Login disconnect for player {}: {}", view == null ? "<unknown>" : view.username(), reason);
-        loginDisconnectStarted = true;
-        frontend.config().setAutoRead(false);
-        resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
-        if (!frontend.isActive()) { closePair(); return; }
-        try {
-            frontend.writeAndFlush(MinecraftLoginDisconnect.encode(frontend.alloc(), reason))
-                    .addListener(ignored -> closePair());
-        } catch (RuntimeException failure) {
-            closePair();
-        }
+        if (frontend.eventLoop().inEventLoop()) beginDisconnect(reason);
+        else requestDisconnect(reason);
     }
 
     private void resetLoginDeadline(Duration timeout) {
@@ -469,6 +459,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         if (id == 0) { // Login Disconnect.
             loginDisconnectStarted = true;
+            disconnecting = true;
+            disconnectResult = new CompletableFuture<>();
             frontend.config().setAutoRead(false);
             resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
             frontend.writeAndFlush(packet.copy()).addListener(ignored -> closePair());
@@ -510,12 +502,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         published = true;
         owner.sessionPublished();
         owner.serverConnected(view, Optional.empty());
+        if (closed.get() || disconnecting) return;
         relayStarting = true;
         frontend.config().setAutoRead(false);
         if (frontend.pipeline().get("login-wait-guard") != null) {
             frontend.pipeline().remove("login-wait-guard");
         }
         backend.config().setAutoRead(false);
+        // Outbound order is the protocol boundary: anything submitted after Login Success
+        // must use PLAY packet identifiers, even while its write promise is still pending.
+        frontendPlayPhase = true;
         frontend.writeAndFlush(packet.copy()).addListener(write -> {
             if (!write.isSuccess()) { closePair(); return; }
             frontend.eventLoop().execute(this::startRelay);
@@ -534,10 +530,12 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void startRelay() {
         Channel target = backend;
-        if (closed.get() || target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
+        if (closed.get() || disconnecting) return;
+        if (target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
         try {
             CompletableFuture<Void> buffered = flushTransitionFrames();
             buffered.whenComplete((ignored, bufferFailure) -> {
+                if (disconnecting) return;
                 if (bufferFailure != null) { closePair(); return; }
                 attachRawRelay();
             });
@@ -548,7 +546,8 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void attachRawRelay() {
         Channel target = backend;
-        if (closed.get() || target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
+        if (closed.get() || disconnecting) return;
+        if (target == null || !frontend.isActive() || !target.isActive()) { closePair(); return; }
         try {
             var observation = playObservation;
             frontend.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, true, this::closePair));
@@ -562,13 +561,16 @@ final class Session extends ChannelInboundHandlerAdapter {
                     bytes -> observation.observeFrame(true, bytes));
             observation.ready().whenComplete((ignored, failure) -> link.stopObserving());
             link.ready().whenComplete((ignored, failure) -> {
+                if (disconnecting) return;
                 if (failure != null) { closePair(); return; }
                 CompletableFuture<Void> frontRemoved = removeHandshakeCodecs(frontend);
                 CompletableFuture<Void> backRemoved = removeHandshakeCodecs(target);
                 CompletableFuture.allOf(frontRemoved, backRemoved).whenComplete((removed, removeFailure) -> {
+                    if (disconnecting) return;
                     if (removeFailure != null) closePair();
                     else {
                         relay = link;
+                        relayStarting = false;
                         link.start();
                         tryStartPendingTransfer();
                     }
@@ -580,7 +582,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private boolean dispatchPlayerCommand(String message) {
-        if (closed.get() || !published) return false;
+        if (closed.get() || disconnecting || !published) return false;
         return owner.commandDispatcher().dispatch(view, message, this::sendCommandReply, this::admitPlayerCommand);
     }
 
@@ -604,32 +606,190 @@ final class Session extends ChannelInboundHandlerAdapter {
         return false;
     }
 
-    private void sendCommandReply(String message) {
-        if (message == null || message.length() > 1024) {
-            throw new IllegalArgumentException("chat reply must contain at most 1024 characters");
+    CompletionStage<MessageResult> sendMessage(String message) {
+        validateMessage(message);
+        CompletableFuture<MessageResult> result = new CompletableFuture<>();
+        if (closed.get() || disconnecting) {
+            result.complete(MessageResult.NOT_CONNECTED);
+            return result;
         }
-        if (pendingCommandReplies.incrementAndGet() > MAX_PENDING_COMMAND_REPLIES) {
-            pendingCommandReplies.decrementAndGet();
-            return;
+        while (true) {
+            int pending = pendingMessages.get();
+            if (pending >= MAX_PENDING_MESSAGES) {
+                result.complete(MessageResult.BACKPRESSURED);
+                return result;
+            }
+            if (pendingMessages.compareAndSet(pending, pending + 1)) break;
         }
         Runnable send = () -> {
+            if (closed.get() || !frontend.isActive()) {
+                finishMessage();
+                result.complete(MessageResult.NOT_CONNECTED);
+                return;
+            }
+            if (disconnecting) {
+                finishMessage();
+                result.complete(MessageResult.NOT_CONNECTED);
+                return;
+            }
+            if (!published || !frontendPlayPhase || relayStarting || relay == null
+                    || transfer != null || pendingTransfer != null || playObservation == null
+                    || !playObservation.ready().isDone() || playObservation.ready().isCompletedExceptionally()) {
+                finishMessage();
+                result.complete(MessageResult.NOT_READY);
+                return;
+            }
+            if (!frontend.isWritable()) {
+                finishMessage();
+                result.complete(MessageResult.BACKPRESSURED);
+                return;
+            }
             try {
-                if (closed.get() || !frontend.isActive() || !frontend.isWritable()) return;
                 ByteBuf frame = Minecraft1710PlayPackets.chatReply(frontend.alloc(), message);
                 frontend.writeAndFlush(frame).addListener(write -> {
-                    if (!write.isSuccess()) closePair();
+                    pendingMessages.decrementAndGet();
+                    if (write.isSuccess()) result.complete(MessageResult.SENT);
+                    else {
+                        result.completeExceptionally(write.cause());
+                        closePair();
+                    }
+                    if (disconnecting) writeDisconnectReasonIfDrained();
                 });
-            } finally {
-                pendingCommandReplies.decrementAndGet();
+            } catch (RuntimeException failure) {
+                pendingMessages.decrementAndGet();
+                result.completeExceptionally(failure);
+                if (disconnecting) writeDisconnectReasonIfDrained();
             }
         };
         if (frontend.eventLoop().inEventLoop()) send.run();
         else {
             try { frontend.eventLoop().execute(send); }
-            catch (RejectedExecutionException ignored) {
-                pendingCommandReplies.decrementAndGet();
+            catch (RejectedExecutionException shutdown) {
+                pendingMessages.decrementAndGet();
+                result.complete(MessageResult.NOT_CONNECTED);
             }
         }
+        return result;
+    }
+
+    static void validateMessage(String message) {
+        if (message == null || message.codePointCount(0, message.length()) > 1024) {
+            throw new IllegalArgumentException("message must contain at most 1024 Unicode code points");
+        }
+    }
+
+    private void finishMessage() {
+        pendingMessages.decrementAndGet();
+        if (disconnecting) writeDisconnectReasonIfDrained();
+    }
+
+    private void sendCommandReply(String message) {
+        sendMessage(message);
+    }
+
+    CompletionStage<DisconnectResult> disconnect(String reason) {
+        validateDisconnectReason(reason);
+        return requestDisconnect(reason);
+    }
+
+    static void validateDisconnectReason(String reason) {
+        if (reason == null || reason.isBlank() || reason.codePointCount(0, reason.length()) > 1024) {
+            throw new IllegalArgumentException("disconnect reason must contain 1 to 1024 Unicode code points");
+        }
+    }
+
+    private CompletionStage<DisconnectResult> requestDisconnect(String reason) {
+        CompletableFuture<DisconnectResult> requested = new CompletableFuture<>();
+        Runnable command = () -> {
+            if (closed.get()) {
+                requested.complete(DisconnectResult.NOT_CONNECTED);
+                return;
+            }
+            beginDisconnect(reason);
+            // Listener shutdown can set closed from another thread between the check above
+            // and beginDisconnect. That path never creates a draining-disconnect future.
+            if (disconnectResult == null) requested.complete(DisconnectResult.NOT_CONNECTED);
+            else disconnectResult.whenComplete((value, failure) -> completeFrom(requested, value, failure));
+        };
+        if (frontend.eventLoop().inEventLoop()) command.run();
+        else {
+            try { frontend.eventLoop().execute(command); }
+            catch (RejectedExecutionException shutdown) { requested.complete(DisconnectResult.NOT_CONNECTED); }
+        }
+        return requested;
+    }
+
+    private void beginDisconnect(String reason) {
+        if (closed.get() || disconnecting) return;
+        disconnecting = true;
+        loginDisconnectStarted = true;
+        pendingDisconnectReason = reason;
+        disconnectResult = new CompletableFuture<>();
+        frontend.config().setAutoRead(false);
+        if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
+        if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
+        try {
+            disconnectDeadline = frontend.eventLoop().schedule(this::closePair,
+                    LOGIN_DISCONNECT_DRAIN_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+            RawRelay.Link activeRelay = relay;
+            if (activeRelay == null) {
+                disconnectRelayDrained = true;
+                writeDisconnectReasonIfDrained();
+            }
+            else activeRelay.pause().whenComplete((ignored, failure) -> {
+                try {
+                    frontend.eventLoop().execute(() -> {
+                        if (!disconnecting || closed.get()) return;
+                        if (failure != null) closePair();
+                        else {
+                            disconnectRelayDrained = true;
+                            writeDisconnectReasonIfDrained();
+                        }
+                    });
+                } catch (RejectedExecutionException shutdown) {
+                    closePair();
+                }
+            });
+        } catch (RuntimeException shutdown) {
+            closePair();
+        }
+    }
+
+    private void writeDisconnectReasonIfDrained() {
+        if (!disconnecting || !disconnectRelayDrained || disconnectPacketStarted || closed.get()
+                || pendingMessages.get() != 0) return;
+        disconnectPacketStarted = true;
+        if (!frontend.isActive()) {
+            closePair();
+            return;
+        }
+        try {
+            ByteBuf packet;
+            if (frontendPlayPhase) {
+                ByteBuf payload = Minecraft1710PlayPackets.disconnect(frontend.alloc(), pendingDisconnectReason);
+                try {
+                    packet = frontend.pipeline().get("minecraft-frame-encoder") == null
+                            ? Minecraft1710PlayPackets.frame(frontend.alloc(), payload) : payload.copy();
+                } finally {
+                    payload.release();
+                }
+            } else {
+                packet = MinecraftLoginDisconnect.encode(frontend.alloc(), pendingDisconnectReason);
+            }
+            frontend.writeAndFlush(packet).addListener(ignored -> closePair());
+        } catch (RuntimeException failure) {
+            closePair();
+        }
+    }
+
+    private static <T> void completeFrom(CompletableFuture<T> target, T value, Throwable failure) {
+        if (failure == null) target.complete(value);
+        else target.completeExceptionally(failure);
+    }
+
+    boolean matchesIdentity(PlayerIdentity requested) {
+        PlayerView current = view;
+        return !closed.get() && current != null && current.identity().equals(requested);
     }
 
     private void bufferTransitionFrame(boolean fromFrontend, ByteBuf packet) {
@@ -737,7 +897,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void beginTransfer(String backendName, CompletableFuture<TransferResult> result) {
-        if (closed.get() || !published) {
+        if (closed.get() || disconnecting || !published) {
             result.complete(TransferResult.of(TransferStatus.PLAYER_NOT_CONNECTED));
             return;
         }
@@ -804,7 +964,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             ChannelFuture connect = bootstrap.connect(backendSocketAddress(attempt.target.address()));
             attempt.channel = connect.channel();
             connect.addListener(future -> {
-                if (attempt.finished || closed.get()) { connect.channel().close(); return; }
+                if (attempt.finished || closed.get() || disconnecting) { connect.channel().close(); return; }
                 if (!future.isSuccess()) {
                     LOGGER.debug("Replacement backend connection failed for player {} to {}",
                             view.username(), attempt.target.address(), future.cause());
@@ -822,7 +982,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void tryStartPendingTransfer() {
         PendingTransfer waiting = pendingTransfer;
-        if (waiting == null || relay == null || !playObservation.ready().isDone()) return;
+        if (disconnecting || waiting == null || relay == null || !playObservation.ready().isDone()) return;
         pendingTransfer = null;
         waiting.deadline.cancel(false);
         beginTransfer(waiting.backendName, waiting.result);
@@ -868,7 +1028,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void candidateReady(TransferAttempt attempt) {
-        if (transfer != attempt || attempt.finished || closed.get()) return;
+        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
             if (transfer != attempt || attempt.result.isDone()) return;
             attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
@@ -894,7 +1054,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             attempt.paused = true;
-            if (attempt.finished || closed.get()) {
+            if (attempt.finished || closed.get() || disconnecting) {
+                if (disconnecting) return;
                 resumeAfterFailedTransfer(attempt);
                 return;
             }
@@ -915,7 +1076,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                             if (!oldRelayStillAttached) closePair();
                             return;
                         }
-                        if (closed.get() || !attempt.channel.isActive()) {
+                        if (closed.get() || disconnecting || !attempt.channel.isActive()) {
+                            if (disconnecting) return;
                             failTransfer(attempt, "replacement backend closed during transfer");
                             closePair();
                             return;
@@ -955,7 +1117,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(() -> {
-                    if (failure != null || closed.get() || !attempt.channel.isActive()) {
+                    if (failure != null || closed.get() || disconnecting || !attempt.channel.isActive()) {
+                        if (disconnecting) return;
                         failTransfer(attempt, "replacement backend pipeline failed");
                         closePair();
                         return;
@@ -985,7 +1148,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         next.ready().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
-            if (failure != null || closed.get()) {
+            if (failure != null || closed.get() || disconnecting) {
+                if (disconnecting) return;
                 failTransfer(attempt, "replacement relay was not ready");
                 closePair();
                 return;
@@ -1000,7 +1164,8 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             frontend.writeAndFlush(opening).addListener(write -> frontend.eventLoop().execute(() -> {
-                if (!write.isSuccess() || closed.get() || !attempt.channel.isActive()) {
+                if (!write.isSuccess() || closed.get() || disconnecting || !attempt.channel.isActive()) {
+                    if (disconnecting) return;
                     failTransfer(attempt, "could not send replacement world transition");
                     closePair();
                     return;
@@ -1031,13 +1196,13 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (nextObservation.forgeSeen()) {
                     attempt.cutoverDeadline.cancel(false);
                     attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
-                        if (transfer != attempt || attempt.finished || closed.get()) return;
+                        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
                         failTransfer(attempt, "replacement Forge handshake timed out");
                         closePair();
                     }, FORGE_TRANSFER_HANDSHAKE_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
                     CompletableFuture.allOf(nextObservation.ready(), attempt.frameState.worldReady())
                             .whenComplete((negotiated, negotiationFailure) -> frontend.eventLoop().execute(() -> {
-                                if (transfer != attempt || attempt.finished || closed.get()) return;
+                                if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
                                 if (negotiationFailure != null || !attempt.channel.isActive()) {
                                     failTransfer(attempt, "replacement Forge handshake failed");
                                     closePair();
@@ -1049,7 +1214,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void finishTransfer(TransferAttempt attempt) {
-        if (transfer != attempt || attempt.finished || closed.get()) return;
+        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         transfer = null;
         attempt.finished = true;
         attempt.cutoverDeadline.cancel(false);
@@ -1124,11 +1289,12 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
         if (attempt.frameState != null) attempt.frameState.close();
+        if (disconnecting) return;
         if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
     }
 
     private void resumeAfterFailedTransfer(TransferAttempt attempt) {
-        if (attempt.paused && !attempt.detached && !closed.get()) {
+        if (attempt.paused && !attempt.detached && !closed.get() && !disconnecting) {
             attempt.oldRelay.resume().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
                 if (failure != null) closePair();
                 completeFailedTransfer(attempt);
@@ -1139,7 +1305,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void completeFailedTransfer(TransferAttempt attempt) {
-        if (!attempt.detached && !closed.get()) {
+        if (!attempt.detached && !closed.get() && !disconnecting) {
             try {
                 if (attempt.oldBackendBuffer != null) attempt.oldBackendBuffer.drainAndRemove();
                 if (attempt.clientBuffer != null) attempt.clientBuffer.drainAndRemove();
@@ -1157,6 +1323,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         Runnable cleanup = () -> {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
+            if (disconnectDeadline != null) disconnectDeadline.cancel(false);
             if (verification != null) verification.cancel(true);
             if (admissionRequest != null) {
                 admissionRequest.cancel(false);
@@ -1197,6 +1364,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             PendingFrame pending;
             while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();
             transitionBufferBytes = 0;
+            if (disconnectResult != null) disconnectResult.complete(DisconnectResult.DISCONNECTED);
         };
         if (frontend.eventLoop().inEventLoop()) cleanup.run();
         else {

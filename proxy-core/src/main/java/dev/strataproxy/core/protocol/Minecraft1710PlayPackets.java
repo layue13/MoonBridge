@@ -43,9 +43,7 @@ public final class Minecraft1710PlayPackets {
 
     /** Encodes a plain-text proxy reply as a protocol 5 clientbound PLAY chat frame. */
     public static ByteBuf chatReply(ByteBufAllocator allocator, String message) {
-        if (message == null || message.length() > 1024) {
-            throw new IllegalArgumentException("chat reply must contain at most 1024 characters");
-        }
+        validateText(message, true);
         String component = JSON.createObjectNode().put("text", message).toString();
         ByteBuf packet = allocator.buffer();
         try {
@@ -54,6 +52,30 @@ public final class Minecraft1710PlayPackets {
             return frame(allocator, packet);
         } finally {
             packet.release();
+        }
+    }
+
+    /** Encodes an unframed protocol 5 PLAY Disconnect payload. */
+    public static ByteBuf disconnect(ByteBufAllocator allocator, String reason) {
+        validateText(reason, false);
+        String component = JSON.createObjectNode().put("text", reason).toString();
+        ByteBuf packet = allocator.buffer();
+        try {
+            ProtocolVarInt.write(packet, SERVER_DISCONNECT);
+            ProtocolStrings.write(packet, component, 32767);
+            return packet;
+        } catch (RuntimeException failure) {
+            packet.release();
+            throw failure;
+        }
+    }
+
+    private static void validateText(String text, boolean allowEmpty) {
+        if (text == null || (!allowEmpty && text.isBlank())
+                || text.codePointCount(0, text.length()) > 1024) {
+            throw new IllegalArgumentException(allowEmpty
+                    ? "chat reply must contain at most 1024 Unicode code points"
+                    : "disconnect reason must contain 1 to 1024 Unicode code points");
         }
     }
 

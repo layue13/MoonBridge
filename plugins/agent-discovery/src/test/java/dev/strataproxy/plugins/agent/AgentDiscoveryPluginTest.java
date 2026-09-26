@@ -202,6 +202,12 @@ class AgentDiscoveryPluginTest {
                 return new Players() {
                     @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.empty(); }
                     @Override public List<PlayerView> online() { return List.of(); }
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.MessageResult> sendMessage(PlayerIdentity identity, String message) {
+                        return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                    }
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+                        return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                    }
                     @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
                         return CompletableFuture.failedFuture(new UnsupportedOperationException());
                     }

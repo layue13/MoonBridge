@@ -1283,7 +1283,7 @@ final class SessionTransferTest {
     }
 
     @Test
-    void clientDisconnectWhileOldRelayIsPausedCompletesTransferAndReleasesBothReservations() throws Exception {
+    void playerDisconnectWhileOldRelayIsPausedCompletesTransferAndReleasesBothReservations() throws Exception {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldClosed = new CompletableFuture<Void>();
@@ -1295,6 +1295,9 @@ final class SessionTransferTest {
                     DataInputStream input = new DataInputStream(socket.getInputStream());
                     DataOutputStream output = new DataOutputStream(socket.getOutputStream());
                     acceptLogin(input, output, 0);
+                    if (!java.util.Arrays.equals(new byte[]{0x01, 0x55}, readFrame(input))) {
+                        throw new AssertionError("held client frame did not drain to the old backend");
+                    }
                     if (input.read() != -1) throw new AssertionError("unexpected old backend data");
                     oldClosed.complete(null);
                 } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
@@ -1339,10 +1342,12 @@ final class SessionTransferTest {
                     var heldWrite = new CompletableFuture<Void>();
                     var heldMessage = new AtomicReference<Object>();
                     var heldPromise = new AtomicReference<ChannelPromise>();
+                    var heldContext = new AtomicReference<ChannelHandlerContext>();
                     oldChannel.eventLoop().submit(() -> oldChannel.pipeline().addFirst("hold-cutover-write",
                             new ChannelDuplexHandler() {
                                 @Override public void write(ChannelHandlerContext ctx, Object message,
                                                             ChannelPromise promise) {
+                                    heldContext.set(ctx);
                                     heldMessage.set(message);
                                     heldPromise.set(promise);
                                     heldWrite.complete(null);
@@ -1371,7 +1376,15 @@ final class SessionTransferTest {
                     }
                     assertTrue(buffersInstalled, "cutover buffers should be installed while old write is held");
 
-                    client.close();
+                    var disconnect = listener.disconnect(player.identity(), "转服期间断开");
+                    oldChannel.eventLoop().submit(() -> heldContext.get().writeAndFlush(
+                            heldMessage.getAndSet(null), heldPromise.getAndSet(null))).get(5, TimeUnit.SECONDS);
+                    var kick = new ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x40, readVarInt(kick));
+                    assertEquals("{\"text\":\"转服期间断开\"}",
+                            new String(kick.readNBytes(readVarInt(kick)), StandardCharsets.UTF_8));
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                            disconnect.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
                     oldClosed.get(5, TimeUnit.SECONDS);
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

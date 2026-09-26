@@ -21,6 +21,16 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](../smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](../smoke/results/2026-09-26-uranium-login-stalls.md)。
 
+## 玩家操作与服务器列表验证记录（2026-09-26）
+
+完成[玩家操作设计](player-operations.md)的首批实现后，运行 `./gradlew.bat check --offline` 通过。最终报告共 194 项测试（API 7、核心 174、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。
+
+本轮新增或扩展的验证包括：完整连接身份校验；PLAY 消息与普通包连续转发；未就绪、连接不可写及 64 条未完成消息上限；消息排空后主动断开；重复断开与调用方取消；准入/选服等待期间的 LOGIN 断开；Login Success 写入未完成时的 PLAY 包顺序；断开写入失败或停滞时的有界清理；转服暂停期间断开的候选后端与索引释放。在线协议测试用实际 RSA/AES 链路核对加密消息与断开，身份验证器仍为注入实现。
+
+服务器列表测试核对默认/自定义 MOTD、展示人数与实时在线人数、非 BMP 字符、JSON 转义、完整响应长度、PNG 文件/尺寸/路径校验，以及经真实 TCP 管线的 STATUS 与 Ping/Pong。插件宿主关闭时先终止事件派发再撤销订阅，避免排队准入链跳过已撤销策略而返回允许。文档相对链接检查通过。
+
+本轮没有使用真实 Mojang 登录会话、目标整合包或生产负载；没有进行性能对比。远端 CI 的执行结果单独记录在 PR 中，本地通过不表示 Runner 或部署环境已验收。
+
 ## 统一事件模型验证记录（2026-09-26）
 
 统一为 `Event<R>` / `EventListener<E,R>` 后运行 `./gradlew.bat check --offline`。最终报告共 178 项测试（API 7、核心 158、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。

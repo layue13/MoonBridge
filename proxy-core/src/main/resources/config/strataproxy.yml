@@ -1,6 +1,10 @@
 listen: "127.0.0.1:25577"
 authentication: OFFLINE
 maxConnections: 4096
+status:
+  motd: "StrataProxy"
+  maxPlayers: 100
+  # icon: "server-icon.png" # Optional 64x64 PNG, relative to this config (maximum 64 KiB).
 plugins:
   directory: "../plugins"
   initialPlacementTimeoutSeconds: 15

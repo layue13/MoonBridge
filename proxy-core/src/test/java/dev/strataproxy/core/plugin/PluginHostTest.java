@@ -2,6 +2,8 @@ package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.MessageResult;
+import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.event.ConnectionAdmissionEvent;
 import dev.strataproxy.api.event.Event;
 import dev.strataproxy.api.event.EventSubscription;
@@ -706,7 +708,7 @@ class PluginHostTest {
     @Test
     void disabledPluginCannotUseRetainedServices() {
         AtomicInteger transfers = new AtomicInteger();
-        Players delegate = new Players() {
+        Players delegate = new TestPlayers() {
             @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.of(PLAYER); }
             @Override public List<PlayerView> online() { return List.of(PLAYER); }
             @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
@@ -727,6 +729,8 @@ class PluginHostTest {
 
         assertThrows(IllegalStateException.class, () -> retained.transfer(PLAYER.identity(), "lobby"));
         assertThrows(IllegalStateException.class, retained::online);
+        assertThrows(IllegalStateException.class, () -> retained.sendMessage(PLAYER.identity(), "message"));
+        assertThrows(IllegalStateException.class, () -> retained.disconnect(PLAYER.identity(), "reason"));
         assertThrows(IllegalStateException.class, retainedServers::all);
         assertEquals(1, transfers.get());
     }
@@ -734,7 +738,7 @@ class PluginHostTest {
     @Test
     void blockingPluginTransferCallbackDoesNotBlockTheSessionThread() throws Exception {
         var underlying = new CompletableFuture<TransferResult>();
-        Players delegate = new Players() {
+        Players delegate = new TestPlayers() {
             @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.of(PLAYER); }
             @Override public List<PlayerView> online() { return List.of(PLAYER); }
             @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
@@ -763,6 +767,63 @@ class PluginHostTest {
             } finally {
                 releaseCallback.countDown();
                 producer.join(5_000);
+            }
+        }
+    }
+
+    @Test
+    void blockingPlayerOperationCallbacksDoNotBlockTheSessionThread() throws Exception {
+        for (boolean disconnect : new boolean[]{false, true}) {
+            var messageResult = new CompletableFuture<MessageResult>();
+            var disconnectResult = new CompletableFuture<DisconnectResult>();
+            Players delegate = new TestPlayers() {
+                @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.of(PLAYER); }
+                @Override public List<PlayerView> online() { return List.of(PLAYER); }
+                @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
+                        PlayerIdentity identity, String backendName) { throw new AssertionError("unexpected transfer"); }
+                @Override public java.util.concurrent.CompletionStage<MessageResult> sendMessage(
+                        PlayerIdentity identity, String message) {
+                    assertEquals(PLAYER.identity(), identity);
+                    assertEquals("hello", message);
+                    return messageResult;
+                }
+                @Override public java.util.concurrent.CompletionStage<DisconnectResult> disconnect(
+                        PlayerIdentity identity, String reason) {
+                    assertEquals(PLAYER.identity(), identity);
+                    assertEquals("maintenance", reason);
+                    return disconnectResult;
+                }
+            };
+            var plugin = new CapturingPlugin("unused", false);
+            try (var host = new PluginHost(new InMemoryBackendCatalog(), delegate, Duration.ofSeconds(1))) {
+                host.load(List.of(plugin));
+                host.enable();
+                var result = disconnect
+                        ? plugin.context.players().disconnect(PLAYER.identity(), "maintenance")
+                        : plugin.context.players().sendMessage(PLAYER.identity(), "hello");
+                var callbackThread = new CompletableFuture<Thread>();
+                var release = new CountDownLatch(1);
+                var producerDone = new CompletableFuture<Void>();
+                result.whenComplete((value, failure) -> {
+                    callbackThread.complete(Thread.currentThread());
+                    try { release.await(5, TimeUnit.SECONDS); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                });
+                Thread producer = new Thread(() -> {
+                    if (disconnect) disconnectResult.complete(DisconnectResult.DISCONNECTED);
+                    else messageResult.complete(MessageResult.SENT);
+                    producerDone.complete(null);
+                }, "simulated-session-io");
+                try {
+                    producer.start();
+                    assertNotEquals(producer, callbackThread.get(5, TimeUnit.SECONDS));
+                    producerDone.get(1, TimeUnit.SECONDS);
+                    assertEquals(disconnect ? DisconnectResult.DISCONNECTED : MessageResult.SENT,
+                            result.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                } finally {
+                    release.countDown();
+                    producer.join(5_000);
+                }
             }
         }
     }
@@ -931,8 +992,18 @@ class PluginHostTest {
         }
     }
 
+    private abstract static class TestPlayers implements Players {
+        @Override public java.util.concurrent.CompletionStage<MessageResult> sendMessage(
+                PlayerIdentity identity, String message) {
+            return CompletableFuture.completedFuture(MessageResult.NOT_CONNECTED);
+        }
+        @Override public java.util.concurrent.CompletionStage<DisconnectResult> disconnect(
+                PlayerIdentity identity, String reason) {
+            return CompletableFuture.completedFuture(DisconnectResult.NOT_CONNECTED);
+        }
+    }
     private static Players players() {
-        return new Players() {
+        return new TestPlayers() {
             @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.empty(); }
             @Override public List<PlayerView> online() { return List.of(); }
             @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(

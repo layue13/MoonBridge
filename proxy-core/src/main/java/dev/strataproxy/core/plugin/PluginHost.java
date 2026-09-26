@@ -1,6 +1,8 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.MessageResult;
+import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.event.ConnectionAdmissionEvent;
 import dev.strataproxy.api.event.Event;
 import dev.strataproxy.api.event.EventListener;
@@ -78,9 +80,9 @@ import java.util.jar.JarFile;
 public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final Logger LOGGER = LoggerFactory.getLogger(PluginHost.class);
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
-    private static final ThreadFactory TRANSFER_COMPLETION_THREADS = Thread.ofVirtual()
-            .name("strataproxy-plugin-transfer-", 0).factory();
-    private static final Executor TRANSFER_COMPLETIONS = task -> TRANSFER_COMPLETION_THREADS.newThread(task).start();
+    private static final ThreadFactory PLAYER_COMPLETION_THREADS = Thread.ofVirtual()
+            .name("strataproxy-plugin-player-", 0).factory();
+    private static final Executor PLAYER_COMPLETIONS = task -> PLAYER_COMPLETION_THREADS.newThread(task).start();
     private final BackendCatalog catalog;
     private final Players players;
     private final Duration placementTimeout;
@@ -464,6 +466,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return;
         }
         state = State.CLOSED;
+        // Settle pending admission chains before revoking listeners. Otherwise a queued
+        // chain can skip the revoked subscriptions and incorrectly finish with allow().
+        admissionEvents.close();
+        notificationEvents.close();
         if (notificationDropReporter != null) notificationDropReporter.cancel(false);
         logNotificationDrops();
         for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
@@ -471,8 +477,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
         }
-        admissionEvents.close();
-        notificationEvents.close();
         callbacks.shutdownNow();
         commandWorkers.shutdownNow();
         timer.shutdownNow();
@@ -775,7 +779,23 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 // CompletableFuture runs dependent callbacks on its completion thread by default.
                 // Do not let plugin callbacks execute on the player's Netty event loop.
                 return players.transfer(identity, backendName)
-                        .whenCompleteAsync((ignored, failure) -> { }, TRANSFER_COMPLETIONS);
+                        .whenCompleteAsync((ignored, failure) -> { }, PLAYER_COMPLETIONS);
+            }
+        }
+
+        @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, String message) {
+            synchronized (context) {
+                context.requireActive();
+                return players.sendMessage(identity, message)
+                        .whenCompleteAsync((ignored, failure) -> { }, PLAYER_COMPLETIONS);
+            }
+        }
+
+        @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+            synchronized (context) {
+                context.requireActive();
+                return players.disconnect(identity, reason)
+                        .whenCompleteAsync((ignored, failure) -> { }, PLAYER_COMPLETIONS);
             }
         }
     }

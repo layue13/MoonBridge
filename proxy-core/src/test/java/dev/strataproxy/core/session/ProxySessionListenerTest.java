@@ -3,6 +3,8 @@ package dev.strataproxy.core.session;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.PlayerIdentity;
+import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.event.Event;
 import dev.strataproxy.api.event.ConnectionAdmissionEvent;
 import dev.strataproxy.api.event.PlayerAdmissionEvent;
@@ -57,6 +59,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -236,6 +239,406 @@ final class ProxySessionListenerTest {
                 };
             }
         };
+    }
+
+    @Test
+    void playerOperationsHonorConnectionIdentityAndPreservePlayRelay() throws Exception {
+        String username = "PlayerOperations";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        var sendJoin = new CountDownLatch(1);
+        var receivedClientPacket = new CompletableFuture<byte[]>();
+        var backendDone = new CompletableFuture<Void>();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertTrue(sendJoin.await(5, TimeUnit.SECONDS));
+                    writeFrame(output, new byte[]{0x01, 0, 0, 0, 42, 0, 0, 1, 20,
+                            7, 'd', 'e', 'f', 'a', 'u', 'l', 't'});
+                    var position = new ByteArrayOutputStream();
+                    var positionData = new DataOutputStream(position);
+                    positionData.writeByte(0x08);
+                    positionData.writeDouble(0);
+                    positionData.writeDouble(64);
+                    positionData.writeDouble(0);
+                    positionData.writeFloat(0);
+                    positionData.writeFloat(0);
+                    positionData.writeByte(0);
+                    writeFrame(output, position.toByteArray());
+                    receivedClientPacket.complete(readFrame(input));
+                    writeFrame(output, new byte[]{0x03, 0x44});
+                    assertEquals(-1, input.read());
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                    receivedClientPacket.completeExceptionally(failure);
+                }
+            }, "fake-player-operations-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    var input = new DataInputStream(client.getInputStream());
+                    var output = new DataOutputStream(client.getOutputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    awaitCondition(() -> hasRawRelay(listener));
+                    assertEquals(dev.strataproxy.api.MessageResult.NOT_READY,
+                            listener.sendMessage(listener.online().get(0).identity(), "before Join Game")
+                                    .toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    sendJoin.countDown();
+                    assertEquals(1, readVarInt(readFrame(input)));
+                    assertEquals(8, readVarInt(readFrame(input)));
+                    PlayerView player = awaitOnlinePlayer(listener);
+                    awaitCondition(() -> playReady(listener));
+
+                    var stale = new PlayerIdentity(player.identity().playerId(), player.identity().connectionId() + 1);
+                    assertEquals(dev.strataproxy.api.MessageResult.NOT_CONNECTED,
+                            listener.sendMessage(stale, "stale").toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    assertEquals(dev.strataproxy.api.DisconnectResult.NOT_CONNECTED,
+                            listener.disconnect(stale, "stale").toCompletableFuture().get(5, TimeUnit.SECONDS));
+
+                    byte[] ordinary = new byte[]{0x03, 0x33};
+                    writeFrame(output, ordinary);
+                    assertArrayEquals(ordinary, receivedClientPacket.get(5, TimeUnit.SECONDS));
+                    assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
+
+                    assertEquals(dev.strataproxy.api.MessageResult.SENT,
+                            listener.sendMessage(player.identity(), "管理消息🙂").toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+                    var message = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(2, readVarInt(message));
+                    assertEquals("管理消息🙂", new ObjectMapper().readTree(readString(message, 32767))
+                            .path("text").asText());
+
+                    Session session = listener.allSessions().iterator().next();
+                    var frontendField = Session.class.getDeclaredField("frontend");
+                    frontendField.setAccessible(true);
+                    Channel frontend = (Channel) frontendField.get(session);
+                    frontend.eventLoop().submit(() -> frontend.unsafe().outboundBuffer()
+                            .setUserDefinedWritability(1, false)).get(5, TimeUnit.SECONDS);
+                    assertEquals(dev.strataproxy.api.MessageResult.BACKPRESSURED,
+                            listener.sendMessage(player.identity(), "unwritable").toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+                    frontend.eventLoop().submit(() -> frontend.unsafe().outboundBuffer()
+                            .setUserDefinedWritability(1, true)).get(5, TimeUnit.SECONDS);
+                    var heldMessages = new ArrayList<Object>();
+                    var heldPromises = new ArrayList<ChannelPromise>();
+                    var heldCount = new AtomicInteger();
+                    var heldContext = new AtomicReference<ChannelHandlerContext>();
+                    frontend.eventLoop().submit(() -> frontend.pipeline().addFirst("hold-plugin-messages",
+                            new ChannelOutboundHandlerAdapter() {
+                                @Override public void write(ChannelHandlerContext ctx, Object msg,
+                                                            ChannelPromise promise) {
+                                    heldContext.set(ctx);
+                                    heldMessages.add(msg);
+                                    heldPromises.add(promise);
+                                    heldCount.incrementAndGet();
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    var queuedMessages = new ArrayList<java.util.concurrent.CompletionStage<
+                            dev.strataproxy.api.MessageResult>>();
+                    for (int index = 0; index < 64; index++) {
+                        queuedMessages.add(listener.sendMessage(player.identity(), "queued-" + index));
+                    }
+                    assertEquals(dev.strataproxy.api.MessageResult.BACKPRESSURED,
+                            listener.sendMessage(player.identity(), "over-limit").toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+                    awaitCondition(() -> heldCount.get() == 64);
+                    assertTrue(queuedMessages.stream().noneMatch(queued -> queued.toCompletableFuture().isDone()));
+
+                    var cancelledWaiter = new AtomicReference<java.util.concurrent.CompletionStage<
+                            dev.strataproxy.api.DisconnectResult>>();
+                    var joinedWaiter = new AtomicReference<java.util.concurrent.CompletionStage<
+                            dev.strataproxy.api.DisconnectResult>>();
+                    frontend.eventLoop().submit(() -> {
+                        cancelledWaiter.set(listener.disconnect(player.identity(), "维护 \"完成\""));
+                        joinedWaiter.set(listener.disconnect(player.identity(), "ignored duplicate"));
+                    }).get(5, TimeUnit.SECONDS);
+                    cancelledWaiter.get().toCompletableFuture().cancel(false);
+                    frontend.eventLoop().submit(() -> {
+                        for (int index = 0; index < heldMessages.size(); index++) {
+                            heldContext.get().writeAndFlush(heldMessages.get(index), heldPromises.get(index));
+                        }
+                        heldMessages.clear();
+                        heldPromises.clear();
+                    }).get(5, TimeUnit.SECONDS);
+                    awaitCondition(() -> heldCount.get() == 65);
+                    frontend.eventLoop().submit(() -> {
+                        for (int index = 0; index < heldMessages.size(); index++) {
+                            heldContext.get().writeAndFlush(heldMessages.get(index), heldPromises.get(index));
+                        }
+                        heldMessages.clear();
+                        heldPromises.clear();
+                    }).get(5, TimeUnit.SECONDS);
+                    for (int index = 0; index < 64; index++) {
+                        var queued = new java.io.ByteArrayInputStream(readFrame(input));
+                        assertEquals(2, readVarInt(queued));
+                        assertEquals("queued-" + index, new ObjectMapper().readTree(readString(queued, 32767))
+                                .path("text").asText());
+                        assertEquals(dev.strataproxy.api.MessageResult.SENT,
+                                queuedMessages.get(index).toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    }
+                    var kick = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x40, readVarInt(kick));
+                    assertEquals("维护 \"完成\"", new ObjectMapper().readTree(readString(kick, 32767))
+                            .path("text").asText());
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                            joinedWaiter.get().toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    assertEquals(-1, input.read());
+                    backendDone.get(5, TimeUnit.SECONDS);
+                    awaitCondition(() -> listener.allSessions().isEmpty());
+                    assertTrue(listener.online().isEmpty());
+                }
+            } finally {
+                sendJoin.countDown();
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void publicDisconnectCanCloseAnIdentifiedPlayerDuringPlacement() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        var identity = new CompletableFuture<PlayerIdentity>();
+        var placement = new CompletableFuture<Optional<PlacementDecision>>();
+        var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+        listener.setPlacement(player -> {
+            identity.complete(player.identity());
+            return placement;
+        });
+        try {
+            int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                client.setSoTimeout(5000);
+                sendLogin(client, "LeavePlacement");
+                PlayerIdentity player = identity.get(5, TimeUnit.SECONDS);
+                assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                        listener.disconnect(player, "还在准入阶段").toCompletableFuture().get(5, TimeUnit.SECONDS));
+                assertLoginDisconnect(new DataInputStream(client.getInputStream()), "还在准入阶段");
+                assertEquals(-1, client.getInputStream().read());
+                awaitCondition(() -> listener.allSessions().isEmpty());
+                assertTrue(placement.isCancelled());
+                assertTrue(listener.online().isEmpty());
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void publicDisconnectCleansUpWhenReasonWriteFailsOrStalls() throws Exception {
+        for (boolean stall : new boolean[]{false, true}) {
+            var identity = new CompletableFuture<PlayerIdentity>();
+            var placement = new CompletableFuture<Optional<PlacementDecision>>();
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                    new InMemoryBackendCatalog());
+            listener.setPlacement(player -> {
+                identity.complete(player.identity());
+                return placement;
+            });
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(8000);
+                    sendLogin(client, "WriteFailure");
+                    PlayerIdentity player = identity.get(5, TimeUnit.SECONDS);
+                    Session session = listener.allSessions().iterator().next();
+                    var field = Session.class.getDeclaredField("frontend");
+                    field.setAccessible(true);
+                    Channel frontend = (Channel) field.get(session);
+                    var writeSeen = new CompletableFuture<Void>();
+                    frontend.eventLoop().submit(() -> frontend.pipeline().addFirst("simulate-write-failure",
+                            new io.netty.channel.ChannelDuplexHandler() {
+                                private Object held;
+                                private ChannelPromise heldPromise;
+                                @Override public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                                    if (stall) {
+                                        held = message;
+                                        heldPromise = promise;
+                                    } else {
+                                        ReferenceCountUtil.release(message);
+                                        promise.setFailure(new IOException("injected write failure"));
+                                    }
+                                    writeSeen.complete(null);
+                                }
+                                @Override public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                    ReferenceCountUtil.release(held);
+                                    held = null;
+                                    if (heldPromise != null) heldPromise.tryFailure(new IOException("connection closed"));
+                                    super.channelInactive(ctx);
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    var result = listener.disconnect(player, "maintenance").toCompletableFuture();
+                    writeSeen.get(5, TimeUnit.SECONDS);
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED, result.get(8, TimeUnit.SECONDS));
+                    assertEquals(-1, client.getInputStream().read());
+                    assertTrue(placement.isCancelled());
+                    assertTrue(listener.allSessions().isEmpty());
+                    assertTrue(listener.online().isEmpty());
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void disconnectAfterLoginSuccessSubmissionUsesPlayPacketEvenWhileWriteIsHeld() throws Exception {
+        String username = "HeldLoginSuccess";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        var backendReadLogin = new CompletableFuture<Void>();
+        var sendSuccess = new CountDownLatch(1);
+        var backendDone = new CompletableFuture<Void>();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    backendReadLogin.complete(null);
+                    assertTrue(sendSuccess.await(5, TimeUnit.SECONDS));
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertEquals(-1, input.read());
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-held-login-success-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            var frontendContext = new AtomicReference<ChannelHandlerContext>();
+            var heldMessages = new ArrayList<Object>();
+            var heldPromises = new ArrayList<ChannelPromise>();
+            var bothWritesHeld = new CountDownLatch(2);
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    backendReadLogin.get(5, TimeUnit.SECONDS);
+                    Session session = listener.allSessions().iterator().next();
+                    var frontendField = Session.class.getDeclaredField("frontend");
+                    frontendField.setAccessible(true);
+                    Channel frontend = (Channel) frontendField.get(session);
+                    frontend.eventLoop().submit(() -> frontend.pipeline().addFirst("hold-login-writes",
+                            new ChannelOutboundHandlerAdapter() {
+                                @Override public void write(ChannelHandlerContext ctx, Object message,
+                                                            ChannelPromise promise) {
+                                    frontendContext.set(ctx);
+                                    heldMessages.add(message);
+                                    heldPromises.add(promise);
+                                    bothWritesHeld.countDown();
+                                }
+                            })).get(5, TimeUnit.SECONDS);
+                    sendSuccess.countDown();
+                    awaitCondition(() -> !listener.online().isEmpty());
+                    PlayerIdentity identity = listener.online().get(0).identity();
+                    var disconnected = listener.disconnect(identity, "登录后立即断开");
+                    assertTrue(bothWritesHeld.await(5, TimeUnit.SECONDS));
+                    assertFalse(disconnected.toCompletableFuture().isDone());
+
+                    frontend.eventLoop().submit(() -> {
+                        ChannelHandlerContext context = frontendContext.get();
+                        for (int index = 0; index < heldMessages.size(); index++) {
+                            context.writeAndFlush(heldMessages.get(index), heldPromises.get(index));
+                        }
+                        heldMessages.clear();
+                        heldPromises.clear();
+                    }).get(5, TimeUnit.SECONDS);
+
+                    var input = new DataInputStream(client.getInputStream());
+                    assertEquals(2, readVarInt(readFrame(input)));
+                    var disconnect = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x40, readVarInt(disconnect));
+                    assertEquals("登录后立即断开", new ObjectMapper().readTree(readString(disconnect, 32767))
+                            .path("text").asText());
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                            disconnected.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    assertEquals(-1, input.read());
+                    backendDone.get(5, TimeUnit.SECONDS);
+                    awaitCondition(() -> listener.allSessions().isEmpty());
+                }
+            } finally {
+                sendSuccess.countDown();
+                heldMessages.forEach(ReferenceCountUtil::release);
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                backendDone.get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static PlayerView awaitOnlinePlayer(ProxySessionListener listener) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
+        assertEquals(1, listener.online().size());
+        return listener.online().get(0);
+    }
+
+    private static boolean hasRawRelay(ProxySessionListener listener) {
+        try {
+            Session session = listener.allSessions().stream().findFirst().orElse(null);
+            if (session == null) return false;
+            var frontendField = Session.class.getDeclaredField("frontend");
+            frontendField.setAccessible(true);
+            Channel frontend = (Channel) frontendField.get(session);
+            var field = Session.class.getDeclaredField("relay");
+            field.setAccessible(true);
+            return frontend.eventLoop().submit(() -> field.get(session) != null).get(1, TimeUnit.SECONDS);
+        } catch (Exception failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static boolean playReady(ProxySessionListener listener) {
+        try {
+            Session session = listener.allSessions().stream().findFirst().orElse(null);
+            if (session == null) return false;
+            var field = Session.class.getDeclaredField("playObservation");
+            field.setAccessible(true);
+            var frontendField = Session.class.getDeclaredField("frontend");
+            frontendField.setAccessible(true);
+            Channel frontend = (Channel) frontendField.get(session);
+            return frontend.eventLoop().submit(() -> {
+                var observation = (PlayObservation) field.get(session);
+                return observation != null && observation.ready().isDone()
+                        && !observation.ready().isCompletedExceptionally();
+            }).get(1, TimeUnit.SECONDS);
+        } catch (Exception failure) {
+            throw new AssertionError(failure);
+        }
     }
 
     @Test
@@ -1156,6 +1559,7 @@ final class ProxySessionListenerTest {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var sendPlayStart = new CountDownLatch(1);
             var backendDone = new CompletableFuture<Void>();
             Thread backendThread = new Thread(() -> {
                 try (Socket socket = backendServer.accept()) {
@@ -1180,10 +1584,12 @@ final class ProxySessionListenerTest {
                     writeString(success, uuid.toString());
                     writeString(success, "Alice");
                     output.write(framed(success.toByteArray()));
-                    output.write(framed(new byte[]{0x02, 0x55}));
                     output.flush();
+                    assertTrue(sendPlayStart.await(5, TimeUnit.SECONDS));
+                    sendOnlineBackendWorld(output, 100);
                     assertArrayEquals(new byte[]{0x03, 0x33}, readFrame(input));
                     writeFrame(output, new byte[]{0x03, 0x44});
+                    assertEquals(-1, input.read());
                     backendDone.complete(null);
                 } catch (Throwable failure) {
                     backendDone.completeExceptionally(failure);
@@ -1247,7 +1653,11 @@ final class ProxySessionListenerTest {
                     assertEquals(2, readVarInt(success));
                     assertEquals(uuid.toString(), readString(success, 36));
                     assertEquals("Alice", readString(success, 16));
-                    assertArrayEquals(new byte[]{0x02, 0x55}, readFrame(encryptedInput));
+                    awaitCondition(() -> hasRawRelay(listener));
+                    sendPlayStart.countDown();
+                    var join = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(1, readVarInt(join));
+                    assertEquals(8, readVarInt(readFrame(encryptedInput)));
                     Cipher encryptor = aes(secret, Cipher.ENCRYPT_MODE);
                     clearOutput.write(encryptor.update(framed(chatPacket("/ping"))));
                     clearOutput.flush();
@@ -1259,10 +1669,26 @@ final class ProxySessionListenerTest {
                     assertEquals(3, encryptedPlay.length);
                     clearOutput.write(encryptedPlay);
                     clearOutput.flush();
-                    backendDone.get(5, TimeUnit.SECONDS);
                     assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(encryptedInput));
+                    var player = listener.online().get(0);
+                    assertEquals(dev.strataproxy.api.MessageResult.SENT,
+                            listener.sendMessage(player.identity(), "加密🙂").toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+                    var encryptedMessage = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(2, readVarInt(encryptedMessage));
+                    assertEquals("加密🙂", new ObjectMapper().readTree(readString(encryptedMessage, 32767))
+                            .path("text").asText());
+                    var disconnected = listener.disconnect(player.identity(), "安全断开");
+                    var encryptedKick = new java.io.ByteArrayInputStream(readFrame(encryptedInput));
+                    assertEquals(0x40, readVarInt(encryptedKick));
+                    assertEquals("安全断开", new ObjectMapper().readTree(readString(encryptedKick, 32767))
+                            .path("text").asText());
+                    assertEquals(dev.strataproxy.api.DisconnectResult.DISCONNECTED,
+                            disconnected.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    backendDone.get(5, TimeUnit.SECONDS);
                 }
             } finally {
+                sendPlayStart.countDown();
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
         }
@@ -1958,7 +2384,7 @@ final class ProxySessionListenerTest {
                 int listenPort = ((InetSocketAddress) bound.localAddress()).getPort();
                 var emptyStatus = requestStatus(listenPort);
                 assertEquals(0, emptyStatus.path("players").path("online").asInt());
-                assertEquals(1, emptyStatus.path("players").path("max").asInt());
+                assertEquals(100, emptyStatus.path("players").path("max").asInt());
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(), listenPort)) {
                     client.setSoTimeout(5000);
                     DataOutputStream output = new DataOutputStream(client.getOutputStream());
@@ -1991,7 +2417,7 @@ final class ProxySessionListenerTest {
                     assertEquals("lobby", listener.online().get(0).currentServer().orElseThrow());
                     var occupiedStatus = requestStatus(listenPort);
                     assertEquals(1, occupiedStatus.path("players").path("online").asInt());
-                    assertEquals(1, occupiedStatus.path("players").path("max").asInt());
+                    assertEquals(100, occupiedStatus.path("players").path("max").asInt());
 
                     writeFrame(output, new byte[] {0x01, 0x22, 0x33, 0x44});
                     output.flush();

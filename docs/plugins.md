@@ -19,6 +19,27 @@
 
 插件先自行完成岛屿加载或实例唤醒，再调用转服。发现只是注册后端的一种来源，见[发现插件](discovery.md)。
 
+### 消息与主动断开
+
+`Players.sendMessage(identity, text)` 和 `disconnect(identity, reason)` 均绑定完整的 `PlayerIdentity`，可从任意线程调用；通过插件上下文获取的 stage 在 I/O 线程外完成。参数错误立即报告，插件停用后拒绝继续提交。
+
+- 消息是纯文本，最多 1024 个 Unicode 码点。返回 `MessageResult.SENT` 表示网络写入完成；连接消失或正在关闭返回 `NOT_CONNECTED`；登录、初次 Forge 握手未就绪或转服交接期间返回 `NOT_READY`；不可写或该连接已有 64 条未完成消息返回 `BACKPRESSURED`。网络写失败以异常完成。
+- 主动断开要求非空白原因，最多 1024 个 Unicode 码点。核心按实际 LOGIN/PLAY 阶段发包，最长等待 5 秒后清理连接、未决转服和候选后端。返回 `DisconnectResult.DISCONNECTED` 表示连接清理完成，原因文本仅尽力交付；身份已失效返回 `NOT_CONNECTED`。重复断开合并处理，取消调用方等待不撤销已提交的断开。
+- `disconnect` 也支持准入或初始选服回调中的已识别玩家，此时玩家还未出现在 `online()` 中。
+
+```java
+// Ban 数据和权限检查由插件先完成；保存完整 identity，防止误操作重连者。
+context.players().disconnect(player.identity(), "你已被封禁，请联系管理员。");
+
+context.players().sendMessage(player.identity(), "目的地已准备好。").thenAccept(result -> {
+    if (result == MessageResult.SENT) {
+        context.logger().debug("消息已写入玩家连接");
+    }
+});
+```
+
+完整状态与验收设计见[玩家操作](player-operations.md)。
+
 ## 初始选服
 
 `Plugin.initialPlacementHandler()` 返回 `Optional<InitialPlacementHandler>`。整个代理最多有一个初始选服处理器，它收到 `PlayerView` 与当前 `List<ServerView>`，异步返回 `PlacementDecision.select(name)` 或 `reject(reason)`。未提供处理器时，核心选择目录中注册顺序的第一个后端。
@@ -39,7 +60,7 @@ context.commands().register("where", command -> {
 
 只消费已注册的 `/命令`，普通聊天和未知命令原样交给后端。权限判断属于插件：必须先检查调用者权限再执行 `/ban` 等管理操作。命令回调使用独立有界工作池，异常返回通用失败信息，队列满时告知玩家稍后重试。
 
-每位玩家可突发调用 10 次代理命令，之后每 200 毫秒恢复一次额度；超额命令仍由代理消费，限速提示每两秒至多一次。回复最多 1024 个 Java 字符，单会话至多挂起 64 条；连接不可写或已离线时丢弃回复。普通转服期间仍可调用代理命令。
+每位玩家可突发调用 10 次代理命令，之后每 200 毫秒恢复一次额度；超额命令仍由代理消费，限速提示每两秒至多一次。`reply` 复用玩家消息实现：最多 1024 个 Unicode 码点，与主动消息共享每连接 64 条未完成写入上限；不可写、已离线或协议过渡期间丢弃回复。命令回调仍可发起转服。
 
 ## 统一类型化事件
 
@@ -72,7 +93,7 @@ context.events().subscribe(PlayerAdmissionEvent.class, event -> {
 });
 ```
 
-插件自行维护封禁数据与权限策略；核心不保存封禁名单，也不定义封禁期限或申诉流程。异步数据库查询可以直接返回 stage；查询异常或超时会使该次准入失败。更新封禁名单不会自动踢出在线玩家，当前 `Players` API 没有踢出接口。玩家准入策略不会在转服时重复执行。
+插件自行维护封禁数据与权限策略；核心不保存封禁名单，也不定义封禁期限或申诉流程。异步数据库查询可以直接返回 stage；查询异常或超时会使该次准入失败。更新封禁名单后，插件可调用 `Players.disconnect` 踢出对应的在线连接。玩家准入策略不会在转服时重复执行。
 
 ### 会话通知
 
