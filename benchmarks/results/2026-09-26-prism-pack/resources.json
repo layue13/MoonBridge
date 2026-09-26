@@ -1,0 +1,58 @@
+[
+  {
+    "mode": "direct",
+    "repeat": 1,
+    "backendCpuSeconds": 4.1875,
+    "proxyCpuSeconds": 0.0,
+    "proxyWorkingSet": 121741312
+  },
+  {
+    "mode": "proxy",
+    "repeat": 1,
+    "backendCpuSeconds": 1.96875,
+    "proxyCpuSeconds": 0.484375,
+    "proxyWorkingSet": 135671808
+  },
+  {
+    "mode": "proxy",
+    "repeat": 2,
+    "backendCpuSeconds": 1.0,
+    "proxyCpuSeconds": 0.25,
+    "proxyWorkingSet": 136794112
+  },
+  {
+    "mode": "direct",
+    "repeat": 2,
+    "backendCpuSeconds": 1.203125,
+    "proxyCpuSeconds": 0.0,
+    "proxyWorkingSet": 136794112
+  },
+  {
+    "mode": "direct",
+    "repeat": 3,
+    "backendCpuSeconds": 1.0625,
+    "proxyCpuSeconds": 0.015625,
+    "proxyWorkingSet": 136749056
+  },
+  {
+    "mode": "proxy",
+    "repeat": 3,
+    "backendCpuSeconds": 0.875,
+    "proxyCpuSeconds": 0.15625,
+    "proxyWorkingSet": 136749056
+  },
+  {
+    "mode": "proxy",
+    "repeat": 4,
+    "backendCpuSeconds": 0.859375,
+    "proxyCpuSeconds": 0.265625,
+    "proxyWorkingSet": 142680064
+  },
+  {
+    "mode": "direct",
+    "repeat": 4,
+    "backendCpuSeconds": 1.0,
+    "proxyCpuSeconds": 0.0,
+    "proxyWorkingSet": 138641408
+  }
+]

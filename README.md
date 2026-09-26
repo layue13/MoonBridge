@@ -23,4 +23,4 @@
 
 ## 验证状态
 
-已有合成 TCP 登录/转服测试，以及最小 Uranium + Prism Forge 客户端联机记录。目标整合包、真实 Mojang 认证和生产容量尚未验收；当前不能宣称生产可用。已知 Uranium 候选服登录停滞的调查见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
+已完成当前 Prism 整合包的真实 Mojang 认证、连续 20 次转服、DNS/Agent 发行包烟测及同条件流量对照，见[验收记录](benchmarks/results/2026-09-26-prism-pack.md)。验收覆盖单玩家与本机后端；生产容量需按部署环境测量。已知 Uranium 候选服登录停滞的调查见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
