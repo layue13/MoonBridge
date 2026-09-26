@@ -1,0 +1,2 @@
+{"host":"127.0.0.1","port":58389,"username":"PackProbe","modCount":23,"warmupMessages":50,"measuredMessages":200,"elapsedMs":9998.983,"throughputPerSec":20.00203420687884,"rttMs":{"p50":50.138,"p95":53.3903,"p99":55.8579},"incomingPackets":{"0x8":8,"0x3f":200,"0x21":120,"0xe":16,"0x1c":24,"0x12":16,"0x19":16,"0x3":10,"0x13":8,"0x26":32,"0x0":5},"incomingBytes":{"0x8":272,"0x3f":3279000,"0x21":4108,"0xe":448,"0x1c":392,"0x12":176,"0x19":96,"0x3":170,"0x13":80,"0x26":283864,"0x0":25},"trailingPackets":{"0x3":1},"trailingBytes":{"0x3":17}}
+
