@@ -24,7 +24,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             throw new IllegalArgumentException("OFFLINE requires a literal loopback listen IP or allowOfflinePublicAccess: true");
         }
         backends = backends == null ? List.of() : List.copyOf(backends);
-        plugins = plugins == null ? new Plugins("plugins", Map.of(), null) : plugins;
+        plugins = plugins == null ? new Plugins("plugins", Map.of(), null, null) : plugins;
         maxConnections = maxConnections == null ? 4096 : maxConnections;
         if (maxConnections < 1 || maxConnections > 1_000_000) {
             throw new IllegalArgumentException("maxConnections must be between 1 and 1000000");
@@ -107,7 +107,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public record Plugins(String directory, Map<String, Map<String, String>> enabled,
-                          Integer initialPlacementTimeoutSeconds) {
+                          Integer initialPlacementTimeoutSeconds, Integer accessTimeoutSeconds) {
         public Plugins {
             if (directory == null || directory.isBlank()) {
                 throw new IllegalArgumentException("plugin directory is required");
@@ -116,6 +116,10 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                     ? 15 : initialPlacementTimeoutSeconds;
             if (initialPlacementTimeoutSeconds < 1 || initialPlacementTimeoutSeconds > 120) {
                 throw new IllegalArgumentException("initialPlacementTimeoutSeconds must be between 1 and 120");
+            }
+            accessTimeoutSeconds = accessTimeoutSeconds == null ? 5 : accessTimeoutSeconds;
+            if (accessTimeoutSeconds < 1 || accessTimeoutSeconds > 30) {
+                throw new IllegalArgumentException("accessTimeoutSeconds must be between 1 and 30");
             }
             enabled = enabled == null ? Map.of() : enabled.entrySet().stream().collect(
                     java.util.stream.Collectors.toUnmodifiableMap(

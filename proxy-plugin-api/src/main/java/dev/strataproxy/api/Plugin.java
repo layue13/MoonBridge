@@ -10,7 +10,7 @@ public interface Plugin {
     }
 
     /**
-     * Called after pending placement requests are ended and callback workers are asked to stop.
+     * Called after pending placement and access checks are ended and callback workers are asked to stop.
      * A callback that ignores interruption may still be running during this method. The proxy
      * allows a total of ten seconds for all plugins to finish their disable hooks.
      */
@@ -22,6 +22,16 @@ public interface Plugin {
      * The proxy applies its configured timeout to the returned asynchronous stage.
      */
     default Optional<InitialPlacementHandler> initialPlacementHandler() {
+        return Optional.empty();
+    }
+
+    /** Returns this plugin's optional check for newly accepted client connections. */
+    default Optional<ConnectionCheck> connectionCheck() {
+        return Optional.empty();
+    }
+
+    /** Returns this plugin's optional check after login identity is known and before placement. */
+    default Optional<LoginCheck> loginCheck() {
         return Optional.empty();
     }
 }

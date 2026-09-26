@@ -4,6 +4,7 @@ maxConnections: 4096
 plugins:
   directory: "../plugins"
   initialPlacementTimeoutSeconds: 15
+  accessTimeoutSeconds: 5
   enabled: {}
 backends:
   - name: "lobby"

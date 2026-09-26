@@ -1,6 +1,10 @@
 package dev.strataproxy.core.plugin;
 
+import dev.strataproxy.api.AccessDecision;
 import dev.strataproxy.api.InitialPlacementHandler;
+import dev.strataproxy.api.ConnectionCheck;
+import dev.strataproxy.api.LoginCheck;
+import dev.strataproxy.api.LoginRequest;
 import dev.strataproxy.api.CommandHandler;
 import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.CommandRegistration;
@@ -27,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.InetSocketAddress;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -47,12 +52,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -79,27 +83,52 @@ public final class PluginHost implements AutoCloseable {
     private final ThreadPoolExecutor callbacks;
     private final ThreadPoolExecutor commandWorkers;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService timer;
+    private final ScheduledThreadPoolExecutor timer;
+    private final AccessChecks accessChecks;
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
     private volatile State state = State.LOADING;
     private InitialPlacementHandler placementHandler;
+    private volatile List<java.util.function.Function<InetSocketAddress, CompletionStage<AccessDecision>>> connectionChecks = List.of();
+    private volatile List<java.util.function.Function<LoginRequest, CompletionStage<AccessDecision>>> loginChecks = List.of();
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
-        this(catalog, players, placementTimeout, Math.max(2, Runtime.getRuntime().availableProcessors()), 128);
+        this(catalog, players, placementTimeout, Duration.ofSeconds(5));
+    }
+
+    public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout) {
+        this(catalog, players, placementTimeout, accessTimeout,
+                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, Duration.ofSeconds(10),
+                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
     }
 
     PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout,
                int callbackThreads, int callbackQueueCapacity) {
-        this(catalog, players, placementTimeout, callbackThreads, callbackQueueCapacity, Duration.ofSeconds(10));
+        this(catalog, players, placementTimeout, Duration.ofSeconds(5), callbackThreads, callbackQueueCapacity,
+                Duration.ofSeconds(10), Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
     }
 
     PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout,
                int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout) {
+        this(catalog, players, placementTimeout, Duration.ofSeconds(5), callbackThreads, callbackQueueCapacity,
+                shutdownTimeout, Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
+    }
+
+    PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout,
+               int callbackThreads, int callbackQueueCapacity, int accessThreads, int accessQueueCapacity,
+               int maxPendingAccess) {
+        this(catalog, players, placementTimeout, accessTimeout, callbackThreads, callbackQueueCapacity,
+                Duration.ofSeconds(10), accessThreads, accessQueueCapacity, maxPendingAccess);
+    }
+
+    private PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout,
+                       int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout,
+                       int accessThreads, int accessQueueCapacity, int maxPendingAccess) {
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.players = Objects.requireNonNull(players, "players");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
+        Objects.requireNonNull(accessTimeout, "accessTimeout");
         this.shutdownTimeout = Objects.requireNonNull(shutdownTimeout, "shutdownTimeout");
         if (placementTimeout.isZero() || placementTimeout.isNegative()) {
             throw new IllegalArgumentException("placementTimeout must be positive");
@@ -116,7 +145,10 @@ public final class PluginHost implements AutoCloseable {
         this.commandWorkers = new ThreadPoolExecutor(callbackThreads, callbackThreads, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(callbackQueueCapacity), namedThreads("strataproxy-plugin-command"),
                 new ThreadPoolExecutor.AbortPolicy());
-        this.timer = Executors.newSingleThreadScheduledExecutor(namedThreads("strataproxy-plugin-timeout"));
+        this.timer = new ScheduledThreadPoolExecutor(1, namedThreads("strataproxy-plugin-timeout"));
+        this.timer.setRemoveOnCancelPolicy(true);
+        this.accessChecks = new AccessChecks(accessTimeout, accessThreads, accessQueueCapacity, maxPendingAccess,
+                timer, namedThreads("strataproxy-plugin-access"));
     }
 
     /** Loads every JAR in the directory in filename order through Java's service provider mechanism. */
@@ -210,11 +242,19 @@ public final class PluginHost implements AutoCloseable {
         }
     }
 
-    /** Calls onEnable after all providers have loaded and validates the single placement hook. */
+    /** Calls onEnable after all providers have loaded and captures the plugins' typed hooks. */
     public synchronized void enable() {
         requireState(State.LOADING);
         try {
+            var connectionHandlers = new ArrayList<java.util.function.Function<InetSocketAddress, CompletionStage<AccessDecision>>>();
+            var loginHandlers = new ArrayList<java.util.function.Function<LoginRequest, CompletionStage<AccessDecision>>>();
             for (LoadedPlugin loaded : plugins) {
+                Optional<ConnectionCheck> connectionCandidate = Objects.requireNonNull(
+                        loaded.plugin.connectionCheck(), "connectionCheck result");
+                connectionCandidate.ifPresent(check -> connectionHandlers.add(check::check));
+                Optional<LoginCheck> loginCandidate = Objects.requireNonNull(
+                        loaded.plugin.loginCheck(), "loginCheck result");
+                loginCandidate.ifPresent(check -> loginHandlers.add(check::check));
                 Optional<InitialPlacementHandler> candidate = Objects.requireNonNull(
                         loaded.plugin.initialPlacementHandler(), "initialPlacementHandler result");
                 if (candidate.isPresent()) {
@@ -225,6 +265,8 @@ public final class PluginHost implements AutoCloseable {
                     placementHandler = candidate.get();
                 }
             }
+            connectionChecks = List.copyOf(connectionHandlers);
+            loginChecks = List.copyOf(loginHandlers);
             for (LoadedPlugin loaded : plugins) {
                 loaded.enabled = true;
                 loaded.plugin.onEnable();
@@ -234,6 +276,34 @@ public final class PluginHost implements AutoCloseable {
             close();
             throw failure;
         }
+    }
+
+    /** Whether the proxy needs to install its pre-protocol connection gate. */
+    public boolean hasConnectionChecks() {
+        return !connectionChecks.isEmpty();
+    }
+
+    /** Runs all registered connection checks in plugin load order; any failure denies access. */
+    public CompletionStage<AccessDecision> checkConnection(InetSocketAddress remoteAddress) {
+        Objects.requireNonNull(remoteAddress, "remoteAddress");
+        if (state != State.ENABLED) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
+        }
+        return accessChecks.check(connectionChecks, remoteAddress);
+    }
+
+    /** Whether the proxy needs to run post-authentication player checks. */
+    public boolean hasLoginChecks() {
+        return !loginChecks.isEmpty();
+    }
+
+    /** Runs all registered login checks in plugin load order; any failure denies access. */
+    public CompletionStage<AccessDecision> checkLogin(LoginRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (state != State.ENABLED) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
+        }
+        return accessChecks.check(loginChecks, request);
     }
 
     /** Returns empty when no plugin handles placement; plugin code always runs off the caller's event loop. */
@@ -369,6 +439,7 @@ public final class PluginHost implements AutoCloseable {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
         }
+        accessChecks.close();
         callbacks.shutdownNow();
         commandWorkers.shutdownNow();
         timer.shutdownNow();
@@ -389,6 +460,8 @@ public final class PluginHost implements AutoCloseable {
         }
         classLoaders.clear();
         placementHandler = null;
+        connectionChecks = List.of();
+        loginChecks = List.of();
     }
 
     private void disableWithinDeadline(LoadedPlugin loaded, long deadline) {
