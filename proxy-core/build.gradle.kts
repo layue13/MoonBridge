@@ -17,6 +17,8 @@ dependencies {
     implementation(libs.findLibrary("netty-resolver-dns").get())
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
+    implementation(libs.findLibrary("adventure-gson").get())
+    implementation(libs.findLibrary("adventure-plain").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
 }
 

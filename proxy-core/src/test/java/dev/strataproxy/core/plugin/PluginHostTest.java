@@ -23,6 +23,8 @@ import dev.strataproxy.api.ServerDefinition;
 import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.TransferResult;
 import dev.strataproxy.api.TransferStatus;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendId;
@@ -537,7 +539,7 @@ class PluginHostTest {
             host.load(List.of(plugin));
             var observed = new CompletableFuture<CommandInvocation>();
             var worker = new CompletableFuture<Thread>();
-            var reply = new CompletableFuture<String>();
+            var reply = new CompletableFuture<Component>();
             var registration = plugin.context.commands().register("Ping", invocation -> {
                 worker.complete(Thread.currentThread());
                 observed.complete(invocation);
@@ -555,7 +557,7 @@ class PluginHostTest {
             assertNotEquals(Thread.currentThread(), worker.get(5, TimeUnit.SECONDS));
             assertEquals("ping", observed.get(5, TimeUnit.SECONDS).name());
             assertEquals("hello world", observed.get(5, TimeUnit.SECONDS).arguments());
-            assertEquals("pong", reply.get(5, TimeUnit.SECONDS));
+            assertEquals("pong", ((TextComponent) reply.get(5, TimeUnit.SECONDS)).content());
             registration.unregister();
             registration.unregister();
             assertFalse(host.dispatchCommand(PLAYER, "/ping", text -> { }));
@@ -616,10 +618,10 @@ class PluginHostTest {
             assertTrue(host.dispatchCommand(PLAYER, "/slow one", text -> { }));
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             assertTrue(host.dispatchCommand(PLAYER, "/slow two", text -> { }));
-            var rejectedReply = new CompletableFuture<String>();
+            var rejectedReply = new CompletableFuture<Component>();
             assertTrue(host.dispatchCommand(PLAYER, "/slow three", rejectedReply::complete));
             assertEquals("Proxy command service is busy. Please try again.",
-                    rejectedReply.get(1, TimeUnit.SECONDS));
+                    ((TextComponent) rejectedReply.get(1, TimeUnit.SECONDS)).content());
             assertEquals(1, calls.get());
         } finally {
             release.countDown();
@@ -782,15 +784,15 @@ class PluginHostTest {
                 @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(
                         PlayerIdentity identity, String backendName) { throw new AssertionError("unexpected transfer"); }
                 @Override public java.util.concurrent.CompletionStage<MessageResult> sendMessage(
-                        PlayerIdentity identity, String message) {
+                        PlayerIdentity identity, Component message) {
                     assertEquals(PLAYER.identity(), identity);
-                    assertEquals("hello", message);
+                    assertEquals("hello", ((TextComponent) message).content());
                     return messageResult;
                 }
                 @Override public java.util.concurrent.CompletionStage<DisconnectResult> disconnect(
-                        PlayerIdentity identity, String reason) {
+                        PlayerIdentity identity, Component reason) {
                     assertEquals(PLAYER.identity(), identity);
-                    assertEquals("maintenance", reason);
+                    assertEquals("maintenance", ((TextComponent) reason).content());
                     return disconnectResult;
                 }
             };
@@ -994,11 +996,11 @@ class PluginHostTest {
 
     private abstract static class TestPlayers implements Players {
         @Override public java.util.concurrent.CompletionStage<MessageResult> sendMessage(
-                PlayerIdentity identity, String message) {
+                PlayerIdentity identity, Component message) {
             return CompletableFuture.completedFuture(MessageResult.NOT_CONNECTED);
         }
         @Override public java.util.concurrent.CompletionStage<DisconnectResult> disconnect(
-                PlayerIdentity identity, String reason) {
+                PlayerIdentity identity, Component reason) {
             return CompletableFuture.completedFuture(DisconnectResult.NOT_CONNECTED);
         }
     }

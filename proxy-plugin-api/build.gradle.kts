@@ -5,6 +5,8 @@ plugins {
 
 dependencies {
     api(libs.findLibrary("slf4j-api").get())
+    api(libs.findLibrary("adventure-api").get())
+    api(libs.findLibrary("adventure-minimessage").get())
 }
 
 java {

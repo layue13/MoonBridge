@@ -13,6 +13,8 @@ import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.CommandHandler;
+import dev.strataproxy.api.CommandCompleter;
+import dev.strataproxy.api.CommandCompletion;
 import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.CommandRegistration;
 import dev.strataproxy.api.Commands;
@@ -27,6 +29,7 @@ import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.ServerView;
 import dev.strataproxy.api.Servers;
 import dev.strataproxy.api.TransferResult;
+import net.kyori.adventure.text.Component;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
@@ -71,6 +74,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -80,6 +84,12 @@ import java.util.jar.JarFile;
 public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final Logger LOGGER = LoggerFactory.getLogger(PluginHost.class);
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
+    private static final int MAX_PENDING_COMMAND_COMPLETIONS = 128;
+    private static final int MAX_COMPLETION_RESULTS = 100;
+    // Leave room for bounded protocol encoding overhead beyond suggestion UTF-8 bodies.
+    private static final int MAX_COMPLETION_BYTES = 32_000;
+    private static final int MAX_COMPLETION_CANDIDATES_SCANNED = 4096;
+    private static final Duration COMMAND_COMPLETION_TIMEOUT = Duration.ofSeconds(1);
     private static final ThreadFactory PLAYER_COMPLETION_THREADS = Thread.ofVirtual()
             .name("strataproxy-plugin-player-", 0).factory();
     private static final Executor PLAYER_COMPLETIONS = task -> PLAYER_COMPLETION_THREADS.newThread(task).start();
@@ -90,6 +100,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final ThreadPoolExecutor callbacks;
     private final ThreadPoolExecutor commandWorkers;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
+    private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger pendingCompletionCount = new AtomicInteger();
     private final ScheduledThreadPoolExecutor timer;
     private final AsyncEventDispatcher admissionEvents;
     private final AsyncEventDispatcher notificationEvents;
@@ -422,13 +434,168 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         return result;
     }
 
+    /** Returns up to 100 registered roots matching a case-insensitive prefix without a leading slash. */
+    public List<String> commandNames(String prefix) {
+        Objects.requireNonNull(prefix, "prefix");
+        if (state != State.ENABLED) return List.of();
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return commands.values().stream()
+                .filter(command -> command.context.active && command.name.startsWith(normalized))
+                .map(command -> "/" + command.name)
+                .sorted()
+                .limit(MAX_COMPLETION_RESULTS)
+                .toList();
+    }
+
+    /**
+     * Completes arguments for a known slash command. Root-only input belongs to {@link #commandNames(String)};
+     * the callback receives arguments after exactly one root separator, preserving all remaining whitespace.
+     */
+    public Optional<CompletionStage<List<String>>> completeCommand(PlayerView player, String input) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(input, "input");
+        if (state != State.ENABLED || input.length() < 2 || input.charAt(0) != '/') return Optional.empty();
+        int end = 1;
+        while (end < input.length() && !Character.isWhitespace(input.charAt(end))) end++;
+        if (end == input.length()) return Optional.empty();
+        String name = input.substring(1, end).toLowerCase(Locale.ROOT);
+        RegisteredCommand registered = commands.get(name);
+        if (registered == null || !registered.context.active) return Optional.empty();
+        String arguments = input.substring(end + 1);
+        if (registered.completer == null) {
+            return Optional.of(CompletableFuture.completedFuture(List.of()));
+        }
+        synchronized (this) {
+            if (state != State.ENABLED || commands.get(name) != registered || !registered.context.active) {
+                return Optional.empty();
+            }
+            if (!reserveCompletionSlot()) {
+                return Optional.of(CompletableFuture.failedFuture(new PluginOverloadedException(
+                        new RejectedExecutionException("Too many pending command completions"))));
+            }
+            PendingCompletion pending = new PendingCompletion(registered, player, name, arguments);
+            pendingCompletions.add(pending);
+            registered.pendingCompletions.add(pending);
+            pending.result.whenComplete((ignored, failure) -> {
+                if (pending.result.isCancelled()) finishCompletion(pending, null,
+                        new java.util.concurrent.CancellationException("Command completion cancelled"), true);
+            });
+            try {
+                pending.timeout = timer.schedule(() -> finishCompletion(pending, null,
+                                new TimeoutException("Plugin command completion timed out"), true),
+                        COMMAND_COMPLETION_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+                FutureTask<Void> invocation = new FutureTask<>(() -> {
+                    invokeCompleter(pending);
+                    return null;
+                });
+                pending.invocation = invocation;
+                commandWorkers.execute(invocation);
+                if (pending.finished.get()) {
+                    invocation.cancel(true);
+                    commandWorkers.remove(invocation);
+                }
+            } catch (RejectedExecutionException overloaded) {
+                finishCompletion(pending, null, new PluginOverloadedException(overloaded), true);
+            } catch (RuntimeException failure) {
+                finishCompletion(pending, null, failure, true);
+            }
+            return Optional.of(pending.result);
+        }
+    }
+
+    private boolean reserveCompletionSlot() {
+        while (true) {
+            int current = pendingCompletionCount.get();
+            if (current >= MAX_PENDING_COMMAND_COMPLETIONS) return false;
+            if (pendingCompletionCount.compareAndSet(current, current + 1)) return true;
+        }
+    }
+
+    private void invokeCompleter(PendingCompletion pending) {
+        if (pending.finished.get()) return;
+        if (state != State.ENABLED || !pending.registered.context.active
+                || commands.get(pending.commandName) != pending.registered) {
+            finishCompletion(pending, null, new IllegalStateException("Command is no longer registered"), true);
+            return;
+        }
+        try {
+            CompletionStage<List<String>> stage = Objects.requireNonNull(
+                    pending.registered.completer.complete(new CommandCompletion(
+                            pending.player, pending.commandName, pending.arguments)),
+                    "Command completer returned a null stage");
+            CompletableFuture<List<String>> cancellable = stage.toCompletableFuture();
+            pending.pluginStage.set(cancellable);
+            if (pending.finished.get()) cancellable.cancel(true);
+            stage.whenCompleteAsync((suggestions, failure) -> {
+                if (failure != null) finishCompletion(pending, null, failure, false);
+                else {
+                    try {
+                        finishCompletion(pending, sanitizeSuggestions(
+                                Objects.requireNonNull(suggestions, "Command completer returned null suggestions")),
+                                null, false);
+                    } catch (Throwable invalid) {
+                        finishCompletion(pending, null, invalid, false);
+                    }
+                }
+            }, commandWorkers);
+        } catch (Throwable failure) {
+            finishCompletion(pending, null, failure, true);
+        }
+    }
+
+    private static List<String> sanitizeSuggestions(List<String> suggestions) {
+        var result = new ArrayList<String>(Math.min(suggestions.size(), MAX_COMPLETION_RESULTS));
+        var unique = new HashSet<String>();
+        int utf8Bytes = 0;
+        int scanned = 0;
+        for (String suggestion : suggestions) {
+            if (scanned++ >= MAX_COMPLETION_CANDIDATES_SCANNED || result.size() >= MAX_COMPLETION_RESULTS) break;
+            if (suggestion == null || suggestion.isEmpty() || suggestion.length() > 100 || containsWhitespace(suggestion)
+                    || !unique.add(suggestion)) continue;
+            int bytes = suggestion.getBytes(StandardCharsets.UTF_8).length;
+            if (utf8Bytes + bytes > MAX_COMPLETION_BYTES) continue;
+            result.add(suggestion);
+            utf8Bytes += bytes;
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean containsWhitespace(String value) {
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) return true;
+            offset += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private void finishCompletion(PendingCompletion pending, List<String> suggestions, Throwable failure,
+                                  boolean cancelExecution) {
+        if (!pending.finished.compareAndSet(false, true)) return;
+        pendingCompletions.remove(pending);
+        pending.registered.pendingCompletions.remove(pending);
+        pendingCompletionCount.decrementAndGet();
+        if (pending.timeout != null) pending.timeout.cancel(false);
+        FutureTask<Void> invocation = pending.invocation;
+        if (invocation != null && cancelExecution && !invocation.isDone()) {
+            commandWorkers.remove(invocation);
+            invocation.cancel(true);
+        }
+        CompletableFuture<List<String>> pluginStage = pending.pluginStage.get();
+        if (pluginStage != null && cancelExecution && !pluginStage.isDone()) {
+            PLAYER_COMPLETIONS.execute(() -> pluginStage.cancel(true));
+        }
+        if (failure != null) pending.result.completeExceptionally(failure);
+        else pending.result.complete(Objects.requireNonNull(suggestions, "suggestions"));
+    }
+
     /** Claims only known root commands; caller retains and forwards every other chat frame. */
-    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply) {
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<Component> reply) {
         return dispatchCommand(player, message, reply, () -> true);
     }
 
     /** Admission is checked only after the command name is known, preserving unknown-command passthrough. */
-    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply,
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<Component> reply,
                                    BooleanSupplier admission) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(message, "message");
@@ -441,9 +608,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         RegisteredCommand registered = commands.get(name);
         if (registered == null || !registered.context.active) return false;
         if (!admission.getAsBoolean()) return true;
-        String arguments = end == message.length() ? "" : message.substring(end).stripLeading();
+        String arguments = end == message.length() ? "" : message.substring(end + 1);
         CommandInvocation invocation = new CommandInvocation(player, name, arguments,
-                text -> { if (registered.context.active) reply.accept(text); });
+                component -> { if (registered.context.active) reply.accept(component); });
         try {
             commandWorkers.execute(() -> {
                 if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) return;
@@ -455,7 +622,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 }
             });
         } catch (RejectedExecutionException overloaded) {
-            reply.accept("Proxy command service is busy. Please try again.");
+            reply.accept(Component.text("Proxy command service is busy. Please try again."));
         }
         return true;
     }
@@ -476,6 +643,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         for (PendingPlacement request : pendingPlacements) {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
+        }
+        for (PendingCompletion pending : pendingCompletions) {
+            finishCompletion(pending, null, new IllegalStateException("Plugin host closed"), true);
         }
         callbacks.shutdownNow();
         commandWorkers.shutdownNow();
@@ -618,7 +788,40 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private record PendingPlacement(CompletableFuture<Optional<PlacementDecision>> result,
                                     AtomicBoolean decided) { }
 
-    private record RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler) { }
+    private final class RegisteredCommand {
+        private final String name;
+        private final PluginContextImpl context;
+        private final CommandHandler handler;
+        private final CommandCompleter completer;
+        private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
+
+        private RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler,
+                                  CommandCompleter completer) {
+            this.name = name;
+            this.context = context;
+            this.handler = handler;
+            this.completer = completer;
+        }
+    }
+
+    private final class PendingCompletion {
+        private final RegisteredCommand registered;
+        private final PlayerView player;
+        private final String commandName;
+        private final String arguments;
+        private final CompletableFuture<List<String>> result = new CompletableFuture<>();
+        private final AtomicBoolean finished = new AtomicBoolean();
+        private final AtomicReference<CompletableFuture<List<String>>> pluginStage = new AtomicReference<>();
+        private volatile FutureTask<Void> invocation;
+        private volatile ScheduledFuture<?> timeout;
+
+        private PendingCompletion(RegisteredCommand registered, PlayerView player, String commandName, String arguments) {
+            this.registered = registered;
+            this.player = player;
+            this.commandName = commandName;
+            this.arguments = arguments;
+        }
+    }
 
     private final class EventRegistration<E extends Event<R>, R>
             implements EventSubscription, AsyncEventDispatcher.EventHandler<R> {
@@ -689,6 +892,13 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             active = false;
             eventRegistrationOpen = false;
             revokeEventSubscriptions();
+            for (RegisteredCommand command : commands.values()) {
+                if (command.context == this) {
+                    for (PendingCompletion pending : command.pendingCompletions) {
+                        finishCompletion(pending, null, new IllegalStateException("Plugin unloaded"), true);
+                    }
+                }
+            }
             commands.entrySet().removeIf(entry -> entry.getValue().context == this);
             catalog.removeOwner(owner);
         }
@@ -734,7 +944,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private PluginCommands(PluginContextImpl context) { this.context = context; }
 
-        @Override public CommandRegistration register(String name, CommandHandler handler) {
+        @Override public CommandRegistration register(String name, CommandHandler handler, CommandCompleter completer) {
             Objects.requireNonNull(name, "name");
             Objects.requireNonNull(handler, "handler");
             String normalized = name.toLowerCase(Locale.ROOT);
@@ -743,11 +953,19 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
             synchronized (context) {
                 context.requireActive();
-                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler);
+                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler, completer);
                 if (commands.putIfAbsent(normalized, registration) != null) {
                     throw new IllegalArgumentException("Command already registered: /" + normalized);
                 }
-                return () -> commands.remove(normalized, registration);
+                return () -> {
+                    synchronized (PluginHost.this) {
+                        if (commands.remove(normalized, registration)) {
+                            for (PendingCompletion pending : registration.pendingCompletions) {
+                                finishCompletion(pending, null, new IllegalStateException("Command unregistered"), true);
+                            }
+                        }
+                    }
+                };
             }
         }
     }
@@ -783,7 +1001,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
         }
 
-        @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, String message) {
+        @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, Component message) {
             synchronized (context) {
                 context.requireActive();
                 return players.sendMessage(identity, message)
@@ -791,7 +1009,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
         }
 
-        @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+        @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, Component reason) {
             synchronized (context) {
                 context.requireActive();
                 return players.disconnect(identity, reason)

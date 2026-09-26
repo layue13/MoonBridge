@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import net.kyori.adventure.text.Component;
 
 class ApiValueTypesTest {
     @Test
@@ -47,14 +48,16 @@ class ApiValueTypesTest {
 
     @Test
     void placementRejectionBoundsTheClientVisibleReason() {
-        assertEquals("Try again later", ((PlacementDecision.Reject) PlacementDecision.reject("Try again later")).reason());
+        assertEquals(Component.text("Try again later"),
+                ((PlacementDecision.Reject) PlacementDecision.reject("Try again later")).reason());
         assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject(" "));
         assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject("x".repeat(1025)));
     }
 
     @Test
     void accessDenialBoundsTheClientVisibleReason() {
-        assertEquals("Blocked", ((AccessDecision.Denied) AccessDecision.deny("Blocked")).reason());
+        assertEquals(Component.text("Blocked"),
+                ((AccessDecision.Denied) AccessDecision.deny("Blocked")).reason());
         assertThrows(IllegalArgumentException.class, () -> AccessDecision.deny(" "));
         assertThrows(IllegalArgumentException.class, () -> AccessDecision.deny("x".repeat(1025)));
     }

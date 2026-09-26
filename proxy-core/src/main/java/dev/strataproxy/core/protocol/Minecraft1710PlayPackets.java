@@ -1,15 +1,14 @@
 package dev.strataproxy.core.protocol;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import net.kyori.adventure.text.Component;
 
 import java.util.Optional;
 import java.util.OptionalInt;
 
 /** The few protocol 5 PLAY packets a backend switch must understand or synthesize. */
 public final class Minecraft1710PlayPackets {
-    private static final ObjectMapper JSON = new ObjectMapper();
     public static final int CLIENT_CHAT = 0x01;
     public static final int SERVER_CHAT = 0x02;
     public static final int JOIN_GAME = 0x01;
@@ -44,11 +43,17 @@ public final class Minecraft1710PlayPackets {
     /** Encodes a plain-text proxy reply as a protocol 5 clientbound PLAY chat frame. */
     public static ByteBuf chatReply(ByteBufAllocator allocator, String message) {
         validateText(message, true);
-        String component = JSON.createObjectNode().put("text", message).toString();
+        return chatReplyEncoded(allocator, MinecraftText.encode(Component.text(message)));
+    }
+
+    /** Encodes a protocol 5 clientbound PLAY chat frame from prevalidated component JSON. */
+    public static ByteBuf chatReplyEncoded(ByteBufAllocator allocator, String componentJson) {
+        MinecraftText.validateEncoded(componentJson);
+        if (allocator == null) throw new NullPointerException("allocator");
         ByteBuf packet = allocator.buffer();
         try {
             ProtocolVarInt.write(packet, SERVER_CHAT);
-            ProtocolStrings.write(packet, component, 32767);
+            ProtocolStrings.write(packet, componentJson, 32767);
             return frame(allocator, packet);
         } finally {
             packet.release();
@@ -58,11 +63,17 @@ public final class Minecraft1710PlayPackets {
     /** Encodes an unframed protocol 5 PLAY Disconnect payload. */
     public static ByteBuf disconnect(ByteBufAllocator allocator, String reason) {
         validateText(reason, false);
-        String component = JSON.createObjectNode().put("text", reason).toString();
+        return disconnectEncoded(allocator, MinecraftText.encodeReason(Component.text(reason)));
+    }
+
+    /** Encodes an unframed protocol 5 PLAY Disconnect payload from prevalidated component JSON. */
+    public static ByteBuf disconnectEncoded(ByteBufAllocator allocator, String componentJson) {
+        MinecraftText.validateEncoded(componentJson);
+        if (allocator == null) throw new NullPointerException("allocator");
         ByteBuf packet = allocator.buffer();
         try {
             ProtocolVarInt.write(packet, SERVER_DISCONNECT);
-            ProtocolStrings.write(packet, component, 32767);
+            ProtocolStrings.write(packet, componentJson, 32767);
             return packet;
         } catch (RuntimeException failure) {
             packet.release();

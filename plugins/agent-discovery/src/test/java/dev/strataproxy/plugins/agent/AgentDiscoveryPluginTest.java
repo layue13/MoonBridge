@@ -202,10 +202,10 @@ class AgentDiscoveryPluginTest {
                 return new Players() {
                     @Override public Optional<PlayerView> find(PlayerIdentity identity) { return Optional.empty(); }
                     @Override public List<PlayerView> online() { return List.of(); }
-                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.MessageResult> sendMessage(PlayerIdentity identity, String message) {
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.MessageResult> sendMessage(PlayerIdentity identity, net.kyori.adventure.text.Component message) {
                         return CompletableFuture.failedFuture(new UnsupportedOperationException());
                     }
-                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+                    @Override public java.util.concurrent.CompletionStage<dev.strataproxy.api.DisconnectResult> disconnect(PlayerIdentity identity, net.kyori.adventure.text.Component reason) {
                         return CompletableFuture.failedFuture(new UnsupportedOperationException());
                     }
                     @Override public java.util.concurrent.CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
@@ -215,7 +215,7 @@ class AgentDiscoveryPluginTest {
             }
             @Override public Servers servers() { return servers; }
             @Override public dev.strataproxy.api.Commands commands() {
-                return (name, handler) -> { throw new UnsupportedOperationException(); };
+                return (name, handler, completer) -> { throw new UnsupportedOperationException(); };
             }
             @Override public dev.strataproxy.api.event.Events events() { throw new UnsupportedOperationException(); }
             @Override public org.slf4j.Logger logger() { return org.slf4j.LoggerFactory.getLogger("agent-test"); }

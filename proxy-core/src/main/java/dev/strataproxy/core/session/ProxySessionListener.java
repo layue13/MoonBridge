@@ -38,6 +38,8 @@ import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.List;
+import net.kyori.adventure.text.Component;
+import dev.strataproxy.core.protocol.MinecraftText;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -56,7 +58,7 @@ import java.util.concurrent.ThreadFactory;
 public final class ProxySessionListener implements Players {
     @FunctionalInterface public interface CommandDispatcher {
         /** Returns true only if this proxy owns the command. */
-        boolean dispatch(PlayerView player, String message, Consumer<String> reply, BooleanSupplier admission);
+        boolean dispatch(PlayerView player, String message, Consumer<Component> reply, BooleanSupplier admission);
     }
     private final SocketAddress bindAddress;
     private final BackendCatalog catalog;
@@ -77,6 +79,9 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile CommandDispatcher commandDispatcher;
+    private Function<String, List<String>> commandNames;
+    private java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> completions;
+
     private EventDispatcher events;
     private Duration eventTimeout = Duration.ofSeconds(5);
     private int maxConnections = 4096;
@@ -175,6 +180,17 @@ public final class ProxySessionListener implements Players {
             throw new IllegalStateException("Command dispatcher must be configured once before listener start");
         }
         commandDispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
+    }
+
+    public synchronized void setCommandCompletion(Function<String, List<String>> names,
+            java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> handler) {
+        if (started || closed || completions != null) throw new IllegalStateException("Completion must be configured before start");
+        commandNames = Objects.requireNonNull(names);
+        completions = Objects.requireNonNull(handler);
+    }
+    Function<String, List<String>> commandNames() { return commandNames; }
+    Optional<CompletionStage<List<String>>> completeCommand(PlayerView player, String text) {
+        return completions.apply(player, text);
     }
 
     /** Bounds accepted sessions, including clients that have not completed login. */
@@ -291,24 +307,24 @@ public final class ProxySessionListener implements Players {
         return session.transferTo(backendName);
     }
 
-    @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, String message) {
+    @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, Component message) {
         Objects.requireNonNull(identity, "identity");
-        Session.validateMessage(message);
+        String encoded = MinecraftText.encode(message);
         Session session = sessionsByPlayerId.get(identity.playerId());
         if (session == null || !session.matchesIdentity(identity)) {
             return CompletableFuture.completedFuture(MessageResult.NOT_CONNECTED);
         }
-        return session.sendMessage(message);
+        return session.sendEncodedMessage(encoded);
     }
 
-    @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+    @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, Component reason) {
         Objects.requireNonNull(identity, "identity");
-        Session.validateDisconnectReason(reason);
+        String encoded = MinecraftText.encodeReason(reason);
         Session session = sessionsByPlayerId.get(identity.playerId());
         if (session == null || !session.matchesIdentity(identity)) {
             return CompletableFuture.completedFuture(DisconnectResult.NOT_CONNECTED);
         }
-        return session.disconnect(reason);
+        return session.disconnectEncoded(encoded);
     }
 
     public synchronized CompletionStage<Void> close() {

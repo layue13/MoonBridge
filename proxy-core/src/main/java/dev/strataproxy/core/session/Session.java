@@ -53,6 +53,8 @@ import java.util.UUID;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import net.kyori.adventure.text.Component;
+import dev.strataproxy.core.protocol.MinecraftText;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.RejectedExecutionException;
@@ -100,6 +102,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private boolean disconnectPacketStarted;
     private boolean disconnectRelayDrained;
     private String pendingDisconnectReason;
+    private TabCompletionBridge tabCompletion;
     private CompletableFuture<DisconnectResult> disconnectResult;
     private ScheduledFuture<?> disconnectDeadline;
     private int commandTokens = COMMAND_BURST;
@@ -428,7 +431,15 @@ final class Session extends ChannelInboundHandlerAdapter {
         pipeline.addLast("minecraft-frame-encoder", new SessionFrameEncoder());
     }
 
-    private void disconnectLogin(String reason) {
+    private void disconnectLogin(String reason) { disconnectLogin(Component.text(reason)); }
+
+    private void disconnectLogin(Component message) {
+        String reason;
+        try { reason = MinecraftText.encodeReason(message); }
+        catch (RuntimeException invalid) {
+            LOGGER.warn("Invalid plugin login rejection message", invalid);
+            reason = MinecraftText.encodeReason(Component.text("Connection rejected."));
+        }
         if (frontend.eventLoop().inEventLoop()) beginDisconnect(reason);
         else requestDisconnect(reason);
     }
@@ -460,6 +471,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (id == 0) { // Login Disconnect.
             loginDisconnectStarted = true;
             disconnecting = true;
+        if (tabCompletion != null) tabCompletion.close();
             disconnectResult = new CompletableFuture<>();
             frontend.config().setAutoRead(false);
             resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
@@ -556,6 +568,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                         this::dispatchPlayerCommand, this::closePair));
             }
             target.pipeline().addLast("keep-alive-bridge", new KeepAliveBridge(keepAlives, false, this::closePair));
+            installTabCompletion(target);
             var link = RawRelay.attach(frontend, target,
                     bytes -> observation.observeFrame(false, bytes),
                     bytes -> observation.observeFrame(true, bytes));
@@ -581,6 +594,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
     }
 
+    private void installTabCompletion(Channel target) {
+        if (owner.commandNames() == null) return;
+        if (tabCompletion != null) tabCompletion.close();
+        if (frontend.pipeline().get("tab-completion") != null) frontend.pipeline().remove("tab-completion");
+        tabCompletion = new TabCompletionBridge(frontend, owner.commandNames(),
+                text -> owner.completeCommand(view, text), this::closePair);
+        frontend.pipeline().addLast("tab-completion", tabCompletion.frontendHandler());
+        target.pipeline().addLast("tab-completion", tabCompletion.backendHandler());
+    }
+
     private boolean dispatchPlayerCommand(String message) {
         if (closed.get() || disconnecting || !published) return false;
         return owner.commandDispatcher().dispatch(view, message, this::sendCommandReply, this::admitPlayerCommand);
@@ -601,13 +624,21 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (!commandNoticeSent || now - lastCommandNoticeNanos >= COMMAND_NOTICE_NANOS) {
             commandNoticeSent = true;
             lastCommandNoticeNanos = now;
-            sendCommandReply("Too many proxy commands. Please slow down.");
+            sendCommandReply(Component.text("Too many proxy commands. Please slow down."));
         }
         return false;
     }
 
     CompletionStage<MessageResult> sendMessage(String message) {
         validateMessage(message);
+        return sendMessage(Component.text(message));
+    }
+
+    CompletionStage<MessageResult> sendMessage(Component message) {
+        return sendEncodedMessage(MinecraftText.encode(message));
+    }
+
+    CompletionStage<MessageResult> sendEncodedMessage(String message) {
         CompletableFuture<MessageResult> result = new CompletableFuture<>();
         if (closed.get() || disconnecting) {
             result.complete(MessageResult.NOT_CONNECTED);
@@ -645,7 +676,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             try {
-                ByteBuf frame = Minecraft1710PlayPackets.chatReply(frontend.alloc(), message);
+                ByteBuf frame = Minecraft1710PlayPackets.chatReplyEncoded(frontend.alloc(), message);
                 frontend.writeAndFlush(frame).addListener(write -> {
                     pendingMessages.decrementAndGet();
                     if (write.isSuccess()) result.complete(MessageResult.SENT);
@@ -683,12 +714,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (disconnecting) writeDisconnectReasonIfDrained();
     }
 
-    private void sendCommandReply(String message) {
+    private void sendCommandReply(Component message) {
         sendMessage(message);
     }
 
     CompletionStage<DisconnectResult> disconnect(String reason) {
         validateDisconnectReason(reason);
+        return requestDisconnect(MinecraftText.encodeReason(Component.text(reason)));
+    }
+
+    CompletionStage<DisconnectResult> disconnectEncoded(String reason) {
         return requestDisconnect(reason);
     }
 
@@ -722,6 +757,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void beginDisconnect(String reason) {
         if (closed.get() || disconnecting) return;
         disconnecting = true;
+        if (tabCompletion != null) tabCompletion.close();
         loginDisconnectStarted = true;
         pendingDisconnectReason = reason;
         disconnectResult = new CompletableFuture<>();
@@ -766,7 +802,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             ByteBuf packet;
             if (frontendPlayPhase) {
-                ByteBuf payload = Minecraft1710PlayPackets.disconnect(frontend.alloc(), pendingDisconnectReason);
+                ByteBuf payload = Minecraft1710PlayPackets.disconnectEncoded(frontend.alloc(), pendingDisconnectReason);
                 try {
                     packet = frontend.pipeline().get("minecraft-frame-encoder") == null
                             ? Minecraft1710PlayPackets.frame(frontend.alloc(), payload) : payload.copy();
@@ -774,7 +810,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     payload.release();
                 }
             } else {
-                packet = MinecraftLoginDisconnect.encode(frontend.alloc(), pendingDisconnectReason);
+                packet = MinecraftLoginDisconnect.encodeJson(frontend.alloc(), pendingDisconnectReason);
             }
             frontend.writeAndFlush(packet).addListener(ignored -> closePair());
         } catch (RuntimeException failure) {
@@ -1137,6 +1173,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             attempt.channel.pipeline().addLast("keep-alive-bridge",
                     new KeepAliveBridge(keepAlives, false, this::closePair));
             installTransferFrameHandlers(attempt.frameState, attempt.channel);
+            installTabCompletion(attempt.channel);
             next = RawRelay.attach(frontend, attempt.channel,
                     bytes -> nextObservation.observeFrame(false, bytes),
                     bytes -> nextObservation.observeFrame(true, bytes));
@@ -1321,6 +1358,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     void closePair() {
         if (!closed.compareAndSet(false, true)) return;
         Runnable cleanup = () -> {
+            if (tabCompletion != null) tabCompletion.close();
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
             if (disconnectDeadline != null) disconnectDeadline.cancel(false);

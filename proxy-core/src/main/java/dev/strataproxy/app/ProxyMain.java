@@ -89,6 +89,7 @@ public final class ProxyMain {
             listener.setEvents(plugins, eventTimeout);
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
+            listener.setCommandCompletion(plugins::commandNames, plugins::completeCommand);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
             var shutdown = new Thread(() -> {

@@ -1,6 +1,7 @@
 package dev.strataproxy.api;
 
 import java.util.Objects;
+import net.kyori.adventure.text.Component;
 
 /** Allows or denies a connection or login access check. */
 public sealed interface AccessDecision permits AccessDecision.Allowed, AccessDecision.Denied {
@@ -9,6 +10,11 @@ public sealed interface AccessDecision permits AccessDecision.Allowed, AccessDec
     }
 
     static AccessDecision deny(String reason) {
+        PlainTextValidation.validateString(reason, false, "reason");
+        return new Denied(Component.text(reason));
+    }
+
+    static AccessDecision deny(Component reason) {
         return new Denied(reason);
     }
 
@@ -16,12 +22,9 @@ public sealed interface AccessDecision permits AccessDecision.Allowed, AccessDec
         private static final Allowed INSTANCE = new Allowed();
     }
 
-    record Denied(String reason) implements AccessDecision {
+    record Denied(Component reason) implements AccessDecision {
         public Denied {
             Objects.requireNonNull(reason, "reason");
-            if (reason.isBlank() || reason.codePointCount(0, reason.length()) > 1024) {
-                throw new IllegalArgumentException("reason must contain 1 to 1024 characters");
-            }
         }
     }
 }
