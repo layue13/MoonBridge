@@ -34,7 +34,9 @@ flowchart LR
 
 静态配置和插件注册共用核心后端目录。插件通过 `Servers.find/all` 取得 `ServerView` 快照；`ServerView` 仅含名称、地址、标签和插件元数据，不含负载、玩家数或容量。插件以 `Servers.register` 获得所有权句柄，可更新或注销自己的条目；不能替换静态配置或其他插件拥有的同名项。重新注册同名项会生成新一代句柄，使旧句柄失效。选服拿到的是当时的后端快照，目录之后更新不改变已经开始的连接。
 
-默认初始选服遍历当前目录并选择注册顺序中的第一个后端；有玩法选服逻辑时由插件的初始选服回调负责决定。DNS 与 Agent 发现均为可选插件，只调用通用注册 API：核心不包含 DNS/Agent 协议，也不推断后端健康或空岛可用性。DNS 插件独立查询 A/AAAA 并协调自身注册；Agent 插件通过带签名的注册端点协调租约。启用插件关闭时，宿主撤销该插件名下的注册和命令。
+默认初始选服遍历当前目录并选择注册顺序中的第一个后端；有玩法选服逻辑时由插件的初始选服回调负责决定。代理不推断后端健康或空岛可用性。插件关闭时，宿主撤销该插件名下的注册和命令。
+
+核心还可启用独立的后端控制通道：每个后端实例以单独连接完成认证、注册和插件消息交互，不依赖玩家连接；短暂断线的注册保留到租约到期，消息调用立即报告连接不可用。控制通道不能覆盖静态后端或插件拥有的名称。详见[后端控制通道](backend-channel-design.md)。
 
 ## 转服、并发与错误边界
 
@@ -62,4 +64,4 @@ flowchart LR
 - 插件 API：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/PluginContext.java)、[`Servers`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/Servers.java)、[`Players`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/Players.java)
 - 会话和转服：[`Session`](../proxy-core/src/main/java/dev/strataproxy/core/session/Session.java)、[`TransferCandidate`](../proxy-core/src/main/java/dev/strataproxy/core/session/TransferCandidate.java)、[`TransferFrameBuffer`](../proxy-core/src/main/java/dev/strataproxy/core/session/TransferFrameBuffer.java)
 - 目录：[`BackendCatalog`](../proxy-core/src/main/java/dev/strataproxy/core/backend/BackendCatalog.java)、[`InMemoryBackendCatalog`](../proxy-core/src/main/java/dev/strataproxy/core/backend/InMemoryBackendCatalog.java)
-- 可选发现：[`DnsDiscoveryPlugin`](../plugins/dns-discovery/src/main/java/dev/strataproxy/plugins/dns/DnsDiscoveryPlugin.java)、[`AgentDiscoveryPlugin`](../plugins/agent-discovery/src/main/java/dev/strataproxy/plugins/agent/AgentDiscoveryPlugin.java)
+- 后端控制通道：[`BackendControlService`](../proxy-core/src/main/java/dev/strataproxy/core/control/BackendControlService.java)

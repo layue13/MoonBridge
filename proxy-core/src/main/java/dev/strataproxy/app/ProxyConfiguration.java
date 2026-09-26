@@ -3,13 +3,15 @@ package dev.strataproxy.app;
 import io.netty.util.NetUtil;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Configuration understood by the new proxy runtime. */
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                                  Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
-                                 Status status) {
+                                 Status status, BackendChannel backendChannel) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     public ProxyConfiguration {
@@ -40,7 +42,13 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends) {
-        this(listen, authentication, backends, null, null, false, null);
+        this(listen, authentication, backends, null, null, false, null, null);
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                              Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                              Status status) {
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status, null);
     }
 
     /** User-facing server list values; icon validation needs the config file location and happens in the loader. */
@@ -118,6 +126,50 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
 
         public InetSocketAddress socketAddress() {
             return parseAddress(address);
+        }
+    }
+
+    /** Optional listener for backend registration and control messages, independent of player traffic. */
+    public record BackendChannel(String listen, Map<String, Client> clients, Integer leaseSeconds,
+                                 Integer maxConnections) {
+        public BackendChannel {
+            if (listen == null || listen.isBlank()) throw new IllegalArgumentException("backendChannel.listen is required");
+            parseAddress(listen);
+            if (parseAddress(listen).getPort() == 0)
+                throw new IllegalArgumentException("backendChannel.listen port must be positive");
+            clients = clients == null ? Map.of() : Map.copyOf(clients);
+            if (clients.isEmpty()) throw new IllegalArgumentException("backendChannel.clients must not be empty");
+            for (String instanceId : clients.keySet()) {
+                if (!instanceId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+                    throw new IllegalArgumentException("invalid backendChannel client id: " + instanceId);
+            }
+            leaseSeconds = leaseSeconds == null ? 30 : leaseSeconds;
+            if (leaseSeconds < 5 || leaseSeconds > 3600)
+                throw new IllegalArgumentException("backendChannel.leaseSeconds must be between 5 and 3600");
+            maxConnections = maxConnections == null ? 128 : maxConnections;
+            if (maxConnections < 1 || maxConnections > 4096)
+                throw new IllegalArgumentException("backendChannel.maxConnections must be between 1 and 4096");
+        }
+
+        public InetSocketAddress listenAddress() { return parseAddress(listen); }
+    }
+
+    public record Client(String backendName, String keyId, String secret, Set<String> allowedHosts,
+                         Set<String> allowedNamespaces) {
+        public Client {
+            if (backendName == null || backendName.isBlank())
+                throw new IllegalArgumentException("backendChannel client backendName is required");
+            if (keyId == null || !keyId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+                throw new IllegalArgumentException("backendChannel client keyId is invalid");
+            if (secret == null || secret.getBytes(StandardCharsets.UTF_8).length < 32)
+                throw new IllegalArgumentException("backendChannel client secret must contain at least 32 UTF-8 bytes");
+            allowedHosts = allowedHosts == null ? Set.of() : Set.copyOf(allowedHosts);
+            if (allowedHosts.isEmpty() || allowedHosts.stream().anyMatch(String::isBlank))
+                throw new IllegalArgumentException("backendChannel client allowedHosts must not be empty");
+            allowedNamespaces = allowedNamespaces == null ? Set.of() : Set.copyOf(allowedNamespaces);
+            if (allowedNamespaces.isEmpty() || allowedNamespaces.stream()
+                    .anyMatch(namespace -> !namespace.matches("[a-z0-9][a-z0-9_.-]{0,63}")))
+                throw new IllegalArgumentException("backendChannel client allowedNamespaces is invalid");
         }
     }
 

@@ -18,6 +18,7 @@ dependencies {
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
+    testImplementation(project(":backend-channel-client"))
 }
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {
@@ -86,11 +87,8 @@ distributions {
             from("src/main/resources/config") {
                 into("config")
             }
-            from(project(":dns-discovery").tasks.named("jar")) {
-                into("plugins")
-            }
-            from(project(":agent-discovery").tasks.named("jar")) {
-                into("plugins")
+            from(project(":backend-channel-client").tasks.named("jar")) {
+                into("backend-client")
             }
         }
     }

@@ -14,6 +14,15 @@ public interface PluginContext {
 
     Events events();
 
+    /**
+     * Returns the service for messaging with independently connected backend instances.
+     *
+     * @throws UnsupportedOperationException when the hosting proxy does not provide backend channels
+     */
+    default BackendChannels backendChannels() {
+        throw new UnsupportedOperationException("Backend channels are not available");
+    }
+
     Logger logger();
 
     /** Immutable configuration assigned to this plugin by the proxy. */

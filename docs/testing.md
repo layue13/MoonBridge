@@ -5,13 +5,13 @@
 ```powershell
 .\gradlew.bat check
 .\gradlew.bat :proxy-core:installedDistSmokeTest
-.\smoke\installed-discovery.ps1
 .\smoke\container-network.ps1
+sh smoke/container-channel.sh
 ```
 
-`installed-discovery.ps1` 在 PowerShell 7 下使用已安装的发行包，以临时配置分别启动 DNS 和 Agent 插件；它验证两种发现方式下玩家完成离线登录和 PLAY 帧转发。Agent 注销时，已连接玩家继续收发 PLAY 帧，新玩家无法选到已注销的后端；原玩家离开后在线数归零。先运行 `:proxy-core:installDist` 或全量 `check` 来生成发行包。定向测试覆盖目录代次、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。当前 Prism 整合包的正版登录、连续转服和配对流量测量已完成，见[当前整合包验收](../benchmarks/results/2026-09-26-prism-pack.md)。下面各节的历史结果保留其当时的验证范围。
+定向测试覆盖控制通道认证与代次、目录租约、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。当前 Prism 整合包的正版登录、连续转服和配对流量测量已完成，见[当前整合包验收](../benchmarks/results/2026-09-26-prism-pack.md)。下面各节的历史结果保留其当时的验证范围。
 
-`smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置、DNS 插件和 Agent 插件的注册、登录及 PLAY 转发；Agent 模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。一次结果见 [容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)。它验证跨容器网络与 DNS，不能代替跨物理主机或目标 Forge 整合包实测。
+`smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
 
 PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Maven 发布凭据。`.gitea/workflows/ci.yml` 保留默认分支的构建发布入口；发布工作流所需的跨仓库可复用工作流权限和 Maven 凭据由 Gitea 仓库配置提供，不能用本地 `check` 的结果代替远端发布验收。
 
