@@ -68,6 +68,16 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 本地一次测量的环境、参数与原始输出见 `benchmarks/results/2026-09-25-local-relay.md`。
 加入实际 `KeepAliveBridge` 后的配对测量见 `benchmarks/results/2026-09-25-keepalive-bridge.md`；两份结果使用的 relay 事件循环安排不同，不能直接视为前后性能对比。
 
+## 真实 TCP 慢接收端背压回归
+
+`RawRelaySocketTest` 使用实际 loopback TCP 和 Netty NIO 通道，缩小 socket 发送缓冲与 Netty 写水位，让停止读取的接收方触发真实不可写状态。测试观察源读取停止、排队字节有界，恢复接收后逐字节校验双向数据，并覆盖拥塞中接收方断开后的通道与待发送写入清理。
+
+```powershell
+./gradlew.bat :proxy-core:test --tests '*RawRelaySocketTest'
+```
+
+这是有意限制缓冲的原始转发层回归，不经过登录、加密或 Forge 协议，不代表默认配置下的容量或目标整合包表现。现有 `RawRelayTest` 继续覆盖暂停、恢复、交接及引用计数的确定性边界。
+
 ## 合成会话基准
 
 `benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。`-Window` 设置每个客户端允许的在途请求数，默认 `1`（stop-and-wait）；大于 `1` 时客户端最多连续发送 Window 个帧，再按 TCP 顺序读取回声并逐条校验，每收到一条便补发一条。预热和计时阶段、直连和代理都使用相同的发送算法。测得的单条延迟从该请求写出前计时到其回声读完；延迟样本和在途时间戳都使用有界数组，受 `Connections`、`Messages` 和 Window 上限约束。出现错误回声或阶段超时时基准以失败退出。
