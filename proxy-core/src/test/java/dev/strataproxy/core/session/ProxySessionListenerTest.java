@@ -3,10 +3,9 @@ package dev.strataproxy.core.session;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.AccessEvent;
-import dev.strataproxy.api.event.ConnectionEvent;
-import dev.strataproxy.api.event.LoginEvent;
-import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.Event;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
+import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.core.event.EventDispatcher;
@@ -84,7 +83,7 @@ final class ProxySessionListenerTest {
         try (var host = new PluginHost(catalog, listener, Duration.ofSeconds(5))) {
             host.load(List.of(new Plugin() {
                 @Override public void onLoad(PluginContext context) {
-                    context.events().subscribe(ConnectionEvent.class, event -> {
+                    context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                         assertFalse(Thread.currentThread().getName().startsWith("strataproxy-session-io"));
                         called.complete(event.remoteAddress());
                         return decision;
@@ -112,15 +111,15 @@ final class ProxySessionListenerTest {
         var catalog = new InMemoryBackendCatalog();
         var connected = new CompletableFuture<Void>();
         var connectionDecision = new CompletableFuture<AccessDecision>();
-        var login = new CompletableFuture<LoginEvent>();
+        var login = new CompletableFuture<PlayerAdmissionEvent>();
         var loginDecision = new CompletableFuture<AccessDecision>();
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         try (var host = new PluginHost(catalog, listener, Duration.ofSeconds(5))) {
             host.load(List.of(new Plugin() {
                 @Override public void onLoad(PluginContext context) {
-                    context.events().subscribe(ConnectionEvent.class, event -> { connected.complete(null); return connectionDecision; });
-                    context.events().subscribe(LoginEvent.class, event -> { login.complete(event); return loginDecision; });
+                    context.events().subscribe(ConnectionAdmissionEvent.class, event -> { connected.complete(null); return connectionDecision; });
+                    context.events().subscribe(PlayerAdmissionEvent.class, event -> { login.complete(event); return loginDecision; });
                 }
             }));
             host.enable();
@@ -133,7 +132,7 @@ final class ProxySessionListenerTest {
                 sendLogin(client, "BannedUser");
                 assertFalse(login.isDone());
                 connectionDecision.complete(AccessDecision.allow());
-                LoginEvent request = login.get(5, TimeUnit.SECONDS);
+                PlayerAdmissionEvent request = login.get(5, TimeUnit.SECONDS);
                 assertEquals(client.getLocalSocketAddress(), request.remoteAddress());
                 assertFalse(request.authenticated());
                 assertEquals("BannedUser", request.player().username());
@@ -222,19 +221,20 @@ final class ProxySessionListenerTest {
     }
 
     private static EventDispatcher accessEvents(
-            java.util.function.Function<ConnectionEvent, java.util.concurrent.CompletionStage<AccessDecision>> connection,
-            java.util.function.Function<LoginEvent, java.util.concurrent.CompletionStage<AccessDecision>> login) {
+            java.util.function.Function<ConnectionAdmissionEvent, java.util.concurrent.CompletionStage<AccessDecision>> connection,
+            java.util.function.Function<PlayerAdmissionEvent, java.util.concurrent.CompletionStage<AccessDecision>> login) {
         return new EventDispatcher() {
             @Override public boolean hasSubscribers(Class<?> type) {
-                return type == ConnectionEvent.class && connection != null || type == LoginEvent.class && login != null;
+                return type == ConnectionAdmissionEvent.class && connection != null || type == PlayerAdmissionEvent.class && login != null;
             }
-            @Override public java.util.concurrent.CompletionStage<AccessDecision> check(AccessEvent event) {
-                return switch (event) {
-                    case ConnectionEvent connected -> connection.apply(connected);
-                    case LoginEvent loggingIn -> login.apply(loggingIn);
+            @Override @SuppressWarnings("unchecked")
+            public <R> java.util.concurrent.CompletionStage<R> dispatch(Event<R> event) {
+                return (java.util.concurrent.CompletionStage<R>) switch (event) {
+                    case ConnectionAdmissionEvent connected -> connection.apply(connected);
+                    case PlayerAdmissionEvent loggingIn -> login.apply(loggingIn);
+                    default -> throw new AssertionError("Unexpected notification");
                 };
             }
-            @Override public void publish(NotificationEvent event) { throw new AssertionError("Unexpected notification"); }
         };
     }
 
@@ -243,7 +243,7 @@ final class ProxySessionListenerTest {
         UUID uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc");
         var verification = new CompletableFuture<Optional<VerifiedProfile>>();
         var verificationStarted = new CountDownLatch(1);
-        var checked = new CompletableFuture<LoginEvent>();
+        var checked = new CompletableFuture<PlayerAdmissionEvent>();
         var decision = new CompletableFuture<AccessDecision>();
         var placementCalled = new AtomicBoolean();
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
@@ -274,7 +274,7 @@ final class ProxySessionListenerTest {
                 assertTrue(verificationStarted.await(5, TimeUnit.SECONDS));
                 assertFalse(checked.isDone());
                 verification.complete(Optional.of(new VerifiedProfile(uuid, "Alice", List.of())));
-                LoginEvent request = checked.get(5, TimeUnit.SECONDS);
+                PlayerAdmissionEvent request = checked.get(5, TimeUnit.SECONDS);
                 assertTrue(request.authenticated());
                 assertEquals(uuid, request.player().identity().playerId());
                 assertEquals("Alice", request.player().username());
@@ -385,16 +385,18 @@ final class ProxySessionListenerTest {
                             assertFalse(Thread.currentThread().getName().startsWith("strataproxy-session-io"));
                             notificationCount.incrementAndGet();
                             connected.complete(event);
+                            return CompletableFuture.completedFuture(null);
                         });
                         context.events().subscribe(PlayerDisconnectedEvent.class, event -> {
                             notificationCount.incrementAndGet();
                             disconnected.complete(event);
+                            return CompletableFuture.completedFuture(null);
                         });
-                        context.events().subscribe(ConnectionEvent.class, event -> {
+                        context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                             accessCalls.incrementAndGet();
                             return CompletableFuture.completedFuture(AccessDecision.allow());
                         });
-                        context.events().subscribe(LoginEvent.class, event -> {
+                        context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                             accessCalls.incrementAndGet();
                             return CompletableFuture.completedFuture(AccessDecision.allow());
                         });

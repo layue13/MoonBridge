@@ -2,9 +2,7 @@ package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.TransferStatus;
-import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.AccessEvent;
-import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.Event;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
 import dev.strataproxy.core.event.EventDispatcher;
@@ -496,15 +494,16 @@ final class SessionTransferTest {
             var oldHandle = register(catalog, "old", oldServer);
             var newHandle = register(catalog, "new", newServer);
             var listener = listener(catalog);
-            var notifications = new LinkedBlockingQueue<NotificationEvent>();
+            var notifications = new LinkedBlockingQueue<Event<?>>();
             listener.setEvents(new EventDispatcher() {
                 @Override public boolean hasSubscribers(Class<?> type) {
                     return type == ServerConnectedEvent.class || type == PlayerDisconnectedEvent.class;
                 }
-                @Override public CompletionStage<AccessDecision> check(AccessEvent event) {
-                    throw new AssertionError("Unexpected access event");
+                @Override public <R> CompletionStage<R> dispatch(Event<R> event) {
+                    assertTrue(event instanceof ServerConnectedEvent || event instanceof PlayerDisconnectedEvent);
+                    notifications.add(event);
+                    return CompletableFuture.completedFuture(null);
                 }
-                @Override public void publish(NotificationEvent event) { notifications.add(event); }
             }, Duration.ofSeconds(5));
             try {
                 InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()

@@ -1,7 +1,7 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.ConnectionEvent;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
 import dev.strataproxy.core.event.EventDispatcher;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -41,7 +41,7 @@ final class ConnectionGate extends ChannelInboundHandlerAdapter {
     @Override public void channelActive(ChannelHandlerContext ctx) {
         try {
             deadline = ctx.executor().schedule(this::deny, timeout.toNanos(), TimeUnit.NANOSECONDS);
-            request = Objects.requireNonNull(events.check(new ConnectionEvent((InetSocketAddress) ctx.channel().remoteAddress())),
+            request = Objects.requireNonNull(events.dispatch(new ConnectionAdmissionEvent((InetSocketAddress) ctx.channel().remoteAddress())),
                     "connection check stage").toCompletableFuture();
             request.whenComplete((decision, failure) -> {
                 try {

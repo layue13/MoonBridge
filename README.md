@@ -6,7 +6,7 @@
 
 - [设计文档索引](docs/README.md)
 - [架构与边界](docs/architecture.md)：会话、协议、线程模型、转服、后端目录。
-- [插件开发](docs/plugins.md)：生命周期、ServerView、选服、Command、连接/登录访问事件和会话通知。
+- [插件开发](docs/plugins.md)：生命周期、ServerView、选服、Command 和统一类型化事件 API。
 - [运行配置](docs/operations.md)与[发现插件](docs/discovery.md)。
 - [测试与性能验证](docs/testing.md)：构建、烟测、真实客户端记录和基准方法。
 

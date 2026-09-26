@@ -112,7 +112,7 @@ final class ProxyConfigurationTest {
             var plugins = new ProxyConfigurationLoader().load(config).plugins();
             assertEquals("extensions", plugins.directory());
             assertEquals(15, plugins.initialPlacementTimeoutSeconds());
-            assertEquals(5, plugins.accessTimeoutSeconds());
+            assertEquals(5, plugins.eventTimeoutSeconds());
             assertEquals("_minecraft._tcp.example.net",
                     plugins.enabled().get("dev.example.DnsPlugin").get("record"));
             assertThrows(UnsupportedOperationException.class,
@@ -141,13 +141,13 @@ final class ProxyConfigurationTest {
     }
 
     @Test
-    void readsAndBoundsAccessTimeout() throws Exception {
-        var config = Files.createTempFile("strataproxy-access-timeout", ".yml");
+    void readsAndBoundsEventTimeout() throws Exception {
+        var config = Files.createTempFile("strataproxy-event-timeout", ".yml");
         try {
             String prefix = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nplugins:\n"
-                    + "  directory: plugins\n  accessTimeoutSeconds: ";
+                    + "  directory: plugins\n  eventTimeoutSeconds: ";
             Files.writeString(config, prefix + "3\n");
-            assertEquals(3, new ProxyConfigurationLoader().load(config).plugins().accessTimeoutSeconds());
+            assertEquals(3, new ProxyConfigurationLoader().load(config).plugins().eventTimeoutSeconds());
             for (int invalid : new int[]{0, 31}) {
                 Files.writeString(config, prefix + invalid + "\n");
                 assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,

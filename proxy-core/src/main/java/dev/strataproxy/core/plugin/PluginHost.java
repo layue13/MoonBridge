@@ -1,11 +1,14 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.AccessEvent;
-import dev.strataproxy.api.event.AccessListener;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
+import dev.strataproxy.api.event.Event;
+import dev.strataproxy.api.event.EventListener;
 import dev.strataproxy.api.event.EventSubscription;
 import dev.strataproxy.api.event.Events;
-import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.PlayerAdmissionEvent;
+import dev.strataproxy.api.event.PlayerDisconnectedEvent;
+import dev.strataproxy.api.event.ServerConnectedEvent;
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.CommandHandler;
 import dev.strataproxy.api.CommandInvocation;
@@ -67,9 +70,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.jar.JarFile;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
@@ -79,7 +81,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final ThreadFactory TRANSFER_COMPLETION_THREADS = Thread.ofVirtual()
             .name("strataproxy-plugin-transfer-", 0).factory();
     private static final Executor TRANSFER_COMPLETIONS = task -> TRANSFER_COMPLETION_THREADS.newThread(task).start();
-
     private final BackendCatalog catalog;
     private final Players players;
     private final Duration placementTimeout;
@@ -88,25 +89,26 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final ThreadPoolExecutor commandWorkers;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor timer;
-    private final AccessChecks accessChecks;
-    private final NotificationDispatcher notifications = new NotificationDispatcher();
-    private final List<AccessRegistration<?>> accessRegistrations = new ArrayList<>();
-    private final List<NotificationRegistration<?>> notificationRegistrations = new ArrayList<>();
+    private final AsyncEventDispatcher admissionEvents;
+    private final AsyncEventDispatcher notificationEvents;
+    private final AsyncEventDispatcher.EventPolicy<AccessDecision> admissionPolicy;
+    private final AsyncEventDispatcher.EventPolicy<Void> notificationPolicy;
+    private final AtomicLong notificationDrops = new AtomicLong();
+    private final List<EventRegistration<?, ?>> eventRegistrations = new ArrayList<>();
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
     private volatile State state = State.LOADING;
+    private ScheduledFuture<?> notificationDropReporter;
     private InitialPlacementHandler placementHandler;
-    private volatile Map<Class<?>, List<AccessRegistration<?>>> accessListeners = Map.of();
-    private volatile Map<Class<?>, List<Function<AccessEvent, CompletionStage<AccessDecision>>>> accessHandlers = Map.of();
-    private volatile Map<Class<?>, List<NotificationRegistration<?>>> notificationListeners = Map.of();
+    private volatile Map<Class<?>, List<EventRegistration<?, ?>>> eventListeners = Map.of();
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
         this(catalog, players, placementTimeout, Duration.ofSeconds(5));
     }
 
-    public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout) {
-        this(catalog, players, placementTimeout, accessTimeout,
+    public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout) {
+        this(catalog, players, placementTimeout, eventTimeout,
                 Math.max(2, Runtime.getRuntime().availableProcessors()), 128, Duration.ofSeconds(10),
                 Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
     }
@@ -123,20 +125,20 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 shutdownTimeout, Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
     }
 
-    PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout,
+    PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout,
                int callbackThreads, int callbackQueueCapacity, int accessThreads, int accessQueueCapacity,
                int maxPendingAccess) {
-        this(catalog, players, placementTimeout, accessTimeout, callbackThreads, callbackQueueCapacity,
+        this(catalog, players, placementTimeout, eventTimeout, callbackThreads, callbackQueueCapacity,
                 Duration.ofSeconds(10), accessThreads, accessQueueCapacity, maxPendingAccess);
     }
 
-    private PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration accessTimeout,
+    private PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout,
                        int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout,
                        int accessThreads, int accessQueueCapacity, int maxPendingAccess) {
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.players = Objects.requireNonNull(players, "players");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
-        Objects.requireNonNull(accessTimeout, "accessTimeout");
+        Objects.requireNonNull(eventTimeout, "eventTimeout");
         this.shutdownTimeout = Objects.requireNonNull(shutdownTimeout, "shutdownTimeout");
         if (placementTimeout.isZero() || placementTimeout.isNegative()) {
             throw new IllegalArgumentException("placementTimeout must be positive");
@@ -155,8 +157,17 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 new ThreadPoolExecutor.AbortPolicy());
         this.timer = new ScheduledThreadPoolExecutor(1, namedThreads("strataproxy-plugin-timeout"));
         this.timer.setRemoveOnCancelPolicy(true);
-        this.accessChecks = new AccessChecks(accessTimeout, accessThreads, accessQueueCapacity, maxPendingAccess,
-                timer, namedThreads("strataproxy-plugin-access"));
+        this.admissionPolicy = new AsyncEventDispatcher.EventPolicy<>(AccessDecision::allow,
+                decision -> decision instanceof AccessDecision.Allowed || decision instanceof AccessDecision.Denied,
+                decision -> decision instanceof AccessDecision.Denied, false, (event, failure) -> { },
+                maxPendingAccess, false);
+        this.notificationPolicy = new AsyncEventDispatcher.EventPolicy<>(() -> null, ignored -> true,
+                ignored -> false, true, (event, failure) -> LOGGER.warn("Plugin event listener failed for {}",
+                event.getClass().getName(), failure), 129, true);
+        this.admissionEvents = new AsyncEventDispatcher(eventTimeout, accessThreads, accessQueueCapacity,
+                timer, namedThreads("strataproxy-plugin-admission"));
+        this.notificationEvents = new AsyncEventDispatcher(eventTimeout, 1, 128,
+                timer, namedThreads("strataproxy-plugin-notification"));
     }
 
     /** Loads every JAR in the directory in filename order through Java's service provider mechanism. */
@@ -276,6 +287,11 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
             freezeEventRegistrations();
             state = State.ENABLED;
+            if (eventListeners.containsKey(ServerConnectedEvent.class)
+                    || eventListeners.containsKey(PlayerDisconnectedEvent.class)) {
+                notificationDropReporter = timer.scheduleAtFixedRate(this::logNotificationDrops,
+                        1, 1, TimeUnit.MINUTES);
+            }
         } catch (RuntimeException | Error failure) {
             close();
             throw failure;
@@ -285,35 +301,38 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     @Override
     public boolean hasSubscribers(Class<?> eventType) {
         Objects.requireNonNull(eventType, "eventType");
-        if (AccessEvent.class.isAssignableFrom(eventType)) {
-            for (AccessRegistration<?> listener : accessListeners.getOrDefault(eventType, List.of())) {
-                if (listener.isActive()) return true;
-            }
-            return false;
-        }
-        for (NotificationRegistration<?> listener : notificationListeners.getOrDefault(eventType, List.of())) {
+        for (EventRegistration<?, ?> listener : eventListeners.getOrDefault(eventType, List.of())) {
             if (listener.isActive()) return true;
         }
         return false;
     }
 
     @Override
-    public CompletionStage<AccessDecision> check(AccessEvent event) {
+    public <R> CompletionStage<R> dispatch(Event<R> event) {
         Objects.requireNonNull(event, "event");
         if (state != State.ENABLED) {
             return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
         }
-        List<Function<AccessEvent, CompletionStage<AccessDecision>>> listeners = accessHandlers
-                .getOrDefault(event.getClass(), List.of());
-        return accessChecks.check(listeners, event);
+        List<EventRegistration<?, ?>> registrations = eventListeners.getOrDefault(event.getClass(), List.of());
+        if (event instanceof ConnectionAdmissionEvent || event instanceof PlayerAdmissionEvent) {
+            return dispatchWithPolicy(admissionEvents, event, registrations, admissionPolicy);
+        }
+        if (event instanceof ServerConnectedEvent || event instanceof PlayerDisconnectedEvent) {
+            CompletionStage<R> delivery = dispatchWithPolicy(notificationEvents, event, registrations, notificationPolicy);
+            delivery.whenComplete((ignored, failure) -> {
+                if (failure != null) notificationDrops.incrementAndGet();
+            });
+            return delivery;
+        }
+        return CompletableFuture.failedFuture(new IllegalArgumentException(
+                "Unsupported event type: " + event.getClass().getName()));
     }
 
-    @Override
-    public void publish(NotificationEvent event) {
-        Objects.requireNonNull(event, "event");
-        if (state != State.ENABLED) return;
-        List<NotificationRegistration<?>> listeners = notificationListeners.getOrDefault(event.getClass(), List.of());
-        if (!listeners.isEmpty()) notifications.publish(event, listeners);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private <R> CompletionStage<R> dispatchWithPolicy(AsyncEventDispatcher dispatcher, Event<R> event,
+                                                       List<EventRegistration<?, ?>> registrations,
+                                                       AsyncEventDispatcher.EventPolicy<?> policy) {
+        return dispatcher.dispatch(event, (List) registrations, (AsyncEventDispatcher.EventPolicy) policy);
     }
 
     /** Returns empty when no plugin handles placement; plugin code always runs off the caller's event loop. */
@@ -445,13 +464,15 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return;
         }
         state = State.CLOSED;
+        if (notificationDropReporter != null) notificationDropReporter.cancel(false);
+        logNotificationDrops();
         for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
         for (PendingPlacement request : pendingPlacements) {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
         }
-        accessChecks.close();
-        notifications.close();
+        admissionEvents.close();
+        notificationEvents.close();
         callbacks.shutdownNow();
         commandWorkers.shutdownNow();
         timer.shutdownNow();
@@ -472,11 +493,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
         classLoaders.clear();
         placementHandler = null;
-        accessListeners = Map.of();
-        accessHandlers = Map.of();
-        notificationListeners = Map.of();
-        accessRegistrations.clear();
-        notificationRegistrations.clear();
+        eventListeners = Map.of();
+        eventRegistrations.clear();
     }
 
     private void disableWithinDeadline(LoadedPlugin loaded, long deadline) {
@@ -527,63 +545,28 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     }
 
     private synchronized void freezeEventRegistrations() {
-        var access = new java.util.LinkedHashMap<Class<?>, List<AccessRegistration<?>>>();
-        var handlers = new java.util.LinkedHashMap<Class<?>, List<Function<AccessEvent, CompletionStage<AccessDecision>>>>();
-        for (AccessRegistration<?> registration : accessRegistrations) {
-            access.computeIfAbsent(registration.eventType(), ignored -> new ArrayList<>())
-                    .add(registration);
-            handlers.computeIfAbsent(registration.eventType(), ignored -> new ArrayList<>())
-                    .add(registration.handler());
+        var frozen = new java.util.LinkedHashMap<Class<?>, List<EventRegistration<?, ?>>>();
+        for (EventRegistration<?, ?> registration : eventRegistrations) {
+            frozen.computeIfAbsent(registration.eventType(), ignored -> new ArrayList<>()).add(registration);
         }
-        var notificationsByType = new java.util.LinkedHashMap<Class<?>, List<NotificationRegistration<?>>>();
-        for (NotificationRegistration<?> registration : notificationRegistrations) {
-            notificationsByType.computeIfAbsent(registration.eventType(), ignored -> new ArrayList<>())
-                    .add(registration);
-        }
-        access.replaceAll((ignored, registrations) -> List.copyOf(registrations));
-        handlers.replaceAll((ignored, registrations) -> List.copyOf(registrations));
-        notificationsByType.replaceAll((ignored, registrations) -> List.copyOf(registrations));
-        accessListeners = Map.copyOf(access);
-        accessHandlers = Map.copyOf(handlers);
-        notificationListeners = Map.copyOf(notificationsByType);
+        frozen.replaceAll((ignored, registrations) -> List.copyOf(registrations));
+        eventListeners = Map.copyOf(frozen);
     }
 
-    private <E extends AccessEvent> EventSubscription registerAccess(
-            PluginContextImpl context, Class<E> eventType, AccessListener<? super E> listener) {
+    private <R, E extends Event<R>> EventSubscription registerEvent(
+            PluginContextImpl context, Class<E> eventType, EventListener<? super E, R> listener) {
         Objects.requireNonNull(eventType, "eventType");
         Objects.requireNonNull(listener, "listener");
-        if (eventType != dev.strataproxy.api.event.ConnectionEvent.class
-                && eventType != dev.strataproxy.api.event.LoginEvent.class) {
-            throw new IllegalArgumentException("Unsupported access event type: " + eventType.getName());
-        }
+        if (eventType != ConnectionAdmissionEvent.class && eventType != PlayerAdmissionEvent.class
+                && eventType != ServerConnectedEvent.class && eventType != PlayerDisconnectedEvent.class)
+            throw new IllegalArgumentException("Unsupported event type: " + eventType.getName());
         requireEventRegistrationState();
         synchronized (this) {
             requireEventRegistrationState();
             synchronized (context) {
                 context.requireEventRegistrationOpen();
-                AccessRegistration<E> registration = new AccessRegistration<>(context, eventType, listener);
-                accessRegistrations.add(registration);
-                context.eventSubscriptions.add(registration);
-                return registration;
-            }
-        }
-    }
-
-    private <E extends NotificationEvent> EventSubscription registerNotification(
-            PluginContextImpl context, Class<E> eventType, Consumer<? super E> listener) {
-        Objects.requireNonNull(eventType, "eventType");
-        Objects.requireNonNull(listener, "listener");
-        if (eventType != dev.strataproxy.api.event.PlayerDisconnectedEvent.class
-                && eventType != dev.strataproxy.api.event.ServerConnectedEvent.class) {
-            throw new IllegalArgumentException("Unsupported notification event type: " + eventType.getName());
-        }
-        requireEventRegistrationState();
-        synchronized (this) {
-            requireEventRegistrationState();
-            synchronized (context) {
-                context.requireEventRegistrationOpen();
-                NotificationRegistration<E> registration = new NotificationRegistration<>(context, eventType, listener);
-                notificationRegistrations.add(registration);
+                EventRegistration<E, R> registration = new EventRegistration<>(context, eventType, listener);
+                eventRegistrations.add(registration);
                 context.eventSubscriptions.add(registration);
                 return registration;
             }
@@ -593,6 +576,13 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private void requireEventRegistrationState() {
         if (state != State.LOADING) {
             throw new IllegalStateException("Event subscriptions are only allowed during onLoad or onEnable");
+        }
+    }
+
+    private void logNotificationDrops() {
+        long count = notificationDrops.getAndSet(0);
+        if (count != 0) {
+            LOGGER.warn("Dropped {} plugin notification event(s) after timeout, failure, or queue overflow", count);
         }
     }
 
@@ -626,94 +616,27 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
     private record RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler) { }
 
-    private interface EventSubscriptionImpl extends EventSubscription {
-        boolean isActive();
-        void revoke();
-    }
-
-    private final class AccessRegistration<E extends AccessEvent> implements EventSubscriptionImpl {
+    private final class EventRegistration<E extends Event<R>, R>
+            implements EventSubscription, AsyncEventDispatcher.EventHandler<R> {
         private final PluginContextImpl context;
         private final Class<E> eventType;
-        private final AccessListener<? super E> listener;
+        private final EventListener<? super E, R> listener;
         private final AtomicBoolean active = new AtomicBoolean(true);
 
-        private AccessRegistration(PluginContextImpl context, Class<E> eventType,
-                                   AccessListener<? super E> listener) {
+        private EventRegistration(PluginContextImpl context, Class<E> eventType,
+                                  EventListener<? super E, R> listener) {
             this.context = context;
             this.eventType = eventType;
             this.listener = listener;
         }
 
         private Class<E> eventType() { return eventType; }
-        private Function<AccessEvent, CompletionStage<AccessDecision>> handler() {
-            return event -> {
-                if (!isActive()) return CompletableFuture.completedFuture(AccessDecision.allow());
-                return listener.onEvent(eventType.cast(event));
-            };
+        @Override public boolean active() { return isActive(); }
+        @Override public CompletionStage<R> handle(Event<?> event) {
+            return listener.onEvent(eventType.cast(event));
         }
-        @Override public boolean isActive() { return active.get() && context.active; }
+        private boolean isActive() { return active.get() && context.active; }
         @Override public void close() { active.set(false); }
-        @Override public void revoke() { close(); }
-    }
-
-    private final class NotificationRegistration<E extends NotificationEvent> implements EventSubscriptionImpl {
-        private final PluginContextImpl context;
-        private final Class<E> eventType;
-        private final Consumer<? super E> listener;
-        private final AtomicBoolean active = new AtomicBoolean(true);
-
-        private NotificationRegistration(PluginContextImpl context, Class<E> eventType,
-                                         Consumer<? super E> listener) {
-            this.context = context;
-            this.eventType = eventType;
-            this.listener = listener;
-        }
-
-        private Class<E> eventType() { return eventType; }
-        private void invoke(NotificationEvent event) { listener.accept(eventType.cast(event)); }
-        @Override public boolean isActive() { return active.get() && context.active; }
-        @Override public void close() { active.set(false); }
-        @Override public void revoke() { close(); }
-    }
-
-    /** One daemon worker preserves notification order without running plugin code on session threads. */
-    private static final class NotificationDispatcher implements AutoCloseable {
-        private static final int QUEUE_CAPACITY = 128;
-        private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(QUEUE_CAPACITY), namedThreads("strataproxy-plugin-event"),
-                new ThreadPoolExecutor.AbortPolicy());
-        private final AtomicBoolean closed = new AtomicBoolean();
-        private final AtomicLong dropped = new AtomicLong();
-
-        private void publish(NotificationEvent event, List<NotificationRegistration<?>> listeners) {
-            if (closed.get()) return;
-            try {
-                worker.execute(() -> {
-                    for (NotificationRegistration<?> listener : listeners) {
-                        if (closed.get()) break;
-                        if (!listener.isActive()) continue;
-                        try {
-                            listener.invoke(event);
-                        } catch (Throwable failure) {
-                            LOGGER.warn("Plugin notification listener failed for {}", event.getClass().getName(), failure);
-                        }
-                    }
-                    logDropped();
-                });
-            } catch (RejectedExecutionException overloaded) {
-                if (!closed.get()) dropped.incrementAndGet();
-            }
-        }
-
-        @Override public void close() {
-            if (closed.compareAndSet(false, true)) worker.shutdownNow();
-            logDropped();
-        }
-
-        private void logDropped() {
-            long count = dropped.getAndSet(0);
-            if (count != 0) LOGGER.warn("Dropped {} plugin notification batch(es) because the event queue was full", count);
-        }
     }
 
     private static final class LoadedPlugin {
@@ -737,7 +660,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private final Events pluginEvents;
         private final Logger logger;
         private final Map<String, String> settings;
-        private final Set<EventSubscriptionImpl> eventSubscriptions = new HashSet<>();
+        private final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
         private volatile boolean active = true;
         private boolean eventRegistrationOpen;
 
@@ -768,7 +691,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private synchronized void revokeEventSubscriptions() {
             eventRegistrationOpen = false;
-            eventSubscriptions.forEach(EventSubscriptionImpl::revoke);
+            eventSubscriptions.forEach(EventRegistration::close);
             eventSubscriptions.clear();
         }
 
@@ -796,14 +719,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private PluginEvents(PluginContextImpl context) { this.context = context; }
 
-        @Override public <E extends NotificationEvent> EventSubscription subscribe(
-                Class<E> eventType, Consumer<? super E> listener) {
-            return registerNotification(context, eventType, listener);
-        }
-
-        @Override public <E extends AccessEvent> EventSubscription subscribe(
-                Class<E> eventType, AccessListener<? super E> listener) {
-            return registerAccess(context, eventType, listener);
+        @Override public <R, E extends Event<R>> EventSubscription subscribe(
+                Class<E> eventType, EventListener<E, R> listener) {
+            return registerEvent(context, eventType, listener);
         }
     }
 

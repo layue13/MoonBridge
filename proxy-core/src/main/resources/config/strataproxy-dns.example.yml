@@ -7,7 +7,7 @@ backends: []
 plugins:
   directory: "../plugins"
   initialPlacementTimeoutSeconds: 15
-  accessTimeoutSeconds: 5
+  eventTimeoutSeconds: 5
   enabled:
     dev.strataproxy.plugins.dns.DnsDiscoveryPlugin:
       host: "backends.example.net"

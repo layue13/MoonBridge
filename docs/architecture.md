@@ -14,14 +14,14 @@
 
 `ProxySessionListener` 负责接入限额、监听器生命周期和 UUID 到当前会话的索引；每个 `Session` 持有该连接的前端/后端通道和协议状态。玩家身份由 UUID 与连接代次组成。插件查询使用不可变 `PlayerView`；异步工作返回时会核对当前连接身份，避免旧连接结果作用于重连后的同 UUID 玩家。在线列表来自活动会话，不另存一份可竞争的玩家状态。
 
-连接首先派发 `ConnectionEvent`（如有订阅），再解析 Handshake/Login Start。在线模式完成加密与会话验证，离线模式生成离线身份；随后派发 `LoginEvent`（如有订阅）、执行异步初始选服，再连接后端并写入 Login Start。后端 Login Success 校验通过后发布在线玩家视图，并派发 `ServerConnectedEvent`，再向客户端提交登录成功并进入双向转发。此时初次 PLAY/Forge 握手可能尚未完成；转服还要等待该握手就绪。身份冲突、协议错误、登录阶段失败和断线会关闭本次连接并释放索引与资源。登录失败原因可以编码成客户端断开消息；网络关闭或帧处理错误则清理连接。曾发布的玩家关闭时恰好派发一次 `PlayerDisconnectedEvent`。
+连接首先派发 `ConnectionAdmissionEvent`（如有订阅），再解析 Handshake/Login Start。在线模式完成加密与 `ONLINE_BUNGEE` 会话验证，离线模式生成离线身份；随后派发 `PlayerAdmissionEvent`（如有订阅）、执行异步初始选服，再连接后端并写入 Login Start。后端 Login Success 校验通过后发布在线玩家视图，并派发 `ServerConnectedEvent`，再向客户端提交登录成功并进入双向转发。此时初次 PLAY/Forge 握手可能尚未完成；转服还要等待该握手就绪。身份冲突、协议错误、登录阶段失败和断线会关闭本次连接并释放索引与资源。登录失败原因可以编码成客户端断开消息；网络关闭或帧处理错误则清理连接。曾发布的玩家关闭时恰好派发一次 `PlayerDisconnectedEvent`。
 
 ```mermaid
 flowchart LR
-    A[TCP 建连] --> B{ConnectionEvent 决策}
+    A[TCP 建连] --> B{ConnectionAdmissionEvent 决策}
     B -->|允许| C[协议与身份验证]
     B -->|拒绝或失败| X[关闭连接]
-    C --> D{LoginEvent 决策}
+    C --> D{PlayerAdmissionEvent 决策}
     D -->|允许| E[初始选服]
     D -->|拒绝或失败| Y[登录断开消息]
     E --> F[后端登录]
@@ -49,9 +49,9 @@ flowchart LR
 
 日志统一通过 SLF4J 输出，发行包使用 Logback。访问策略不依赖额外的核心负载观测或健康状态模型。
 
-## 登录访问策略扩展
+## 事件与玩家准入
 
-玩家名/UUID 和来源 IP 的允许/拒绝判断及其封禁数据库属于 Ban 插件策略，不应放进后端目录或发现插件。插件通过 `PluginContext.events()` 订阅 `ConnectionEvent` 与 `LoginEvent`，返回 `CompletionStage<AccessDecision>`。检查按注册顺序执行，首个拒绝即停止；异常、空结果、超时和队列过载均按拒绝处理。访问引擎有界（队列 128、最多 1024 个未决请求，默认期限 5 秒，范围 1–30 秒）；没有订阅者时跳过派发。检查只发生在连接接入和登录阶段，不进入 PLAY 包热路径。`ServerConnectedEvent` 与 `PlayerDisconnectedEvent` 是单 worker 有界 FIFO 的尽力通知，会话不等待，过载可丢弃。订阅只能在 `onLoad`/`onEnable` 注册，监听器启动前冻结；插件停用或失败时自动清理。API 示例与配置细节见[插件接入说明](plugins.md)。
+玩家名/UUID 和来源 IP 的允许/拒绝判断及其封禁数据库属于 Ban 插件策略，不应放进后端目录或发现插件。连接准入事件在 TCP 建立后、协议解析前触发；玩家准入事件在身份建立后、后端登录前触发。`ONLINE_BUNGEE` 会话验证仍由核心执行，玩家准入事件只在验证之后触发；离线模式同样触发该事件，并以 `authenticated=false` 标记未认证身份。两种决策事件和 `ServerConnectedEvent`、`PlayerDisconnectedEvent` 使用同一个 `Event<R>`、`EventListener<E,R>` 与 `Events.subscribe` 机制。准入链按注册顺序运行，首个拒绝即停止；异常、空结果、超时和队列过载均失败关闭。准入队列有界（128，最多 1024 个未决请求），单事件链期限默认 5 秒、范围 1–30 秒。生命周期通知在同一个统一派发实现中采用异步 FIFO 策略（128 项加一个活动事件）；会话不等待，过载尽力丢弃并聚合记录。订阅只能在 `onLoad`/`onEnable` 注册，监听器启动前冻结；插件停用或失败时自动清理。检查不进入 PLAY 包热路径；目前没有基准证明性能收益或无开销。API 示例与配置细节见[插件接入说明](plugins.md)。
 
 ## 相关源码
 

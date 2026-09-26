@@ -10,7 +10,6 @@ import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 class EventsApiTest {
@@ -20,9 +19,9 @@ class EventsApiTest {
 
     @Test
     void eventRecordsRequireTheirNonNullValues() {
-        assertThrows(NullPointerException.class, () -> new ConnectionEvent(null));
-        assertThrows(NullPointerException.class, () -> new LoginEvent(null, ADDRESS, true));
-        assertThrows(NullPointerException.class, () -> new LoginEvent(PLAYER, null, true));
+        assertThrows(NullPointerException.class, () -> new ConnectionAdmissionEvent(null));
+        assertThrows(NullPointerException.class, () -> new PlayerAdmissionEvent(null, ADDRESS, true));
+        assertThrows(NullPointerException.class, () -> new PlayerAdmissionEvent(PLAYER, null, true));
         assertThrows(NullPointerException.class, () -> new ServerConnectedEvent(null, Optional.empty()));
         assertThrows(NullPointerException.class, () -> new ServerConnectedEvent(PLAYER, null));
         assertThrows(IllegalArgumentException.class, () -> new ServerConnectedEvent(
@@ -33,27 +32,24 @@ class EventsApiTest {
     }
 
     @Test
-    void typedSubscriptionOverloadsCompileAndRemainDistinct() {
+    void genericSubscriptionInfersAdmissionAndNotificationResultTypes() {
         Events events = new Events() {
             @Override
-            public <E extends NotificationEvent> EventSubscription subscribe(
-                    Class<E> eventType, Consumer<? super E> listener) {
-                return () -> { };
-            }
-
-            @Override
-            public <E extends AccessEvent> EventSubscription subscribe(
-                    Class<E> eventType, AccessListener<? super E> listener) {
+            public <R, E extends Event<R>> EventSubscription subscribe(
+                    Class<E> eventType, EventListener<E, R> listener) {
                 return () -> { };
             }
         };
 
-        EventSubscription access = events.subscribe(ConnectionEvent.class,
+        EventSubscription admission = events.subscribe(ConnectionAdmissionEvent.class,
                 event -> CompletableFuture.completedFuture(AccessDecision.allow()));
-        EventSubscription notification = events.subscribe(ServerConnectedEvent.class,
-                event -> assertEquals("TestPlayer", event.player().username()));
+        EventSubscription notification = events.subscribe(PlayerDisconnectedEvent.class,
+                event -> {
+                    assertEquals("TestPlayer", event.player().username());
+                    return CompletableFuture.completedFuture(null);
+                });
 
-        access.close();
+        admission.close();
         notification.close();
     }
 

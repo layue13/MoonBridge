@@ -2,13 +2,14 @@ package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.ConnectionEvent;
-import dev.strataproxy.api.event.AccessEvent;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
+import dev.strataproxy.api.event.Event;
 import dev.strataproxy.api.event.EventSubscription;
-import dev.strataproxy.api.event.LoginEvent;
+import dev.strataproxy.api.event.Events;
+import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
-import dev.strataproxy.api.event.NotificationEvent;
+
 import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
@@ -69,12 +70,12 @@ class PluginHostTest {
         var worker = new java.util.concurrent.atomic.AtomicReference<Thread>();
         var first = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> {
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                     calls.add("first-connection");
                     worker.set(Thread.currentThread());
                     return CompletableFuture.completedFuture(AccessDecision.allow());
                 });
-                context.events().subscribe(LoginEvent.class, event -> {
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     calls.add("first-login:" + event.authenticated());
                     return CompletableFuture.completedFuture(AccessDecision.allow());
                 });
@@ -82,11 +83,11 @@ class PluginHostTest {
         };
         var second = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> {
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                     calls.add("second-connection");
                     return CompletableFuture.completedFuture(AccessDecision.deny("IP blocked"));
                 });
-                context.events().subscribe(LoginEvent.class, event -> {
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     calls.add("second-login");
                     return CompletableFuture.completedFuture(AccessDecision.deny("Player blocked"));
                 });
@@ -94,11 +95,11 @@ class PluginHostTest {
         };
         var third = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> {
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                     calls.add("third-connection");
                     return CompletableFuture.completedFuture(AccessDecision.allow());
                 });
-                context.events().subscribe(LoginEvent.class, event -> {
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     calls.add("third-login");
                     return CompletableFuture.completedFuture(AccessDecision.allow());
                 });
@@ -108,13 +109,13 @@ class PluginHostTest {
                 Duration.ofSeconds(1))) {
             host.load(List.of(first, second, third));
             host.enable();
-            assertTrue(host.hasSubscribers(ConnectionEvent.class));
-            assertTrue(host.hasSubscribers(LoginEvent.class));
-            AccessDecision connection = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 25565)))
+            assertTrue(host.hasSubscribers(ConnectionAdmissionEvent.class));
+            assertTrue(host.hasSubscribers(PlayerAdmissionEvent.class));
+            AccessDecision connection = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 25565)))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(AccessDecision.deny("IP blocked"), connection);
             assertNotEquals(Thread.currentThread(), worker.get());
-            AccessDecision login = host.check(new LoginEvent(PLAYER,
+            AccessDecision login = host.dispatch(new PlayerAdmissionEvent(PLAYER,
                             new InetSocketAddress("127.0.0.1", 25565), false))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(AccessDecision.deny("Player blocked"), login);
@@ -129,10 +130,10 @@ class PluginHostTest {
         try {
             hostWithoutChecks.load(List.of());
             hostWithoutChecks.enable();
-            assertFalse(hostWithoutChecks.hasSubscribers(ConnectionEvent.class));
-            assertFalse(hostWithoutChecks.hasSubscribers(LoginEvent.class));
+            assertFalse(hostWithoutChecks.hasSubscribers(ConnectionAdmissionEvent.class));
+            assertFalse(hostWithoutChecks.hasSubscribers(PlayerAdmissionEvent.class));
             assertEquals(AccessDecision.allow(), hostWithoutChecks
-                    .check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 25565)))
+                    .dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 25565)))
                     .toCompletableFuture().get(1, TimeUnit.SECONDS));
         } finally {
             hostWithoutChecks.close();
@@ -141,18 +142,17 @@ class PluginHostTest {
         var pending = new CompletableFuture<AccessDecision>();
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(LoginEvent.class, event -> pending);
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> pending);
             }
         };
         try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
                 Duration.ofMillis(40))) {
             host.load(List.of(plugin));
             host.enable();
-            var result = host.check(new LoginEvent(PLAYER,
+            var result = host.dispatch(new PlayerAdmissionEvent(PLAYER,
                     new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture();
             assertThrows(CompletionException.class, result::join);
-            assertThrows(java.util.concurrent.CancellationException.class,
-                    () -> pending.get(5, TimeUnit.SECONDS));
+            awaitCondition(pending::isCancelled);
         }
     }
 
@@ -160,17 +160,17 @@ class PluginHostTest {
     void accessCheckExceptionsAndNullDecisionsFailClosed() {
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> CompletableFuture.failedFuture(
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> CompletableFuture.failedFuture(
                         new IllegalStateException("ban store unavailable")));
-                context.events().subscribe(LoginEvent.class, event -> CompletableFuture.completedFuture(null));
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> CompletableFuture.completedFuture(null));
             }
         };
         try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
             host.load(List.of(plugin));
             host.enable();
-            assertThrows(CompletionException.class, () -> host.check(
-                    new ConnectionEvent(new InetSocketAddress("127.0.0.1", 25565))).toCompletableFuture().join());
-            assertThrows(CompletionException.class, () -> host.check(new LoginEvent(PLAYER,
+            assertThrows(CompletionException.class, () -> host.dispatch(
+                    new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 25565))).toCompletableFuture().join());
+            assertThrows(CompletionException.class, () -> host.dispatch(new PlayerAdmissionEvent(PLAYER,
                     new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture().join());
         }
     }
@@ -181,7 +181,7 @@ class PluginHostTest {
         var pending = new CompletableFuture<AccessDecision>();
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(LoginEvent.class, event -> {
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     invoked.countDown();
                     return pending;
                 });
@@ -190,11 +190,11 @@ class PluginHostTest {
         var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
         host.load(List.of(plugin));
         host.enable();
-        var result = host.check(new LoginEvent(PLAYER,
+        var result = host.dispatch(new PlayerAdmissionEvent(PLAYER,
                 new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture();
         assertTrue(invoked.await(5, TimeUnit.SECONDS));
         host.close();
-        assertTrue(pending.isCancelled());
+        awaitCondition(pending::isCancelled);
         assertThrows(CompletionException.class, result::join);
     }
 
@@ -204,7 +204,7 @@ class PluginHostTest {
         var release = new CountDownLatch(1);
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> {
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                     entered.countDown();
                     try {
                         if (!release.await(5, TimeUnit.SECONDS)) {
@@ -223,19 +223,19 @@ class PluginHostTest {
         host.load(List.of(plugin));
         host.enable();
         try {
-            var first = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 25565))).toCompletableFuture();
+            var first = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 25565))).toCompletableFuture();
             assertTrue(entered.await(5, TimeUnit.SECONDS));
-            var second = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.2", 25565))).toCompletableFuture();
-            var overloaded = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.3", 25565))).toCompletableFuture();
+            var second = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.2", 25565))).toCompletableFuture();
+            var overloaded = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.3", 25565))).toCompletableFuture();
             assertThrows(CompletionException.class, overloaded::join);
             assertTrue(first.cancel(false));
             assertTrue(second.cancel(false), "queued request can be cancelled before plugin invocation");
 
-            var waiting = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.4", 25565))).toCompletableFuture();
+            var waiting = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.4", 25565))).toCompletableFuture();
             host.close();
             assertThrows(CompletionException.class, waiting::join);
-            assertThrows(CompletionException.class, () -> host.check(
-                    new ConnectionEvent(new InetSocketAddress("127.0.0.5", 25565))).toCompletableFuture().join());
+            assertThrows(CompletionException.class, () -> host.dispatch(
+                    new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.5", 25565))).toCompletableFuture().join());
         } finally {
             release.countDown();
             host.close();
@@ -249,7 +249,7 @@ class PluginHostTest {
                 2, new CompletableFuture<AccessDecision>(), 3, new CompletableFuture<AccessDecision>());
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(ConnectionEvent.class, event -> {
+                context.events().subscribe(ConnectionAdmissionEvent.class, event -> {
                     invoked.countDown();
                     return stages.get(event.remoteAddress().getPort());
                 });
@@ -259,15 +259,15 @@ class PluginHostTest {
                 Duration.ofSeconds(5), 1, 8, 1, 8, 2)) {
             host.load(List.of(plugin));
             host.enable();
-            var first = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 1))).toCompletableFuture();
-            var second = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 2))).toCompletableFuture();
+            var first = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 1))).toCompletableFuture();
+            var second = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 2))).toCompletableFuture();
             assertTrue(invoked.await(5, TimeUnit.SECONDS));
-            var overloaded = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 3))).toCompletableFuture();
+            var overloaded = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 3))).toCompletableFuture();
             assertInstanceOf(PluginOverloadedException.class,
                     assertThrows(CompletionException.class, overloaded::join).getCause());
             first.cancel(false);
-            assertTrue(stages.get(1).isCancelled());
-            var replacement = host.check(new ConnectionEvent(new InetSocketAddress("127.0.0.1", 3))).toCompletableFuture();
+            awaitCondition(stages.get(1)::isCancelled);
+            var replacement = host.dispatch(new ConnectionAdmissionEvent(new InetSocketAddress("127.0.0.1", 3))).toCompletableFuture();
             stages.get(3).complete(AccessDecision.allow());
             assertEquals(AccessDecision.allow(), replacement.get(5, TimeUnit.SECONDS));
             stages.get(2).complete(AccessDecision.allow());
@@ -281,32 +281,33 @@ class PluginHostTest {
         Plugin plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) { captured.set(context); }
             @Override public void onEnable() {
-                captured.get().events().subscribe(ConnectionEvent.class,
+                captured.get().events().subscribe(ConnectionAdmissionEvent.class,
                         event -> CompletableFuture.completedFuture(AccessDecision.allow()));
             }
         };
         var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
         host.load(List.of(plugin));
         host.enable();
-        assertTrue(host.hasSubscribers(ConnectionEvent.class));
+        assertTrue(host.hasSubscribers(ConnectionAdmissionEvent.class));
         assertThrows(IllegalStateException.class, () -> captured.get().events().subscribe(
-                ConnectionEvent.class, event -> CompletableFuture.completedFuture(AccessDecision.allow())));
+                ConnectionAdmissionEvent.class, event -> CompletableFuture.completedFuture(AccessDecision.allow())));
         host.close();
-        assertFalse(host.hasSubscribers(ConnectionEvent.class));
+        assertFalse(host.hasSubscribers(ConnectionAdmissionEvent.class));
     }
 
     @Test
-    void abstractEventFamiliesAreRejectedAsSubscriptionTypes() {
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void unsupportedEventTypesAreRejectedAsSubscriptionTypes() {
         var captured = new java.util.concurrent.atomic.AtomicReference<PluginContext>();
         Plugin plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) { captured.set(context); }
         };
         try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
             host.load(List.of(plugin));
-            assertThrows(IllegalArgumentException.class, () -> captured.get().events().subscribe(
-                    AccessEvent.class, event -> CompletableFuture.completedFuture(AccessDecision.allow())));
-            assertThrows(IllegalArgumentException.class, () -> captured.get().events().subscribe(
-                    NotificationEvent.class, event -> { }));
+            Events events = captured.get().events();
+            Class<Event<Void>> rootType = (Class) Event.class;
+            assertThrows(IllegalArgumentException.class, () -> events.subscribe(
+                    rootType, event -> CompletableFuture.completedFuture(null)));
         }
     }
 
@@ -318,11 +319,11 @@ class PluginHostTest {
         var secondSubscription = new java.util.concurrent.atomic.AtomicReference<EventSubscription>();
         Plugin plugin = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                context.events().subscribe(LoginEvent.class, event -> {
+                context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     firstInvoked.countDown();
                     return pending;
                 });
-                secondSubscription.set(context.events().subscribe(LoginEvent.class, event -> {
+                secondSubscription.set(context.events().subscribe(PlayerAdmissionEvent.class, event -> {
                     secondInvoked.set(true);
                     return CompletableFuture.completedFuture(AccessDecision.allow());
                 }));
@@ -331,7 +332,7 @@ class PluginHostTest {
         try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
             host.load(List.of(plugin));
             host.enable();
-            var result = host.check(new LoginEvent(PLAYER,
+            var result = host.dispatch(new PlayerAdmissionEvent(PLAYER,
                     new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture();
             assertTrue(firstInvoked.await(5, TimeUnit.SECONDS));
             secondSubscription.get().close();
@@ -358,9 +359,12 @@ class PluginHostTest {
                     firstEntered.countDown();
                     try { releaseFirst.await(5, TimeUnit.SECONDS); }
                     catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                    return CompletableFuture.completedFuture(null);
                 });
-                secondSubscription.set(value.events().subscribe(PlayerDisconnectedEvent.class, event ->
-                        calls.add("disconnected")));
+                secondSubscription.set(value.events().subscribe(PlayerDisconnectedEvent.class, event -> {
+                    calls.add("disconnected");
+                    return CompletableFuture.completedFuture(null);
+                }));
             }
         };
         var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
@@ -368,12 +372,12 @@ class PluginHostTest {
             host.load(List.of(plugin));
             host.enable();
             PlayerView connectedPlayer = new PlayerView(PLAYER.identity(), PLAYER.username(), Optional.of("lobby"));
-            host.publish(new ServerConnectedEvent(connectedPlayer, Optional.empty()));
+            host.dispatch(new ServerConnectedEvent(connectedPlayer, Optional.empty()));
             assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
-            host.publish(new PlayerDisconnectedEvent(PLAYER));
+            host.dispatch(new PlayerDisconnectedEvent(PLAYER));
             secondSubscription.get().close();
             secondSubscription.get().close();
-            host.publish(new ServerConnectedEvent(connectedPlayer, Optional.of("previous")));
+            host.dispatch(new ServerConnectedEvent(connectedPlayer, Optional.of("previous")));
             releaseFirst.countDown();
             assertTrue(connectedDelivered.await(5, TimeUnit.SECONDS));
             assertEquals(List.of("connected", "connected"), calls);
@@ -382,6 +386,79 @@ class PluginHostTest {
         } finally {
             releaseFirst.countDown();
             host.close();
+        }
+    }
+
+    @Test
+    void notificationsWaitForAsyncListenerStagesBeforeStartingNextListenerOrEvent() throws Exception {
+        var firstEntered = new CountDownLatch(1);
+        var firstStage = new CompletableFuture<Void>();
+        var calls = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        Plugin plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) {
+                context.events().subscribe(ServerConnectedEvent.class, event -> {
+                    calls.add("first-listener");
+                    firstEntered.countDown();
+                    return firstStage;
+                });
+                context.events().subscribe(ServerConnectedEvent.class, event -> {
+                    calls.add("second-listener");
+                    return CompletableFuture.completedFuture(null);
+                });
+                context.events().subscribe(PlayerDisconnectedEvent.class, event -> {
+                    calls.add("next-event");
+                    return CompletableFuture.completedFuture(null);
+                });
+            }
+        };
+        PlayerView connectedPlayer = new PlayerView(PLAYER.identity(), PLAYER.username(), Optional.of("lobby"));
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var first = host.dispatch(new ServerConnectedEvent(connectedPlayer, Optional.empty())).toCompletableFuture();
+            var second = host.dispatch(new PlayerDisconnectedEvent(PLAYER)).toCompletableFuture();
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("first-listener"), calls);
+            firstStage.complete(null);
+            first.get(5, TimeUnit.SECONDS);
+            second.get(5, TimeUnit.SECONDS);
+            assertEquals(List.of("first-listener", "second-listener", "next-event"), calls);
+        }
+    }
+
+    @Test
+    void notificationTimeoutAdvancesQueueAndNullListenerStageIsIsolated() throws Exception {
+        var invocation = new AtomicInteger();
+        var timeoutStage = new CompletableFuture<Void>();
+        var firstEntered = new CountDownLatch(1);
+        var nextListener = new CountDownLatch(1);
+        Plugin plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) {
+                context.events().subscribe(PlayerDisconnectedEvent.class, event -> {
+                    if (invocation.getAndIncrement() == 0) {
+                        firstEntered.countDown();
+                        return timeoutStage;
+                    }
+                    return null;
+                });
+                context.events().subscribe(PlayerDisconnectedEvent.class, event -> {
+                    nextListener.countDown();
+                    return CompletableFuture.completedFuture(null);
+                });
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var timedOut = host.dispatch(new PlayerDisconnectedEvent(PLAYER)).toCompletableFuture();
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+            Thread.sleep(250); // Leave a clear deadline gap for the queued event to run after promotion.
+            var queued = host.dispatch(new PlayerDisconnectedEvent(PLAYER)).toCompletableFuture();
+            assertThrows(CompletionException.class, timedOut::join);
+            queued.get(5, TimeUnit.SECONDS);
+            assertTrue(nextListener.await(5, TimeUnit.SECONDS));
+            awaitCondition(timeoutStage::isCancelled);
         }
     }
 
@@ -401,12 +478,14 @@ class PluginHostTest {
                         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
                     }
                     delivered.countDown();
+                    return CompletableFuture.completedFuture(null);
                 });
                 context.events().subscribe(PlayerDisconnectedEvent.class,
                         event -> {
                             if (failOnce.compareAndSet(true, false)) {
                                 throw new IllegalStateException("isolated listener failure");
                             }
+                            return CompletableFuture.completedFuture(null);
                         });
             }
         };
@@ -414,9 +493,9 @@ class PluginHostTest {
         try {
             host.load(List.of(plugin));
             host.enable();
-            host.publish(new PlayerDisconnectedEvent(PLAYER));
+            host.dispatch(new PlayerDisconnectedEvent(PLAYER));
             assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
-            for (int index = 0; index < 140; index++) host.publish(new PlayerDisconnectedEvent(PLAYER));
+            for (int index = 0; index < 140; index++) host.dispatch(new PlayerDisconnectedEvent(PLAYER));
             releaseFirst.countDown();
             assertTrue(delivered.await(5, TimeUnit.SECONDS));
             assertEquals(129, counter.get(), "one running plus exactly 128 queued notification batches");
@@ -431,7 +510,8 @@ class PluginHostTest {
         var subscription = new java.util.concurrent.atomic.AtomicReference<EventSubscription>();
         Plugin first = new Plugin() {
             @Override public void onLoad(PluginContext context) {
-                subscription.set(context.events().subscribe(PlayerDisconnectedEvent.class, event -> { }));
+                subscription.set(context.events().subscribe(PlayerDisconnectedEvent.class,
+                        event -> CompletableFuture.completedFuture(null)));
             }
         };
         Plugin failing = new Plugin() {
@@ -829,6 +909,12 @@ class PluginHostTest {
 
     private static ServerDefinition server(String name) {
         return new ServerDefinition(name, URI.create("tcp://127.0.0.1:25565"), Map.of(), Map.of());
+    }
+
+    private static void awaitCondition(java.util.function.BooleanSupplier condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+        assertTrue(condition.getAsBoolean(), "condition did not become true before the deadline");
     }
 
     private static void serviceJar(Path path, String provider) throws IOException {

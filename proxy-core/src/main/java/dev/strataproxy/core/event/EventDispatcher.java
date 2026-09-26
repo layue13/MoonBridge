@@ -1,8 +1,6 @@
 package dev.strataproxy.core.event;
 
-import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.AccessEvent;
-import dev.strataproxy.api.event.NotificationEvent;
+import dev.strataproxy.api.event.Event;
 
 import java.util.concurrent.CompletionStage;
 
@@ -10,8 +8,5 @@ import java.util.concurrent.CompletionStage;
 public interface EventDispatcher {
     boolean hasSubscribers(Class<?> eventType);
 
-    CompletionStage<AccessDecision> check(AccessEvent event);
-
-    /** Enqueues a best-effort notification without invoking plugins on the calling thread. */
-    void publish(NotificationEvent event);
+    <R> CompletionStage<R> dispatch(Event<R> event);
 }

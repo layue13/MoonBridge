@@ -10,7 +10,7 @@ import java.util.Optional;
  * server; Forge negotiation and gameplay readiness may still be pending.
  */
 public record ServerConnectedEvent(PlayerView player, Optional<String> previousServer)
-        implements NotificationEvent {
+        implements Event<Void> {
     public ServerConnectedEvent {
         Objects.requireNonNull(player, "player");
         previousServer = Objects.requireNonNull(previousServer, "previousServer");

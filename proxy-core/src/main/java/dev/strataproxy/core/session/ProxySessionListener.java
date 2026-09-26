@@ -1,9 +1,8 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.AccessEvent;
-import dev.strataproxy.api.event.ConnectionEvent;
+import dev.strataproxy.api.event.Event;
+import dev.strataproxy.api.event.ConnectionAdmissionEvent;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
 import dev.strataproxy.core.event.EventDispatcher;
@@ -76,7 +75,7 @@ public final class ProxySessionListener implements Players {
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile CommandDispatcher commandDispatcher;
     private EventDispatcher events;
-    private Duration accessTimeout = Duration.ofSeconds(5);
+    private Duration eventTimeout = Duration.ofSeconds(5);
     private int maxConnections = 4096;
     private volatile Channel listener;
     private volatile boolean closed;
@@ -188,21 +187,21 @@ public final class ProxySessionListener implements Players {
         }
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofMinutes(3)) > 0) {
-            throw new IllegalArgumentException("access timeout must be positive and within three minutes");
+            throw new IllegalArgumentException("event timeout must be positive and within three minutes");
         }
         this.events = Objects.requireNonNull(events, "events");
-        this.accessTimeout = timeout;
+        this.eventTimeout = timeout;
     }
 
     boolean hasSubscribers(Class<?> eventType) { return events != null && events.hasSubscribers(eventType); }
-    CompletionStage<AccessDecision> checkAccess(AccessEvent event) { return events.check(event); }
+    <R> CompletionStage<R> dispatchEvent(Event<R> event) { return events.dispatch(event); }
     void serverConnected(PlayerView player, Optional<String> previousServer) {
-        if (hasSubscribers(ServerConnectedEvent.class)) events.publish(new ServerConnectedEvent(player, previousServer));
+        if (hasSubscribers(ServerConnectedEvent.class)) events.dispatch(new ServerConnectedEvent(player, previousServer));
     }
     void playerDisconnected(PlayerView player) {
-        if (hasSubscribers(PlayerDisconnectedEvent.class)) events.publish(new PlayerDisconnectedEvent(player));
+        if (hasSubscribers(PlayerDisconnectedEvent.class)) events.dispatch(new PlayerDisconnectedEvent(player));
     }
-    Duration accessTimeout() { return accessTimeout; }
+    Duration eventTimeout() { return eventTimeout; }
 
     public synchronized CompletionStage<Channel> start() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("listener is closed"));
@@ -217,9 +216,9 @@ public final class ProxySessionListener implements Players {
                     @Override protected void initChannel(SocketChannel channel) {
                         Session session = registerSession(channel);
                         if (session == null) return;
-                        if (hasSubscribers(ConnectionEvent.class)) {
-                            channel.pipeline().addLast("connection-access", new ConnectionGate(events,
-                                    accessTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
+                        if (hasSubscribers(ConnectionAdmissionEvent.class)) {
+                            channel.pipeline().addLast("connection-admission", new ConnectionGate(events,
+                                    eventTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
                         }
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                                 dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true,

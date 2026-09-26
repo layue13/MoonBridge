@@ -2,7 +2,7 @@ package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.event.LoginEvent;
+import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.TransferResult;
@@ -85,7 +85,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private volatile PlayerView view;
     private BackendView selected;
     private CompletableFuture<Optional<PlacementDecision>> placementRequest;
-    private CompletableFuture<AccessDecision> loginAccessRequest;
+    private CompletableFuture<AccessDecision> admissionRequest;
     private boolean loginDisconnectStarted;
     private volatile boolean published;
     private boolean relayStarting;
@@ -116,7 +116,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
         if (ctx.channel() == frontend) {
             resetLoginDeadline(ctx.pipeline().get(ConnectionGate.class) == null ? owner.loginStageTimeout()
-                    : owner.accessTimeout().plusSeconds(1));
+                    : owner.eventTimeout().plusSeconds(1));
         }
     }
 
@@ -257,23 +257,23 @@ final class Session extends ChannelInboundHandlerAdapter {
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         observeWaitingClient();
-        if (!owner.hasSubscribers(LoginEvent.class)) {
+        if (!owner.hasSubscribers(PlayerAdmissionEvent.class)) {
             beginPlacement();
             return;
         }
-        resetLoginDeadline(owner.accessTimeout().plusSeconds(1));
+        resetLoginDeadline(owner.eventTimeout().plusSeconds(1));
         try {
-            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.checkAccess(
-                    new LoginEvent(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
-                    "login check stage").toCompletableFuture();
-            loginAccessRequest = request;
+            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.dispatchEvent(
+                    new PlayerAdmissionEvent(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
+                    "player admission stage").toCompletableFuture();
+            admissionRequest = request;
             request.whenComplete((decision, failure) -> {
                 try {
                     frontend.eventLoop().execute(() -> {
-                        if (loginAccessRequest == request) loginAccessRequest = null;
+                        if (admissionRequest == request) admissionRequest = null;
                         if (closed.get() || loginDisconnectStarted) return;
                         if (failure != null || decision == null) {
-                            LOGGER.debug("Login access check failed for player {}", view.username(), failure);
+                            LOGGER.debug("Player admission failed for {}", view.username(), failure);
                             disconnectLogin("Could not check login access. Please try again.");
                         } else if (decision instanceof AccessDecision.Denied denied) {
                             disconnectLogin(denied.reason());
@@ -286,7 +286,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 }
             });
         } catch (RuntimeException failure) {
-            LOGGER.debug("Could not start login access check for player {}", view.username(), failure);
+            LOGGER.debug("Could not start player admission for {}", view.username(), failure);
             disconnectLogin("Could not check login access. Please try again.");
         }
     }
@@ -1158,9 +1158,9 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
             if (verification != null) verification.cancel(true);
-            if (loginAccessRequest != null) {
-                loginAccessRequest.cancel(false);
-                loginAccessRequest = null;
+            if (admissionRequest != null) {
+                admissionRequest.cancel(false);
+                admissionRequest = null;
             }
             if (placementRequest != null) {
                 placementRequest.cancel(false);
