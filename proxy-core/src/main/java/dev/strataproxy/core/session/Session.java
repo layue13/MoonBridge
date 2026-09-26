@@ -1,6 +1,8 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.LoginRequest;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.TransferResult;
@@ -83,6 +85,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private volatile PlayerView view;
     private BackendView selected;
     private CompletableFuture<Optional<PlacementDecision>> placementRequest;
+    private CompletableFuture<AccessDecision> loginAccessRequest;
     private boolean loginDisconnectStarted;
     private volatile boolean published;
     private boolean relayStarting;
@@ -112,9 +115,12 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
         if (ctx.channel() == frontend) {
-            resetLoginDeadline(owner.loginStageTimeout());
+            resetLoginDeadline(owner.connectionCheck() == null ? owner.loginStageTimeout()
+                    : owner.accessTimeout().plusSeconds(1));
         }
     }
+
+    void connectionAccepted() { resetLoginDeadline(owner.loginStageTimeout()); }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
         if (!(message instanceof ByteBuf packet)) {
@@ -196,7 +202,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + loginStart.username()).getBytes(StandardCharsets.UTF_8));
-        beginPlacement(uuid, loginStart.username());
+        beginLogin(uuid, loginStart.username());
     }
 
     private void receiveEncryptionResponse(ByteBuf packet) {
@@ -238,11 +244,11 @@ final class Session extends ChannelInboundHandlerAdapter {
                         closePair();
                         return;
                     }
-                    beginPlacement(verifiedProfile.uuid(), verifiedProfile.username());
+                    beginLogin(verifiedProfile.uuid(), verifiedProfile.username());
                 }));
     }
 
-    private void beginPlacement(UUID uuid, String username) {
+    private void beginLogin(UUID uuid, String username) {
         identity = new PlayerIdentity(uuid, owner.allocateConnectionId());
         if (!owner.claimIdentity(uuid, this)) {
             closePair();
@@ -251,6 +257,41 @@ final class Session extends ChannelInboundHandlerAdapter {
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         observeWaitingClient();
+        if (owner.loginCheck() == null) {
+            beginPlacement();
+            return;
+        }
+        resetLoginDeadline(owner.accessTimeout().plusSeconds(1));
+        try {
+            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.loginCheck().check(
+                    new LoginRequest(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
+                    "login check stage").toCompletableFuture();
+            loginAccessRequest = request;
+            request.whenComplete((decision, failure) -> {
+                try {
+                    frontend.eventLoop().execute(() -> {
+                        if (loginAccessRequest == request) loginAccessRequest = null;
+                        if (closed.get() || loginDisconnectStarted) return;
+                        if (failure != null || decision == null) {
+                            LOGGER.debug("Login access check failed for player {}", view.username(), failure);
+                            disconnectLogin("Could not check login access. Please try again.");
+                        } else if (decision instanceof AccessDecision.Denied denied) {
+                            disconnectLogin(denied.reason());
+                        } else {
+                            beginPlacement();
+                        }
+                    });
+                } catch (RejectedExecutionException shutdown) {
+                    closePair();
+                }
+            });
+        } catch (RuntimeException failure) {
+            LOGGER.debug("Could not start login access check for player {}", view.username(), failure);
+            disconnectLogin("Could not check login access. Please try again.");
+        }
+    }
+
+    private void beginPlacement() {
         resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
         CompletableFuture<Optional<PlacementDecision>> request = owner.placement().apply(view).toCompletableFuture();
         placementRequest = request;
@@ -1114,6 +1155,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
             if (verification != null) verification.cancel(true);
+            if (loginAccessRequest != null) {
+                loginAccessRequest.cancel(false);
+                loginAccessRequest = null;
+            }
             if (placementRequest != null) {
                 placementRequest.cancel(false);
                 placementRequest = null;

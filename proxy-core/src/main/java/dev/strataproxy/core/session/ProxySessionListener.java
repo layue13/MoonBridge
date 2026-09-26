@@ -1,6 +1,8 @@
 package dev.strataproxy.core.session;
 
 import dev.strataproxy.api.PlacementDecision;
+import dev.strataproxy.api.ConnectionCheck;
+import dev.strataproxy.api.LoginCheck;
 import dev.strataproxy.api.PlayerIdentity;
 import dev.strataproxy.api.PlayerView;
 import dev.strataproxy.api.Players;
@@ -69,6 +71,10 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private volatile CommandDispatcher commandDispatcher;
+    private ConnectionCheck connectionCheck;
+    private LoginCheck loginCheck;
+    private Duration accessTimeout = Duration.ofSeconds(5);
+    private boolean accessConfigured;
     private int maxConnections = 4096;
     private volatile Channel listener;
     private volatile boolean closed;
@@ -173,6 +179,25 @@ public final class ProxySessionListener implements Players {
         maxConnections = limit;
     }
 
+    /** Installs host dispatchers before start; absent checks add no worker dispatch or gate. */
+    public synchronized void setAccessChecks(ConnectionCheck connectionCheck, LoginCheck loginCheck, Duration timeout) {
+        if (started || closed || accessConfigured) {
+            throw new IllegalStateException("Access checks must be configured once before listener start");
+        }
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofMinutes(3)) > 0) {
+            throw new IllegalArgumentException("access timeout must be positive and within three minutes");
+        }
+        this.connectionCheck = connectionCheck;
+        this.loginCheck = loginCheck;
+        this.accessTimeout = timeout;
+        accessConfigured = true;
+    }
+
+    ConnectionCheck connectionCheck() { return connectionCheck; }
+    LoginCheck loginCheck() { return loginCheck; }
+    Duration accessTimeout() { return accessTimeout; }
+
     public synchronized CompletionStage<Channel> start() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("listener is closed"));
         if (started) return CompletableFuture.failedFuture(new IllegalStateException("listener already started"));
@@ -186,6 +211,10 @@ public final class ProxySessionListener implements Players {
                     @Override protected void initChannel(SocketChannel channel) {
                         Session session = registerSession(channel);
                         if (session == null) return;
+                        if (connectionCheck != null) {
+                            channel.pipeline().addLast("connection-access", new ConnectionGate(connectionCheck,
+                                    accessTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
+                        }
                         channel.pipeline().addLast("minecraft-frame-decoder", new dev.strataproxy.core.protocol.MinecraftFrameDecoder(
                                 dev.strataproxy.core.protocol.ProtocolProfile.minecraft1710(), true,
                                 dev.strataproxy.core.protocol.ProtocolProfile.MAX_LOGIN_FRAME_BYTES));

@@ -1,6 +1,10 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.InitialPlacementHandler;
+import dev.strataproxy.api.AccessDecision;
+import dev.strataproxy.api.ConnectionCheck;
+import dev.strataproxy.api.LoginCheck;
+import dev.strataproxy.api.LoginRequest;
 import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.PlacementDecision;
 import dev.strataproxy.api.PlayerIdentity;
@@ -23,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -53,6 +58,234 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PluginHostTest {
     private static final PlayerView PLAYER = new PlayerView(
             new PlayerIdentity(UUID.randomUUID(), 1), "TestPlayer", Optional.empty());
+
+    @Test
+    void accessChecksRunInLoadOrderOffCallerAndStopAtFirstDenial() throws Exception {
+        var calls = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var worker = new java.util.concurrent.atomic.AtomicReference<Thread>();
+        var first = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> {
+                    calls.add("first-connection");
+                    worker.set(Thread.currentThread());
+                    return CompletableFuture.completedFuture(AccessDecision.allow());
+                });
+            }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> {
+                    calls.add("first-login:" + request.authenticated());
+                    return CompletableFuture.completedFuture(AccessDecision.allow());
+                });
+            }
+        };
+        var second = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> {
+                    calls.add("second-connection");
+                    return CompletableFuture.completedFuture(AccessDecision.deny("IP blocked"));
+                });
+            }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> {
+                    calls.add("second-login");
+                    return CompletableFuture.completedFuture(AccessDecision.deny("Player blocked"));
+                });
+            }
+        };
+        var third = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> {
+                    calls.add("third-connection");
+                    return CompletableFuture.completedFuture(AccessDecision.allow());
+                });
+            }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> {
+                    calls.add("third-login");
+                    return CompletableFuture.completedFuture(AccessDecision.allow());
+                });
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(1))) {
+            host.load(List.of(first, second, third));
+            host.enable();
+            assertTrue(host.hasConnectionChecks());
+            assertTrue(host.hasLoginChecks());
+            AccessDecision connection = host.checkConnection(new InetSocketAddress("127.0.0.1", 25565))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(AccessDecision.deny("IP blocked"), connection);
+            assertNotEquals(Thread.currentThread(), worker.get());
+            AccessDecision login = host.checkLogin(new LoginRequest(PLAYER,
+                            new InetSocketAddress("127.0.0.1", 25565), false))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(AccessDecision.deny("Player blocked"), login);
+            assertEquals(List.of("first-connection", "second-connection", "first-login:false", "second-login"), calls);
+        }
+    }
+
+    @Test
+    void accessChecksFailClosedOnTimeoutAndSkipWorkersWhenNoPluginListens() throws Exception {
+        var hostWithoutChecks = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofMillis(50));
+        try {
+            hostWithoutChecks.load(List.of());
+            hostWithoutChecks.enable();
+            assertFalse(hostWithoutChecks.hasConnectionChecks());
+            assertFalse(hostWithoutChecks.hasLoginChecks());
+            assertEquals(AccessDecision.allow(), hostWithoutChecks
+                    .checkConnection(new InetSocketAddress("127.0.0.1", 25565))
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS));
+        } finally {
+            hostWithoutChecks.close();
+        }
+
+        var pending = new CompletableFuture<AccessDecision>();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> pending);
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofMillis(40))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var result = host.checkLogin(new LoginRequest(PLAYER,
+                    new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture();
+            assertThrows(CompletionException.class, result::join);
+            assertThrows(java.util.concurrent.CancellationException.class,
+                    () -> pending.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void accessCheckExceptionsAndNullDecisionsFailClosed() {
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> CompletableFuture.failedFuture(
+                        new IllegalStateException("ban store unavailable")));
+            }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> CompletableFuture.completedFuture(null));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            assertThrows(CompletionException.class, () -> host.checkConnection(
+                    new InetSocketAddress("127.0.0.1", 25565)).toCompletableFuture().join());
+            assertThrows(CompletionException.class, () -> host.checkLogin(new LoginRequest(PLAYER,
+                    new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture().join());
+        }
+    }
+
+    @Test
+    void closingHostCancelsAnOutstandingAccessStage() throws Exception {
+        var invoked = new CountDownLatch(1);
+        var pending = new CompletableFuture<AccessDecision>();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<LoginCheck> loginCheck() {
+                return Optional.of(request -> {
+                    invoked.countDown();
+                    return pending;
+                });
+            }
+        };
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
+        host.load(List.of(plugin));
+        host.enable();
+        var result = host.checkLogin(new LoginRequest(PLAYER,
+                new InetSocketAddress("127.0.0.1", 25565), true)).toCompletableFuture();
+        assertTrue(invoked.await(5, TimeUnit.SECONDS));
+        host.close();
+        assertTrue(pending.isCancelled());
+        assertThrows(CompletionException.class, result::join);
+    }
+
+    @Test
+    void accessChecksRejectOverloadAndCancelPendingPluginStageOnCallerCancellationOrClose() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> {
+                    entered.countDown();
+                    try {
+                        if (!release.await(5, TimeUnit.SECONDS)) {
+                            return CompletableFuture.failedFuture(new IllegalStateException("test timed out"));
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return CompletableFuture.failedFuture(interrupted);
+                    }
+                    return CompletableFuture.completedFuture(AccessDecision.allow());
+                });
+            }
+        };
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(2), 1, 1, 1, 1, 4);
+        host.load(List.of(plugin));
+        host.enable();
+        try {
+            var first = host.checkConnection(new InetSocketAddress("127.0.0.1", 25565)).toCompletableFuture();
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            var second = host.checkConnection(new InetSocketAddress("127.0.0.2", 25565)).toCompletableFuture();
+            var overloaded = host.checkConnection(new InetSocketAddress("127.0.0.3", 25565)).toCompletableFuture();
+            assertThrows(CompletionException.class, overloaded::join);
+            assertTrue(first.cancel(false));
+            assertTrue(second.cancel(false), "queued request can be cancelled before plugin invocation");
+
+            var waiting = host.checkConnection(new InetSocketAddress("127.0.0.4", 25565)).toCompletableFuture();
+            host.close();
+            assertThrows(CompletionException.class, waiting::join);
+            assertThrows(CompletionException.class, () -> host.checkConnection(
+                    new InetSocketAddress("127.0.0.5", 25565)).toCompletableFuture().join());
+        } finally {
+            release.countDown();
+            host.close();
+        }
+    }
+
+    @Test
+    void asynchronousAccessStagesAreBoundedAndCancellationReleasesCapacity() throws Exception {
+        var invoked = new CountDownLatch(2);
+        var stages = Map.of(1, new CompletableFuture<AccessDecision>(),
+                2, new CompletableFuture<AccessDecision>(), 3, new CompletableFuture<AccessDecision>());
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) { }
+            @Override public Optional<ConnectionCheck> connectionCheck() {
+                return Optional.of(address -> {
+                    invoked.countDown();
+                    return stages.get(address.getPort());
+                });
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(5),
+                Duration.ofSeconds(5), 1, 8, 1, 8, 2)) {
+            host.load(List.of(plugin));
+            host.enable();
+            var first = host.checkConnection(new InetSocketAddress("127.0.0.1", 1)).toCompletableFuture();
+            var second = host.checkConnection(new InetSocketAddress("127.0.0.1", 2)).toCompletableFuture();
+            assertTrue(invoked.await(5, TimeUnit.SECONDS));
+            var overloaded = host.checkConnection(new InetSocketAddress("127.0.0.1", 3)).toCompletableFuture();
+            assertInstanceOf(PluginOverloadedException.class,
+                    assertThrows(CompletionException.class, overloaded::join).getCause());
+            first.cancel(false);
+            assertTrue(stages.get(1).isCancelled());
+            var replacement = host.checkConnection(new InetSocketAddress("127.0.0.1", 3)).toCompletableFuture();
+            stages.get(3).complete(AccessDecision.allow());
+            assertEquals(AccessDecision.allow(), replacement.get(5, TimeUnit.SECONDS));
+            stages.get(2).complete(AccessDecision.allow());
+            assertEquals(AccessDecision.allow(), second.get(5, TimeUnit.SECONDS));
+        }
+    }
 
     @Test
     void commandsDispatchOffCallerThreadAndReleaseTheirNames() throws Exception {
