@@ -25,6 +25,7 @@ import me.lucko.luckperms.common.config.generic.adapter.ConfigurationAdapter;
 import me.lucko.luckperms.common.dependencies.Dependency;
 import me.lucko.luckperms.common.event.AbstractEventBus;
 import me.lucko.luckperms.common.messaging.MessagingFactory;
+import me.lucko.luckperms.common.locale.TranslationManager;
 import me.lucko.luckperms.common.model.User;
 import me.lucko.luckperms.common.model.manager.group.StandardGroupManager;
 import me.lucko.luckperms.common.model.manager.track.StandardTrackManager;
@@ -229,7 +230,9 @@ final class MoonBridgePlatform extends AbstractLuckPermsPlugin {
         @Override protected String getName(CommandSource source) { return source.player().map(PlayerView::username).orElse(Sender.CONSOLE_NAME); }
         @Override protected UUID getUniqueId(CommandSource source) { return source.player().map(player -> player.identity().playerId()).orElse(Sender.CONSOLE_UUID); }
         @Override protected void sendMessage(CommandSource source, net.kyori.adventure.text.Component message) {
-            MoonBridgeChat.send(source, GsonComponentSerializer.gson().serialize(message));
+            // LuckPerms translation keys are registered in its private Adventure classloader.
+            // Resolve them before crossing the JSON boundary; Minecraft cannot translate these keys.
+            MoonBridgeChat.send(source, GsonComponentSerializer.gson().serialize(TranslationManager.render(message)));
         }
         @Override protected Tristate getPermissionValue(CommandSource source, String node) {
             if (source.isConsole()) return Tristate.TRUE;

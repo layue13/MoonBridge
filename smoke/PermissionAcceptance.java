@@ -87,7 +87,11 @@ public final class PermissionAcceptance {
             expect(probe, transferred, "luckperms.user.permission.set", PermissionResult.ALLOW);
             require(!host.completeCommand(transferred, "/lp ").orElseThrow().toCompletableFuture()
                     .get(5, TimeUnit.SECONDS).isEmpty(), "LuckPerms native command completion");
+            int infoStart = output.size();
             command(probe, output, "lp info");
+            require(output.size() > infoStart, "LuckPerms info must produce readable output");
+            require(output.subList(infoStart, output.size()).stream().noneMatch(line -> line.contains("luckperms.command.")),
+                    "LuckPerms translations must be rendered before crossing the host JSON bridge");
             command(probe, output, USER + "permission info");
 
             PlayerView reconnect = new PlayerView(new PlayerIdentity(UUID_VALUE, 2), first.username(), "lobby");
