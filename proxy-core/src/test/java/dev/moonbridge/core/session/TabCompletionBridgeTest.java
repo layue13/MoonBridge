@@ -62,6 +62,27 @@ class TabCompletionBridgeTest {
         }
     }
 
+    @Test void backendCannotReintroduceHiddenProxyRoots() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try (var bridge = new TabCompletionBridge(client, prefix -> List.of("/public"),
+                text -> Optional.empty(), () -> fail("unexpected disconnect"),
+                suggestion -> !suggestion.equalsIgnoreCase("/private"))) {
+            client.pipeline().addLast(bridge.frontendHandler());
+            backend.pipeline().addLast(bridge.backendHandler());
+            client.writeInbound(request("/p"));
+            ByteBuf forwarded = client.readInbound();
+            assertNotNull(forwarded);
+            forwarded.release();
+            backend.writeInbound(MinecraftTabCompletion.response(backend.alloc(),
+                    List.of("/private", "/PRIVATE", "/public", "/plugins")));
+            assertEquals(List.of("/public", "/plugins"), read(client));
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
     @Test void localArgumentsNeverReachBackendAndCompleteOffCallback() {
         try (Fixture f = new Fixture()) {
             f.client.writeInbound(request("/proxy "));

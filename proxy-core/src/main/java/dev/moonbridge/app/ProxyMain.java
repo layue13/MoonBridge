@@ -94,9 +94,11 @@ public final class ProxyMain {
             plugins.enable();
             if (control != null) control.start();
             listener.setEvents(plugins, eventTimeout);
+            listener.setPermissions(plugins.permissionService());
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
-            listener.setCommandCompletion(plugins::commandNames, plugins::completeCommand);
+            listener.setPlayerCommandCompletion(plugins::commandNames, plugins::completeCommand);
+            listener.setCommandVisibility(plugins::commandVisible);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
             var shutdown = new Thread(() -> {
@@ -112,7 +114,9 @@ public final class ProxyMain {
                 }
             }, "moonbridge-shutdown");
             Runtime.getRuntime().addShutdownHook(shutdown);
-            try {
+            try (var console = new ConsoleCommands(plugins, System.in,
+                    component -> LOGGER.info("{}", net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                            .plainText().serialize(component)))) {
                 serverChannel.closeFuture().sync();
             } finally {
                 listener.close().toCompletableFuture().join();

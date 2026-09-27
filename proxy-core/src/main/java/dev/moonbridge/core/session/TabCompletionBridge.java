@@ -17,6 +17,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /** One backend generation, confined to the shared frontend/backend event loop. */
 final class TabCompletionBridge implements AutoCloseable {
@@ -24,6 +25,7 @@ final class TabCompletionBridge implements AutoCloseable {
     private final Function<String, List<String>> roots;
     private final Function<String, Optional<CompletionStage<List<String>>>> complete;
     private final Runnable closeSession;
+    private final Predicate<String> visibleRoot;
     private final ArrayDeque<Request> queued = new ArrayDeque<>();
     private Request active;
     private boolean backendReplyOutstanding;
@@ -45,10 +47,17 @@ final class TabCompletionBridge implements AutoCloseable {
     TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
                         Function<String, Optional<CompletionStage<List<String>>>> complete,
                         Runnable closeSession) {
+        this(frontend, roots, complete, closeSession, ignored -> true);
+    }
+
+    TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
+                        Function<String, Optional<CompletionStage<List<String>>>> complete,
+                        Runnable closeSession, Predicate<String> visibleRoot) {
         this.frontend = frontend;
         this.roots = roots;
         this.complete = complete;
         this.closeSession = closeSession;
+        this.visibleRoot = visibleRoot;
     }
 
     ChannelInboundHandlerAdapter frontendHandler() { return new Handler(true); }
@@ -140,7 +149,7 @@ final class TabCompletionBridge implements AutoCloseable {
         List<String> values = MinecraftTabCompletion.response(frame);
         if (isRoot(active.text)) {
             LinkedHashSet<String> merged = new LinkedHashSet<>(roots.apply(active.text.substring(1)));
-            merged.addAll(values);
+            values.stream().filter(visibleRoot).forEach(merged::add);
             values = new ArrayList<>(merged).subList(0, Math.min(100, merged.size()));
         }
         finish(values);

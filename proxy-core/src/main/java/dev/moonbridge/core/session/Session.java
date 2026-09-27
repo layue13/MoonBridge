@@ -276,6 +276,30 @@ final class Session extends ChannelInboundHandlerAdapter {
         identityClaimed = true;
         view = new PlayerView(identity, username, Optional.empty());
         observeWaitingClient();
+        resetLoginDeadline(owner.eventTimeout().plusSeconds(1));
+        try {
+            owner.preparePermissions(view).whenComplete((ignored, failure) -> {
+                try {
+                    frontend.eventLoop().execute(() -> {
+                        if (closed.get() || disconnecting || loginDisconnectStarted) return;
+                        if (failure != null) {
+                            LOGGER.debug("Permission preparation failed for {}", view.username(), failure);
+                            disconnectLogin("Could not load permissions. Please try again.");
+                        } else {
+                            beginPlayerAdmission();
+                        }
+                    });
+                } catch (RejectedExecutionException shutdown) {
+                    closePair();
+                }
+            });
+        } catch (RuntimeException failure) {
+            LOGGER.debug("Could not prepare permissions for {}", view.username(), failure);
+            disconnectLogin("Could not load permissions. Please try again.");
+        }
+    }
+
+    private void beginPlayerAdmission() {
         if (!owner.hasSubscribers(PlayerAdmissionEvent.class)) {
             beginPlacement();
             return;
@@ -659,11 +683,12 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void installTabCompletion(Channel target) {
-        if (owner.commandNames() == null) return;
+        if (!owner.hasCommandCompletion()) return;
         if (tabCompletion != null) tabCompletion.close();
         if (frontend.pipeline().get("tab-completion") != null) frontend.pipeline().remove("tab-completion");
-        tabCompletion = new TabCompletionBridge(frontend, owner.commandNames(),
-                text -> owner.completeCommand(view, text), this::closePair);
+        tabCompletion = new TabCompletionBridge(frontend, prefix -> owner.commandNames(view, prefix),
+                text -> owner.completeCommand(view, text), this::closePair,
+                suggestion -> owner.commandVisible(view, suggestion));
         frontend.pipeline().addLast("tab-completion", tabCompletion.frontendHandler());
         target.pipeline().addLast("tab-completion", tabCompletion.backendHandler());
     }
@@ -1456,7 +1481,10 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (activeTransfer.frameState != null) activeTransfer.frameState.close();
                 activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
-            if (identityClaimed) owner.releaseIdentity(identity.playerId(), this);
+            if (identityClaimed) {
+                owner.releasePermissions(identity);
+                owner.releaseIdentity(identity.playerId(), this);
+            }
             if (published) {
                 owner.sessionUnpublished();
                 owner.playerDisconnected(view);

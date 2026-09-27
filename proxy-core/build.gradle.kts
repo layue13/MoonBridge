@@ -73,10 +73,28 @@ val installedDistVersionSmokeTest = tasks.register<Exec>("installedDistVersionSm
     }
 }
 
+val compilePermissionAcceptance = tasks.register<JavaCompile>("compilePermissionAcceptance") {
+    source(rootProject.file("smoke/PermissionAcceptance.java"))
+    classpath = sourceSets.main.get().runtimeClasspath
+    destinationDirectory.set(layout.buildDirectory.dir("classes/permissionAcceptance"))
+    options.release.set(25)
+}
+
+val permissionAcceptance = tasks.register<JavaExec>("permissionAcceptance") {
+    group = "verification"
+    description = "Loads the packaged LuckPerms plugin and verifies native permissions, commands and H2 persistence."
+    dependsOn(tasks.named("installDist"), compilePermissionAcceptance)
+    classpath = sourceSets.main.get().runtimeClasspath + files(compilePermissionAcceptance.flatMap { it.destinationDirectory })
+    mainClass.set("PermissionAcceptance")
+    args(layout.buildDirectory.dir("install/moonbridge").get().asFile.absolutePath,
+        layout.buildDirectory.dir("permission-acceptance").get().asFile.absolutePath)
+}
+
 tasks.named("check") {
     dependsOn(installedDistSmokeTest)
     dependsOn(installedDistHelpSmokeTest)
     dependsOn(installedDistVersionSmokeTest)
+    dependsOn(permissionAcceptance)
 }
 
 application {
@@ -92,6 +110,9 @@ distributions {
     main {
         contents {
             from(rootProject.file("README.md"))
+            from(project(":luckperms-moonbridge").tasks.named("pluginJar")) {
+                into("plugins")
+            }
             from(rootProject.file("docs")) {
                 into("docs")
             }

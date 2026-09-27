@@ -8,7 +8,7 @@ MoonBridge 当前区分本地开发版本、CI 发布的不可变开发构件和
 
 1. 使用 JDK 25 运行 `gradlew check :proxy-core:distZip`。
 2. 将 JAR 和发行 ZIP 上传为名为 `moonbridge-development` 的 CI 工件，保留 30 天。
-3. 执行 `gradlew publish`，发布六个 Maven 模块。
+3. 执行 `gradlew publish`，发布七个 Maven 模块。
 
 Maven 发布需要 Gitea Actions secrets `MAVEN_USER` 和 `MAVEN_PASSWORD`。验证构建和发行 ZIP 的步骤先运行；凭据缺失会使发布步骤失败。CI 成功状态是发布结果的依据；CI 工件下载和 Maven 包仓库是不同交付物。工作流不创建 Git Release，也不表示已有稳定版本。
 
@@ -26,8 +26,9 @@ Maven 坐标统一使用 group `uk.potatolab.moonbridge` 和 CI 所报版本：
 | `backend-channel-client` | 非 Bukkit 后端宿主使用的传输 SDK |
 | `backend-bukkit-api` | Bukkit 业务插件编译时使用的服务 API |
 | `backend-bukkit` | 部署在 Bukkit/Uranium 服务端的共享宿主实现 |
+| `luckperms-moonbridge` | Proxy 原生 LuckPerms 插件；不是业务插件的编译 API |
 
-六个模块均随同一次 CI 发布使用相同版本。业务插件通常将 `backend-bukkit-api` 和目标服务器的 Bukkit API 作为 `compileOnly` / Maven `provided` 依赖；服务器提供 Bukkit API，`MoonBridgeBackend` 宿主提供运行时消息 API 和服务。普通业务插件不应依赖宿主/传输 SDK 实现，也不应把任何 API JAR 打包进插件。非 Bukkit 宿主才需要 `backend-channel-client` 及消息 API/协议；见[后端接入说明](backend-channel-design.md)。
+七个模块均随同一次 CI 发布使用相同版本。业务插件通常将 `backend-bukkit-api` 和目标服务器的 Bukkit API 作为 `compileOnly` / Maven `provided` 依赖；服务器提供 Bukkit API，`MoonBridgeBackend` 宿主提供运行时消息 API 和服务。普通业务插件不应依赖宿主/传输 SDK 实现，也不应把任何 API JAR 打包进插件。非 Bukkit 宿主才需要 `backend-channel-client` 及消息 API/协议；见[后端接入说明](backend-channel-design.md)。
 
 包仓库地址为 `https://git.nest.potatolab.uk:8443/api/packages/layue13/maven`。消费者应从成功 CI 记录中复制实际版本；以下 `<published-version>` 只是需替换的说明占位符：
 

@@ -4,21 +4,29 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 
-/** One player command. The raw arguments exclude the leading command name and separator. */
+/** One proxy command. The raw arguments exclude the root name and its separator. */
 public final class CommandInvocation {
-    private final PlayerView player;
+    private final CommandSource source;
     private final String name;
     private final String arguments;
     private final Consumer<Component> reply;
 
     public CommandInvocation(PlayerView player, String name, String arguments, Consumer<Component> reply) {
-        this.player = Objects.requireNonNull(player, "player");
-        this.name = Objects.requireNonNull(name, "name");
-        this.arguments = Objects.requireNonNull(arguments, "arguments");
-        this.reply = Objects.requireNonNull(reply, "reply");
+        this(CommandSource.player(player, reply), name, arguments);
     }
 
-    public PlayerView player() { return player; }
+    public CommandInvocation(CommandSource source, String name, String arguments) {
+        this.source = Objects.requireNonNull(source, "source");
+        this.name = Objects.requireNonNull(name, "name");
+        this.arguments = Objects.requireNonNull(arguments, "arguments");
+        this.reply = source::reply;
+    }
+
+    /** Returns the player for player-issued commands; use {@link #source()} for console-capable commands. */
+    public PlayerView player() {
+        return source.player().orElseThrow(() -> new IllegalStateException("Command was issued by console"));
+    }
+    public CommandSource source() { return source; }
     public String name() { return name; }
     public String arguments() { return arguments; }
 

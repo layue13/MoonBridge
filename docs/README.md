@@ -14,6 +14,7 @@
 | [架构与边界](architecture.md) | 模块职责、会话状态、线程模型、转服、目录所有权 |
 | [消息与命令补全](messages-and-completion.md) | 富文本、模板、异步参数补全及协议边界 |
 | [插件开发](plugins.md) | 生命周期、玩家/服务器视图、选服、命令与统一类型化事件 API |
+| [玩家权限与 LuckPerms](permissions.md) | 通用权限接口、提供者生命周期、命令鉴权和原生 LuckPerms 平台插件 |
 | [初次登录路由](initial-routing.md) | 显式入口、插件策略、超时、重试安全边界与验收契约 |
 | [玩家操作与部署完善设计](player-operations.md) | 消息、主动断开、服务器列表配置与验收边界 |
 | [运行配置](operations.md) | 认证、接入限制、超时、启动和部署边界 |

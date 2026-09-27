@@ -6,6 +6,7 @@ import dev.moonbridge.api.event.ConnectionAdmissionEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
 import dev.moonbridge.core.event.EventDispatcher;
+import dev.moonbridge.core.permission.PermissionService;
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.api.PlayerView;
 import dev.moonbridge.api.MessageResult;
@@ -82,6 +83,9 @@ public final class ProxySessionListener implements Players {
     private boolean initialServersConfigured;
     private volatile CommandDispatcher commandDispatcher;
     private Function<String, List<String>> commandNames;
+    private java.util.function.BiFunction<PlayerView, String, List<String>> playerCommandNames;
+    private java.util.function.BiPredicate<PlayerView, String> commandVisibility = (player, suggestion) -> true;
+    private PermissionService permissions;
     private java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> completions;
 
     private EventDispatcher events;
@@ -201,6 +205,35 @@ public final class ProxySessionListener implements Players {
         completions = Objects.requireNonNull(handler);
     }
     Function<String, List<String>> commandNames() { return commandNames; }
+    /** Installs player-aware command visibility before accepting connections. */
+    public synchronized void setPlayerCommandCompletion(
+            java.util.function.BiFunction<PlayerView, String, List<String>> names,
+            java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> handler) {
+        if (started || closed || completions != null) throw new IllegalStateException("Completion must be configured before start");
+        playerCommandNames = Objects.requireNonNull(names);
+        completions = Objects.requireNonNull(handler);
+    }
+    boolean hasCommandCompletion() { return completions != null; }
+    /** Filters backend suggestions which collide with restricted proxy commands. */
+    public synchronized void setCommandVisibility(java.util.function.BiPredicate<PlayerView, String> visibility) {
+        if (started || closed) throw new IllegalStateException("Command visibility must be configured before start");
+        commandVisibility = Objects.requireNonNull(visibility);
+    }
+    boolean commandVisible(PlayerView player, String suggestion) { return commandVisibility.test(player, suggestion); }
+    List<String> commandNames(PlayerView player, String prefix) {
+        return playerCommandNames == null ? commandNames.apply(prefix) : playerCommandNames.apply(player, prefix);
+    }
+    /** Installs the reliable permission lifecycle, independent of best-effort plugin notifications. */
+    public synchronized void setPermissions(PermissionService service) {
+        if (started || closed || permissions != null) throw new IllegalStateException("Permissions must be configured once before start");
+        permissions = Objects.requireNonNull(service);
+    }
+    CompletionStage<Void> preparePermissions(PlayerView player) {
+        return permissions == null ? CompletableFuture.completedFuture(null) : permissions.prepare(player);
+    }
+    void releasePermissions(PlayerIdentity identity) {
+        if (permissions != null) permissions.release(identity);
+    }
     Optional<CompletionStage<List<String>>> completeCommand(PlayerView player, String text) {
         return completions.apply(player, text);
     }
@@ -236,6 +269,7 @@ public final class ProxySessionListener implements Players {
     boolean hasSubscribers(Class<?> eventType) { return events != null && events.hasSubscribers(eventType); }
     <R> CompletionStage<R> dispatchEvent(Event<R> event) { return events.dispatch(event); }
     void serverConnected(PlayerView player, Optional<String> previousServer) {
+        if (permissions != null) permissions.update(player);
         if (hasSubscribers(ServerConnectedEvent.class)) events.dispatch(new ServerConnectedEvent(player, previousServer));
     }
     void playerDisconnected(PlayerView player) {

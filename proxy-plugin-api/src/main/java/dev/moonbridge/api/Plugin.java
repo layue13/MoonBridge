@@ -1,6 +1,7 @@
 package dev.moonbridge.api;
 
 import java.util.Optional;
+import dev.moonbridge.api.permission.PermissionProvider;
 
 /** Lifecycle contract for a proxy plugin. */
 public interface Plugin {
@@ -25,6 +26,11 @@ public interface Plugin {
      * The proxy applies the initial-routing timeout to the returned asynchronous stage.
      */
     default Optional<InitialPlacementHandler> initialPlacementHandler() {
+        return Optional.empty();
+    }
+
+    /** Returns this plugin's optional player permission provider. */
+    default Optional<PermissionProvider> permissionProvider() {
         return Optional.empty();
     }
 }
