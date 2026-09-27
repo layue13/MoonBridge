@@ -17,7 +17,13 @@
 - `Servers.register(ServerDefinition)` 返回所有权句柄，支持更新与注销。同名条目由原注册者拥有，不能覆盖其他插件或静态配置。同名重新注册后旧句柄失效。
 - `Players.transfer(identity, backendName)` 异步返回 `TransferResult`；`NETWORK_READY` 表示协议交接完成，不表示玩法数据加载完成。通过插件上下文调用时，完成通知也被转移到 I/O 线程之外。
 
-插件先自行完成岛屿加载或实例唤醒，再调用转服。发现只是注册后端的一种来源，见[发现插件](discovery.md)。
+插件先自行完成岛屿加载或实例唤醒，再调用转服。动态后端可通过[后端控制通道](backend-channel-design.md)注册。
+
+### 后端控制消息
+
+`PluginContext.backendChannels()` 让代理插件与已注册的后端实例双向通信。后端侧使用独立的 Java 8 `backend-channel-client` SDK，不依赖玩家在线。代理插件在 `onLoad` 或 `onEnable` 调用 `subscribe("命名空间:操作", handler)`；同一通道只允许一个处理器，停用时自动撤销。处理器收到的 `BackendMessage` 含已认证的实例身份和连接代次，返回 `CompletionStage<byte[]>` 作为请求响应。
+
+`send(backendName, channel, payload)` 返回 `SENT`、`NOT_CONNECTED` 或 `BACKPRESSURED`；`SENT` 只表示消息写入控制连接。`request(...)` 在五秒内等待后端处理结果，断线、无处理器或超时会异常完成。负载在提交时复制，单条最多 64 KiB；回调在有界工作池运行，不应同步等待数据库或网络任务。配置与交付边界见[后端控制通道](backend-channel-design.md)。
 
 ### 消息与主动断开
 

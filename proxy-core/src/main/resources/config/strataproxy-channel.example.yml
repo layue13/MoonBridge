@@ -1,0 +1,24 @@
+# Example backend control channel. Replace the secret before use.
+listen: "127.0.0.1:25577"
+authentication: OFFLINE
+backends: []
+plugins:
+  directory: "../plugins"
+  enabled: {}
+backendChannel:
+  listen: "127.0.0.1:28081"
+  leaseSeconds: 30
+  maxConnections: 128
+  clients:
+    island-a:
+      backendName: "island-a"
+      keyId: "primary"
+      secret: "replace-with-a-random-secret-of-32-bytes-or-more"
+      allowedHosts: ["127.0.0.1"]
+      allowedNamespaces: ["islands"]
+    island-b:
+      backendName: "island-b"
+      keyId: "primary"
+      secret: "replace-with-another-random-secret-of-32-bytes"
+      allowedHosts: ["127.0.0.1"]
+      allowedNamespaces: ["islands"]

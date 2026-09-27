@@ -252,6 +252,37 @@ final class ProxyConfigurationTest {
         }
     }
 
+    @Test
+    void loadsBackendControlCredentialsAndRejectsMissingNamespace() throws Exception {
+        Path config = Files.createTempFile("strataproxy-backend-channel", ".yml");
+        try {
+            String yaml = """
+                    listen: "127.0.0.1:25577"
+                    authentication: OFFLINE
+                    backends: []
+                    backendChannel:
+                      listen: "127.0.0.1:28081"
+                      clients:
+                        island-a:
+                          backendName: island-a
+                          keyId: primary
+                          secret: "test-secret-at-least-thirty-two-bytes-long"
+                          allowedHosts: ["127.0.0.1"]
+                          allowedNamespaces: [islands]
+                    """;
+            Files.writeString(config, yaml);
+            var channel = new ProxyConfigurationLoader().load(config).backendChannel();
+            assertEquals(28081, channel.listenAddress().getPort());
+            assertEquals("island-a", channel.clients().get("island-a").backendName());
+            assertEquals(java.util.Set.of("islands"), channel.clients().get("island-a").allowedNamespaces());
+            Files.writeString(config, yaml.replace("allowedNamespaces: [islands]", "allowedNamespaces: []"));
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
     private static void writePng(Path destination, int width, int height) throws Exception {
         var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         ImageIO.write(image, "PNG", destination.toFile());

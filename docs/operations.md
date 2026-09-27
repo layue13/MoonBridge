@@ -4,7 +4,7 @@
 
 ## 配置和启动
 
-默认配置模板为 [`strataproxy.yml`](../proxy-core/src/main/resources/config/strataproxy.yml)。发行包将配置放在 `config/`，插件 JAR 放在 `plugins/`。相对 `plugins.directory` 从所选配置文件所在目录解析；`plugins.enabled` 以插件实现类全名为键，空映射不启用外部插件。插件可用设置由各插件在启动时校验。
+默认配置模板为 [`strataproxy.yml`](../proxy-core/src/main/resources/config/strataproxy.yml)。发行包将示例配置放在 `config/`；自有插件 JAR 可放在 `plugins.directory` 指向的目录。相对 `plugins.directory` 从所选配置文件所在目录解析；`plugins.enabled` 以插件实现类全名为键，空映射不启用外部插件。插件可用设置由各插件在启动时校验。
 
 本地安装发行包并启动：
 
@@ -42,9 +42,11 @@ status:
 
 ## 可选后端发现
 
-DNS 示例配置见 [`strataproxy-dns.example.yml`](../proxy-core/src/main/resources/config/strataproxy-dns.example.yml)。它将静态 `backends` 设为空，并通过 `plugins.enabled` 启用 DNS 插件，设置 DNS 主机名、端口、名称前缀和刷新周期。DNS 查找失败暂时保留旧地址；连续三次失败后移除过期地址。DNS 查询明确返回地址族无记录时，该族地址会按解析结果更新。`localhost` 使用系统回环地址解析；普通主机名由插件自己的解析器查询，不依赖 JVM 的全局地址缓存。
+后端控制通道示例见 [`strataproxy-channel.example.yml`](../proxy-core/src/main/resources/config/strataproxy-channel.example.yml)，使用独立监听端口接收实例注册、心跳和双向消息；使用方法与限制见[后端控制通道](backend-channel-design.md)。
 
-Agent 示例见[发现插件](discovery.md)和 [`AgentDiscoveryPlugin`](../plugins/agent-discovery/src/main/java/dev/strataproxy/plugins/agent/AgentDiscoveryPlugin.java)。启用其 HTTP 注册监听前，应在受控网络中配置随机共享密钥，并按插件的端口、并发和租约约束部署。代理核心没有内置云实例发现或健康探测。
+Docker 容器间的监听、服务名和地址配置见[Docker 部署](backend-channel-design.md#docker-部署)；`sh smoke/container-channel.sh` 可运行跨容器烟测。
+
+控制通道默认关闭。启用后，后端实例通过独立 TCP 连接认证和注册；代理不提供 DNS 发现或 HTTP 注册。代理核心没有内置云实例发现或健康探测。
 
 玩家准入事件 API、检查顺序与 Ban 插件边界见[插件接入说明](plugins.md)。连接准入拒绝发生在 Minecraft 协议开始前，因此没有 Login Disconnect 可供显示；玩家准入发生在身份解析后。`ONLINE_BUNGEE` 仍由核心完成会话验证后才发出玩家事件，离线模式的身份由客户端提供且 `authenticated` 为 false。会话通知不保证 Forge 或玩法世界就绪，也不能用于可靠审计或计费。
 
@@ -56,14 +58,14 @@ Agent 示例见[发现插件](discovery.md)和 [`AgentDiscoveryPlugin`](../plugi
 .\gradlew.bat check
 ```
 
-该任务包含插件 API、核心、DNS/Agent 插件测试，并在核心 `check` 中依赖安装发行包后的帮助、版本及配置校验烟测。详细烟测、性能测量方法与历史记录见[验证方法](testing.md)。
+该任务包含插件 API、Java 8 后端 SDK 和核心测试，并在核心 `check` 中依赖安装发行包后的帮助、版本及配置校验烟测。详细烟测、性能测量方法与历史记录见[验证方法](testing.md)。
 
 现有测试可用于定位行为范围：
 
 - 登录、认证和协议：`proxy-core/src/test/java/dev/strataproxy/core/auth/` 与 `proxy-core/src/test/java/dev/strataproxy/core/protocol/`
 - 会话、断开、转服与缓冲：`proxy-core/src/test/java/dev/strataproxy/core/session/`，重点包括 `SessionTransferTest`、`SessionTransferDispatchTest`、`TransferFrameBufferTest`
 - 插件生命周期、访问检查和 API：`proxy-core/src/test/java/dev/strataproxy/core/plugin/PluginHostTest.java`、`proxy-core/src/test/java/dev/strataproxy/core/session/ProxySessionListenerTest.java`、`proxy-core/src/test/java/dev/strataproxy/app/ProxyConfigurationTest.java` 与 `proxy-plugin-api/src/test/`
-- 发现器：`plugins/dns-discovery/src/test/` 与 `plugins/agent-discovery/src/test/`
+- 控制通道：`proxy-core/src/test/java/dev/strataproxy/core/control/` 与 `backend-channel-client/src/test/`
 
 仓库另有本地 Uranium 协议探针和 Prism Forge 客户端记录，见 [`smoke/results`](../smoke/results/2026-09-25-local-uranium.md)、[转服记录](../smoke/results/2026-09-25-local-uranium-transfer.md) 和 [真实客户端记录](../smoke/results/2026-09-25-prism-forge-client.md)。这些记录支持其明确写出的单机环境、软件版本和探针路径。已知也出现过真实 Forge 客户端转服候选后端登录停滞，见[调查记录](../smoke/results/2026-09-26-uranium-login-stalls.md)；已有成功样例不构成稳定性或生产验收。
 

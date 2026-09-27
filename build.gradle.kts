@@ -10,10 +10,10 @@ allprojects {
 
 tasks.register("check") {
     group = "verification"
-    dependsOn(":proxy-plugin-api:check", ":proxy-core:check", ":dns-discovery:check", ":agent-discovery:check")
+    dependsOn(":proxy-plugin-api:check", ":backend-channel-client:check", ":proxy-core:check")
 }
 
 tasks.register("publish") {
     group = "publishing"
-    dependsOn(":proxy-plugin-api:publish")
+    dependsOn(":proxy-plugin-api:publish", ":backend-channel-client:publish")
 }

@@ -1,6 +1,7 @@
 package dev.strataproxy.app;
 
 import dev.strataproxy.core.backend.InMemoryBackendCatalog;
+import dev.strataproxy.core.control.BackendControlService;
 import dev.strataproxy.core.auth.MojangSessionVerifier;
 import dev.strataproxy.core.plugin.PluginHost;
 import dev.strataproxy.core.session.ProxySessionListener;
@@ -81,11 +82,16 @@ public final class ProxyMain {
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
         listener.setServerListStatus(serverListStatus);
-        try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout)) {
+        try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout);
+             var control = configuration.backendChannel() == null ? null
+                     : new BackendControlService(configuration.backendChannel(), catalog,
+                     plugins::dispatchBackendMessage)) {
+            if (control != null) plugins.setBackendChannelTransport(control);
             listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
+            if (control != null) control.start();
             listener.setEvents(plugins, eventTimeout);
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
@@ -97,9 +103,10 @@ public final class ProxyMain {
                     listener.close().toCompletableFuture().join();
                 } finally {
                     try {
-                        plugins.close();
+                        if (control != null) control.close();
                     } finally {
-                        if (verifierWorkers != null) verifierWorkers.shutdownNow();
+                        try { plugins.close(); }
+                        finally { if (verifierWorkers != null) verifierWorkers.shutdownNow(); }
                     }
                 }
             }, "strataproxy-shutdown");

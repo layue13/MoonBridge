@@ -4,12 +4,9 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
 import socket
 import sys
 import time
-import urllib.parse
-import urllib.request
 import uuid
 
 
@@ -179,50 +176,70 @@ def probe(peer, value):
         raise AssertionError(f"PLAY echo mismatch: {received!r} != {expected!r}")
 
 
-def agent_request(host, secret, agent_id, fields):
-    body = urllib.parse.urlencode(fields).encode("utf-8")
-    timestamp = str(int(time.time()))
-    nonce = secrets.token_hex(16)
-    canonical = b"POST\n/registration\n" + timestamp.encode() + b"\n" + nonce.encode() \
-        + b"\n" + agent_id.encode() + b"\n" + body
-    signature = hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
-    request = urllib.request.Request(f"http://{host}:28080/registration", data=body,
-                                     headers={"X-Agent-Id": agent_id, "X-Timestamp": timestamp,
-                                              "X-Nonce": nonce, "X-Signature": signature}, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return response.status
+def control_frame(peer, body):
+    peer.sendall(len(body).to_bytes(4, "big") + body)
+
+
+def read_control_frame(peer):
+    length = int.from_bytes(read_exact(peer, 4), "big")
+    if not 1 <= length <= 66 * 1024:
+        raise ValueError(f"invalid control frame length {length}")
+    return read_exact(peer, length)
+
+
+def control_string(value):
+    encoded = value.encode("utf-8")
+    return len(encoded).to_bytes(2, "big") + encoded
+
+
+def control_register(host, backend_host, secret):
+    peer = connect(host, 28081)
+    try:
+        hello = read_control_frame(peer)
+        if len(hello) != 37 or hello[0] != 1 or int.from_bytes(hello[1:5], "big") != 1:
+            raise ValueError("invalid control HELLO")
+        fields = ("container-network-smoke", "remote", f"tcp://{backend_host}:25565",
+                  str(uuid.uuid4()), "primary")
+        canonical = b"".join(control_string(value) for value in fields)
+        signature = hmac.new(secret.encode("utf-8"), hello[5:] + canonical, hashlib.sha256).digest()
+        control_frame(peer, b"\x02" + canonical + signature)
+        registered = read_control_frame(peer)
+        if len(registered) != 9 or registered[0] != 3 or int.from_bytes(registered[1:], "big") < 1:
+            raise ValueError("control registration was not accepted")
+        return peer
+    except BaseException:
+        peer.close()
+        raise
 
 
 def client(mode, host, backend_host):
     wait_online(host, 0)
-    if mode == "agent":
-        secret = os.environ["STRATAPROXY_AGENT_SECRET"]
-        generation = str(uuid.uuid4())
-        agent_id = "container-network-smoke"
-        status = agent_request(host, secret, agent_id, {
-            "action": "register", "generation": generation, "name": "remote",
-            "address": f"tcp://{backend_host}:25565", "leaseSeconds": "30"})
-        if status != 201:
-            raise AssertionError(f"agent registration returned {status}")
-    with wait_login(host) as peer:
-        probe(peer, 42)
-        if mode == "agent":
-            status = agent_request(host, secret, agent_id,
-                                   {"action": "unregister", "generation": generation})
-            if status != 204:
-                raise AssertionError(f"agent unregister returned {status}")
-            wait_online(host, 1)
-            probe(peer, 43)
+    control = None
+    if mode == "control":
+        control = control_register(host, backend_host, os.environ["STRATAPROXY_CHANNEL_SECRET"])
+    try:
+        with wait_login(host) as peer:
+            probe(peer, 42)
+            if mode == "control":
+                control_frame(control, b"\x06")
+                control.close()
+                control = None
+            if mode == "control":
+                wait_online(host, 1)
+                probe(peer, 43)
+    finally:
+        if control is not None:
+            control.close()
     wait_online(host, 0)
-    print(f"CLIENT_OK mode={mode} backend={backend_host} login=1 play_probes={2 if mode == 'agent' else 1}",
+    print(f"CLIENT_OK mode={mode} backend={backend_host} login=1 play_probes={2 if mode == 'control' else 1}",
           flush=True)
 
 
 if __name__ == "__main__":
-    match sys.argv[1:]:
-        case ["backend", probes]:
-            backend(int(probes))
-        case ["client", mode, host, backend_host]:
-            client(mode, host, backend_host)
-        case _:
-            raise SystemExit("usage: container-network.py backend <probes> | client <static|dns|agent> <proxy> <backend>")
+    args = sys.argv[1:]
+    if len(args) == 2 and args[0] == "backend":
+        backend(int(args[1]))
+    elif len(args) == 4 and args[0] == "client" and args[1] in ("static", "control"):
+        client(args[1], args[2], args[3])
+    else:
+        raise SystemExit("usage: container-network.py backend <probes> | client <static|control> <proxy> <backend>")

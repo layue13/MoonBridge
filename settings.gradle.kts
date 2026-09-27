@@ -22,9 +22,5 @@ rootProject.name = "strataproxy"
 include(
     "proxy-core",
     "proxy-plugin-api",
-    "dns-discovery",
-    "agent-discovery",
+    "backend-channel-client",
 )
-
-project(":dns-discovery").projectDir = file("plugins/dns-discovery")
-project(":agent-discovery").projectDir = file("plugins/agent-discovery")
