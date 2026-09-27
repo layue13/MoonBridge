@@ -102,6 +102,8 @@ Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目�
 
 代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy-core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。Channel registration v3 将代理启动 epoch 和 backend registration epoch 同时交给后端。代理用该 backend client secret 为发往该 backendName 的 legacy forwarding handshake 生成短时 HMAC 会话证明；证明绑定两端当前 epoch、backendName、UUID、connectionId、一次性 nonce 和到期时间。后端 `MoonBridgeBackend` 校验它并把会话绑定到实际 Bukkit Player 登录对象。两端身份或 secret 不匹配、registration 未完成或 epoch 已变化时，`BukkitSessionService.find(player)` 返回空值。证明不代表任何 AetherShard 操作。
 
+在 `OFFLINE` 代理模式中，只有显式配置了该 backend 的 session-binding secret 时，代理才会在初始连接或转服时转发由代理派生的 offline UUID 和会话证明；这证明代理连接身份，不表示 Mojang 已认证。没有配置 secret 的 offline backend 仍接收原始握手。静态 backend 或尚未获得正数 registration epoch 的目标不会收到会话证明。
+
 实例的游戏地址必须是代理实际可达的 `tcp://host:port`。Docker 中使用容器服务名，容器间不要使用 `127.0.0.1`。仅将玩家端口公开，控制端口放在私有网络。不要把真实凭据写入镜像或提交到仓库。
 
 HMAC 挑战认证本身不加密链路；跨机器使用私有加密链路或可信 TLS 终止器。每个实例配置独立的实例 ID、后端名称和密钥；重复认证同一实例会接管旧连接，旧连接的迟到回复不能影响新连接。

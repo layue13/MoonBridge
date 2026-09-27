@@ -3,9 +3,9 @@ package dev.moonbridge.api;
 import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.permission.Permissions;
 import dev.moonbridge.messaging.Messaging;
-import java.util.Map;
-import java.nio.file.Path;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 
