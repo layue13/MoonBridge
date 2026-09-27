@@ -6,7 +6,7 @@ plugins {
 val releaseVersion = providers.gradleProperty("releaseVersion").orElse("0.1.0-SNAPSHOT").get()
 
 allprojects {
-    group = "uk.potatolab"
+    group = "uk.potatolab.moonbridge"
     version = releaseVersion
 }
 

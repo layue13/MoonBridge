@@ -16,7 +16,7 @@ Maven 发布需要 Gitea Actions secrets `MAVEN_USER` 和 `MAVEN_PASSWORD`。验
 
 ## 构件
 
-Maven 坐标统一使用 group `uk.potatolab` 和 CI 所报版本：
+Maven 坐标统一使用 group `uk.potatolab.moonbridge` 和 CI 所报版本：
 
 | Artifact ID | 用途 |
 | --- | --- |
@@ -37,13 +37,13 @@ repositories {
 }
 
 dependencies {
-    compileOnly("uk.potatolab:backend-bukkit-api:<published-version>")
+    compileOnly("uk.potatolab.moonbridge:backend-bukkit-api:<published-version>")
 }
 ```
 
 ```xml
 <dependency>
-  <groupId>uk.potatolab</groupId>
+  <groupId>uk.potatolab.moonbridge</groupId>
   <artifactId>backend-bukkit-api</artifactId>
   <version>&lt;published-version&gt;</version>
   <scope>provided</scope>

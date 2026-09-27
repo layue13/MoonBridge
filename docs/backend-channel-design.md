@@ -33,7 +33,7 @@ flowchart LR
 depend: [MoonBridgeBackend]
 ```
 
-消费者依赖独立的 `uk.potatolab:backend-bukkit-api`，它传递依赖平台无关的 `messaging-api`。源码默认 `0.1.0-SNAPSHOT` 是本地开发版本；使用已发布构件时，必须将示例中的 `<published-version>` 替换为 CI 成功发布的准确不可变版本。`backend-bukkit` 是部署到服务器的宿主实现，`backend-channel-client` 是其他平台实现宿主时使用的传输 SDK，普通业务插件不依赖它们。发布版本及六个构件见[发布与依赖版本](publishing.md)。
+消费者依赖独立的 `uk.potatolab.moonbridge:backend-bukkit-api`，它传递依赖平台无关的 `messaging-api`。源码默认 `0.1.0-SNAPSHOT` 是本地开发版本；使用已发布构件时，必须将示例中的 `<published-version>` 替换为 CI 成功发布的准确不可变版本。`backend-bukkit` 是部署到服务器的宿主实现，`backend-channel-client` 是其他平台实现宿主时使用的传输 SDK，普通业务插件不依赖它们。发布版本及六个构件见[发布与依赖版本](publishing.md)。
 
 Gradle 示例（Bukkit API 仍由业务插件按目标服务器版本自行声明）：
 
@@ -42,7 +42,7 @@ repositories {
     maven("https://git.nest.potatolab.uk:8443/api/packages/layue13/maven")
 }
 dependencies {
-    compileOnly("uk.potatolab:backend-bukkit-api:<published-version>")
+    compileOnly("uk.potatolab.moonbridge:backend-bukkit-api:<published-version>")
 }
 ```
 
