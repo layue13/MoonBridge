@@ -1,63 +1,103 @@
-# 后端控制通道
+# 后端 Channel 消息服务
 
-控制通道已经提供第一版实现：每个后端实例主动连接代理的独立端口，在没有在线玩家时注册，并与代理插件双向交换消息。它不使用 Minecraft PLAY 插件消息，也不使用 HTTP 注册或 DNS 发现。
+业务插件通过命名 channel 与 proxy 或指定 backend 通信。每个后端由一个宿主持有认证控制连接，多个插件共享；proxy 内置路由，后端之间通信不需要另写代理转发插件，也不依赖在线玩家。
 
-## 组成与部署
+模型推导、失败语义及验收条件见 [设计契约](channel-messaging-v2.md)。消息服务与 Minecraft PLAY 转发独立；现有后端注册、心跳租约和游戏地址目录继续由控制服务维护。
 
 ```mermaid
 flowchart LR
-    BP[后端插件] --> SDK[Java 8 后端 SDK]
-    SDK -->|每实例一条控制连接| C[代理控制服务]
-    C --> R[后端目录]
-    C --> D[有界消息派发]
-    D --> PP[代理插件 API]
-    P[玩家连接] -->|独立的游戏链路| R
+    A[Backend A 业务插件] <--> HA[共享消息宿主]
+    HA <-->|单条认证连接| R[Proxy 内置路由]
+    P[Proxy 业务插件] <--> R
+    R <-->|单条认证连接| HB[共享消息宿主]
+    HB <--> B[Backend B 业务插件]
 ```
 
-代理在 `backendChannel.listen` 启动第二个监听器。每个实例用独立的 `instanceId`、`backendName`、凭据和游戏端口注册；同一 IP 可以承载多个不同端口的实例。代理侧不需要为每个实例启动单独的插件或 HTTP 端点。控制通道只创建动态目录条目，不能覆盖静态后端或其他实例拥有的名称。
+## 参与者、Channel 与消息
 
-示例配置见 [`strataproxy-channel.example.yml`](../proxy-core/src/main/resources/config/strataproxy-channel.example.yml)。`clients` 中每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制它可广告的游戏主机名或 IP，`allowedNamespaces` 限制它可以发往代理插件的消息命名空间。后端注册地址必须是代理实际可达的 `tcp://host:port`；只有代理与后端同机时，才能使用 `127.0.0.1` 作为游戏地址。不要把示例密钥用于实际部署。
+- `Endpoint.proxy()`、`Endpoint.backend("island-b")` 表示目标节点。
+- `islands:control` 这样的 channel 表示业务域及权限边界；目标 backend 名称不编码进 channel。
+- `Message` 包含 UUID `id`、`kind`、`channel`、认证 `source`、`target`、`replyTo` 和复制后的二进制 `payload`。普通调用由框架生成这些元数据；业务消息类型与数据版本由 payload 表达。
+- 通知使用 `subscribe`，同一节点同一 channel 可有多个订阅者。请求使用 `onRequest`，同一节点同一 channel 只能有一个处理者；重复注册会失败。
+- `request` 返回完整回复消息。回复有自己的 `id`，`replyTo` 等于请求的 `id`；经 proxy 转发保持原始消息身份。来源由认证连接确定，不能相信 payload 中自称的发送者。
 
-后端插件只依赖 `backend-channel-client`，该模块按 Java 8 字节码编译，不依赖 JDK 25 的 `proxy-plugin-api` 或代理核心。创建一个 `BackendChannelClient` 后，它会连接、注册、发送心跳并在断线后重连。构造器中的 `generation` 应在进程启动时生成一次 UUID，重连期间保持不变。
+后端共享一个认证主体，代理不能独立认证其中每个业务插件。本地插件 owner 用于生命周期清理，不是新的跨进程安全身份。连接代次留在传输实现中。
 
-### Docker 部署
+## 后端插件接入
 
-代理容器运行 JDK 25，后端容器按服务端要求运行 Java 8；两者加入同一个私有 Docker 网络。代理配置中的 `listen` 和 `backendChannel.listen` 在容器内绑定 `0.0.0.0`，分别监听玩家端口和控制端口。仅将玩家端口发布到宿主机；控制端口只需在容器网络内可达。后端 SDK 的代理地址填 Docker 网络中的代理服务名（例如 `proxy:28081`），游戏地址填代理可达的后端容器名和实际端口（例如 `tcp://island-a:25565`）。`allowedHosts` 应列出这个游戏地址的主机名。这里的容器 DNS 只用于连接已配置的服务名，不承担后端发现或注册。
+在 Bukkit/Uranium 后端安装一次 `backend-channel-bukkit` 生成的 `strataproxy-backend-channel-bukkit` JAR，插件名为 `StrataProxyChannels`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
 
-每个后端实例使用独立的 `instanceId`、`backendName`、游戏地址和密钥；同一台宿主机上的不同容器不能把 `127.0.0.1` 当作彼此的地址。不要把真实密钥写入镜像或提交到仓库；启动时挂载由部署系统生成的代理配置，并向后端插件注入对应密钥。跨宿主机部署还需要私有加密链路或 TLS 终止器。可运行 `sh smoke/container-channel.sh`，在 Docker bridge 中验证注册、登录、注销和已有玩家连接继续转发。
+消费者 `plugin.yml` 声明：
+
+```yaml
+depend: [StrataProxyChannels]
+```
+
+消费者仅将 `uk.potatolab:backend-channel-bukkit` 作为 `compileOnly` / `provided` 依赖，不将 API、SDK 或宿主实现重新打包进自己的 JAR，确保各插件使用同一服务类。
 
 ```java
-BackendChannelClient channel = new BackendChannelClient(
-    "127.0.0.1", 28081, "island-a", "island-a", "tcp://127.0.0.1:25565",
-    UUID.randomUUID().toString(), "primary", secretBytes);
-channel.registerHandler("islands:echo", payload ->
-    CompletableFuture.completedFuture(payload));
-// 服务端插件关闭时调用 channel.close()。
+BukkitMessagingService service = getServer().getServicesManager()
+    .load(BukkitMessagingService.class);
+Messaging messaging = service.forPlugin(this);
+MessageChannel channel = messaging.channel("islands:control");
+
+channel.subscribe(message -> handleNotice(message));
+channel.onRequest(message -> CompletableFuture.completedFuture(query(message.payload())));
+
+channel.send(Endpoint.proxy(), noticeBytes);
+channel.send(Endpoint.backend("island-b"), noticeBytes);
+channel.request(Endpoint.backend("island-b"), queryBytes, Duration.ofSeconds(3))
+    .thenAccept(reply -> logReply(reply.id(), reply.replyTo(), reply.payload()));
 ```
 
-代理插件通过 `PluginContext.backendChannels()` 使用通道。处理器在 `onLoad` 或 `onEnable` 注册，同一通道只能有一个处理器；插件关闭时自动撤销。`BackendMessage` 含代理认证过的 `backendName`、`instanceId` 和连接代次，处理器应使用这些字段判断来源，不应信任负载里自称的身份。
+宿主在游戏主线程调用通知/请求处理器；业务应快速返回，耗时操作返回异步 stage。不要在游戏主线程对网络 future 调用 `get` / `join`。Future 的后续回调不保证在游戏主线程，操作 Bukkit 游戏对象前应显式安排主线程任务。
+
+`forPlugin` 对同一个启用中的插件返回同一 scope。消费者停用时，宿主自动关闭它的 scope，撤销注册并结束未决调用；其他插件继续工作。宿主停用则关闭唯一的连接。需要提前停止服务时，也可主动 `messaging.close()`。
+
+非 Bukkit 宿主可以创建一次 Java 8 `BackendChannelClient`，通过 `client.messaging(owner, executor)` 给各插件提供 scope，并负责调用 scope/client 的 `close`。普通业务插件不持有凭据或直接构造客户端。
+
+## Proxy 插件接入
 
 ```java
-context.backendChannels().subscribe("islands:prepare", message ->
-    prepare(message).thenApply(ignored -> new byte[0]));
-context.backendChannels().send("island-a", "islands:notice", bytes);
-context.backendChannels().request("island-a", "islands:echo", bytes);
+MessageChannel channel = context.messaging().channel("islands:control");
+channel.onRequest(message -> prepare(message.payload()));
+channel.subscribe(message -> audit(message.id(), message.source()));
+channel.send(Endpoint.backend("island-a"), bytes);
+channel.request(Endpoint.backend("island-b"), bytes);
 ```
 
-## 注册、断线与安全
+Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目处于开发阶段，旧 `backendChannels()`、裸字节处理器及直接客户端消息方法已经移除；两端插件统一使用 `messaging()` API。
 
-代理先发送协议版本和随机挑战。后端以实例 ID、名称、游戏地址、启动代次、密钥 ID 和覆盖这些字段的 HMAC-SHA256 签名注册；验证成功且目录写入完成后，代理返回连接代次。认证失败、名称冲突或广告主机不在允许列表时，不会创建目录条目。重复连接同一实例会接管旧连接，旧连接的回调和清理不能修改新条目。
+## 交付、发布与故障
 
-SDK 默认每 10 秒发一次心跳，代理默认租约为 30 秒，可在配置中调整。意外断线时，消息调用立即失败，目录条目保留到租约到期；期间玩家连接仍可能尝试该游戏地址。重连并重新认证后恢复消息通道。正常关闭会发送 `GOODBYE` 并立即注销。目录撤销不会强制踢掉已经在该服的玩家。
+`send` 是定点通知，其 `SendReceipt` 含消息 ID。`ACCEPTED` 只表示目标节点的消息服务接受了有界处理任务，不表示业务执行完成；没有订阅者、目标断连、过载和权限拒绝分别为 `NO_SUBSCRIBER`、`NOT_CONNECTED`、`BACKPRESSURED`、`REJECTED`。`TIMED_OUT` 表示未及时收到回执，`FAILED` 表示其他故障，这两者均不能证明业务尚未执行。
 
-控制协议本身没有加密。跨机器部署应把控制监听器放在私有加密链路后，或使用可信 TLS 终止器；HMAC 不能防止窃听。当前每个实例配置一个密钥 ID 和密钥，轮换需要协调更新配置与客户端。代理对未认证连接设握手期限，并限制连接数、帧长、每连接队列、在途请求和入站消息速率。
+`request` 是一对一请求。超时从提交时开始，覆盖排队、传输和等待回复；默认 5 秒，最长 60 秒。无处理器、超时、断线、权限拒绝和处理失败有可区分的错误。过期的排队请求不能恢复后再发出。
 
-## 消息语义
+`publish(payload)` 面向 proxy 与当前有接收权限的在线 backend，包括发布者自身；节点按当时的本地订阅者分发。返回结果按候选节点列出投递状态，也会包含 `NO_SUBSCRIBER`。多节点投递不是原子事务，部分节点可能接受、部分失败。首版按在线连接扇出，避免维护远端订阅目录及其重连同步状态。一次发布最多 256 个候选节点（包含 proxy）；超过时在任何投递前明确拒绝，不截断结果。定点 `send` / `request` 不受此发布上限影响。
 
-第一版支持单向 `send` 和带回复的 `request`。消息是二进制负载，最大 64 KiB；代理每连接最多排队 1 MiB 或 128 条出站消息、128 个在途请求，默认请求期限 5 秒。入站处理器使用独立于玩家准入和命令的有界工作池。代理 `send` 返回 `SENT` 只说明写入控制连接，不代表后端插件已处理；断线、过载和无处理器分别有明确失败结果。后端 SDK 也限制在途请求和处理器队列。
+消息不离线保存，断线不自动重放。超时或断线不能证明远端没有执行；需要重试的业务应有自己的稳定幂等键。UUID 提供身份和追踪能力，不承诺 exactly-once。多个并发请求可以乱序回复，框架根据关联信息匹配。
 
-控制通道不保存离线消息，不保证断线前的请求是否已被远端执行，也不跨连接代次自动重放。业务重试需要自己的幂等键；可靠保存的玩法数据仍应写入业务存储。消息收发不进入普通 PLAY 转发路径。
+## 配置与部署
+
+代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [strataproxy-channel.example.yml](../proxy-core/src/main/resources/config/strataproxy-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。
+
+实例的游戏地址必须是代理实际可达的 `tcp://host:port`。Docker 中使用容器服务名，容器间不要使用 `127.0.0.1`。仅将玩家端口公开，控制端口放在私有网络。不要把真实凭据写入镜像或提交到仓库。
+
+HMAC 挑战认证本身不加密链路；跨机器使用私有加密链路或可信 TLS 终止器。每个实例配置独立的实例 ID、后端名称和密钥；重复认证同一实例会接管旧连接，旧连接的迟到回复不能影响新连接。
+
+协议已升级为版本 2，proxy 与后端宿主必须一起升级；旧协议和 Java API 已移除，版本 1 连接会明确拒绝。关闭时在有限等待内尝试发送注销帧，代理收到后立即注销目录；若链路阻塞或意外断线，则保留到租约过期，不强制关闭已经存在的玩家游戏连接。
 
 ## 验证范围
 
-自动化测试覆盖零玩家通信、同 IP 不同端口注册、双向请求、无处理器响应、无效凭据、旧连接接管和意外断线后租约过期。Java 8 SDK 已通过 Java 8 编译；真实 Forge/Uranium 服务端装载、跨机器加密链路和生产负载仍需在目标部署环境验证。源码入口为 [`BackendControlService`](../proxy-core/src/main/java/dev/strataproxy/core/control/BackendControlService.java)、[`BackendChannels`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/BackendChannels.java) 和 [`BackendChannelClient`](../backend-channel-client/src/main/java/dev/strataproxy/backendchannel/BackendChannelClient.java)。
+自动化验证针对 Java 8 API/宿主字节码、宿主 JAR 打包边界、真实 TCP 的零玩家双向及跨后端请求、发布、多插件关闭、并发回复关联、超时与异常帧。构建和独立 TCP 测试不能代替真实 Bukkit/Uranium 装载、玩家整合包验收或生产容量测试。
+
+本次构建、244 项回归和实际 Java 8 进程的结果见 [2026-09-27 验证记录](../smoke/results/2026-09-27-channel-messaging.md)。
+
+安装发行包的 `backend-host/` 提供可直接安装的共享宿主 JAR；`backend-client/` 提供非 Bukkit 宿主所需的 SDK、消息 API 和协议三个 JAR。运行 `:proxy-core:installDist` 后，可用实际 JDK 8 运行独立进程验收：
+
+```powershell
+.\smoke\channel-java8.ps1 -Java8Home 'C:\path\to\jdk8' -Java25Home 'C:\path\to\jdk25'
+```
+
+脚本用 JDK 25 启动本机 router，再用 JDK 8 编译并运行两个后端客户端，校验请求关联、来源与三个插件订阅者；不启动 Minecraft 玩家或 Bukkit 服务端。

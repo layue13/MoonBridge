@@ -21,9 +21,9 @@
 
 ### 后端控制消息
 
-`PluginContext.backendChannels()` 让代理插件与已注册的后端实例双向通信。后端侧使用独立的 Java 8 `backend-channel-client` SDK，不依赖玩家在线。代理插件在 `onLoad` 或 `onEnable` 调用 `subscribe("命名空间:操作", handler)`；同一通道只允许一个处理器，停用时自动撤销。处理器收到的 `BackendMessage` 含已认证的实例身份和连接代次，返回 `CompletionStage<byte[]>` 作为请求响应。
+`PluginContext.messaging().channel("命名空间:通道")` 提供与后端相同的消息 API，不依赖玩家在线。`subscribe` 注册通知订阅者，`onRequest` 注册唯一请求处理器；每个插件持有独立 scope，停用时自动撤销。处理器收到不可变 `Message`，其中包含消息 UUID、认证来源、目标和回复关联；请求处理器返回 `CompletionStage<byte[]>`，框架创建完整的回复消息。
 
-`send(backendName, channel, payload)` 返回 `SENT`、`NOT_CONNECTED` 或 `BACKPRESSURED`；`SENT` 只表示消息写入控制连接。`request(...)` 在五秒内等待后端处理结果，断线、无处理器或超时会异常完成。负载在提交时复制，单条最多 64 KiB；回调在有界工作池运行，不应同步等待数据库或网络任务。配置与交付边界见[后端控制通道](backend-channel-design.md)。
+`send(Endpoint.backend(name), payload)` 返回含消息 ID 的投递回执，`ACCEPTED` 表示目标消息服务接受处理任务；`request(...)` 返回完整回复消息，默认期限五秒；`publish` 返回各候选节点的投递结果。负载在提交时复制，单条最多 64 KiB；回调在有界工作池运行，不应同步等待数据库或网络任务。后端插件通过唯一的 Bukkit 宿主服务获取相同 API，不自行创建连接。旧 `backendChannels()` 已移除。完整配置、Java 8 宿主安装与故障语义见[后端 Channel 消息服务](backend-channel-design.md)。
 
 ### 消息与主动断开
 

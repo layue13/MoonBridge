@@ -1,0 +1,5 @@
+name: StrataProxyChannels
+main: dev.strataproxy.bukkit.StrataProxyChannelsPlugin
+version: 0.1.0
+description: Shared channel messaging service for StrataProxy backends
+load: STARTUP

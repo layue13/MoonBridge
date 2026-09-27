@@ -7,6 +7,7 @@ plugins {
 val runtimeJavaHome = System.getProperty("java.home")
 
 dependencies {
+    implementation(project(":messaging-protocol"))
     // The plugin contract is the only stable external boundary. Everything else
     // in this project remains an implementation package of the proxy core.
     api(project(":proxy-plugin-api"))
@@ -91,6 +92,15 @@ distributions {
             }
             from(project(":backend-channel-client").tasks.named("jar")) {
                 into("backend-client")
+            }
+            from(project(":messaging-api").tasks.named("jar")) {
+                into("backend-client")
+            }
+            from(project(":messaging-protocol").tasks.named("jar")) {
+                into("backend-client")
+            }
+            from(project(":backend-channel-bukkit").tasks.named("jar")) {
+                into("backend-host")
             }
         }
     }

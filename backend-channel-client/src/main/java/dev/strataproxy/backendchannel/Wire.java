@@ -7,25 +7,18 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
-/** Wire constants and codecs shared by the backend SDK and proxy. */
+/** Authentication and control-frame codecs for the backend connection. Business messages use MessageCodec. */
 public final class Wire {
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
     public static final int HELLO = 1;
     public static final int REGISTER = 2;
     public static final int REGISTERED = 3;
     public static final int HEARTBEAT = 4;
     public static final int PONG = 5;
     public static final int GOODBYE = 6;
-    public static final int MESSAGE = 7;
-    public static final int RESPONSE = 8;
-
-    public static final int STATUS_OK = 0;
-    public static final int STATUS_NO_HANDLER = 1;
-    public static final int STATUS_ERROR = 2;
 
     public static final int NONCE_BYTES = 32;
     public static final int MAX_FRAME_BYTES = 66 * 1024;
-    public static final int MAX_PAYLOAD_BYTES = 64 * 1024;
     public static final int MAX_STRING_BYTES = 1024;
 
     private Wire() { }
@@ -64,7 +57,7 @@ public final class Wire {
         return bounded(bytes.toByteArray());
     }
 
-    /** Canonical HMAC input after the server nonce: five unsigned-short-length-prefixed UTF-8 strings. */
+    /** Canonical HMAC input after the server nonce: five length-prefixed UTF-8 strings. */
     public static byte[] canonicalRegistration(String instanceId, String name, String address,
                                                String generation, String keyId) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -115,52 +108,6 @@ public final class Wire {
         requireEnd(in);
     }
 
-    public static byte[] message(String channel, long requestId, byte[] payload) throws IOException {
-        requirePayload(payload);
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        DataOutputStream out = new DataOutputStream(bytes);
-        out.writeByte(MESSAGE);
-        writeString(out, channel);
-        out.writeLong(requestId);
-        out.writeInt(payload.length);
-        out.write(payload);
-        return bounded(bytes.toByteArray());
-    }
-
-    public static Message decodeMessage(byte[] frame) throws IOException {
-        DataInputStream in = body(frame, MESSAGE);
-        String channel = readString(in);
-        long requestId = in.readLong();
-        if (requestId < 0) throw new IOException("negative request ID");
-        byte[] payload = readPayload(in);
-        requireEnd(in);
-        return new Message(channel, requestId, payload);
-    }
-
-    public static byte[] response(long requestId, int status, byte[] payload) throws IOException {
-        if (requestId <= 0) throw new IllegalArgumentException("requestId must be positive");
-        if (status < STATUS_OK || status > STATUS_ERROR) throw new IllegalArgumentException("invalid response status");
-        requirePayload(payload);
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        DataOutputStream out = new DataOutputStream(bytes);
-        out.writeByte(RESPONSE);
-        out.writeLong(requestId);
-        out.writeByte(status);
-        out.writeInt(payload.length);
-        out.write(payload);
-        return bounded(bytes.toByteArray());
-    }
-
-    public static Response decodeResponse(byte[] frame) throws IOException {
-        DataInputStream in = body(frame, RESPONSE);
-        long requestId = in.readLong();
-        int status = in.readUnsignedByte();
-        if (requestId <= 0 || status > STATUS_ERROR) throw new IOException("invalid response header");
-        byte[] payload = readPayload(in);
-        requireEnd(in);
-        return new Response(requestId, status, payload);
-    }
-
     static DataInputStream body(byte[] frame, int type) throws IOException {
         if (frame == null || frame.length < 1 || frame.length > MAX_FRAME_BYTES || (frame[0] & 0xff) != type) {
             throw new IOException("invalid frame type or size");
@@ -189,18 +136,6 @@ public final class Wire {
         return new String(encoded, StandardCharsets.UTF_8);
     }
 
-    private static byte[] readPayload(DataInputStream in) throws IOException {
-        int length = in.readInt();
-        if (length < 0 || length > MAX_PAYLOAD_BYTES) throw new IOException("payload length out of bounds");
-        byte[] payload = new byte[length];
-        in.readFully(payload);
-        return payload;
-    }
-
-    private static void requirePayload(byte[] payload) {
-        if (payload == null || payload.length > MAX_PAYLOAD_BYTES) throw new IllegalArgumentException("payload length out of bounds");
-    }
-
     private static void requireEnd(DataInputStream in) throws IOException {
         if (in.read() != -1) throw new IOException("trailing frame data");
     }
@@ -218,19 +153,5 @@ public final class Wire {
             this.instanceId = instanceId; this.name = name; this.address = address; this.generation = generation;
             this.keyId = keyId; this.signature = signature;
         }
-    }
-
-    public static final class Message {
-        public final String channel;
-        public final long requestId;
-        public final byte[] payload;
-        Message(String channel, long requestId, byte[] payload) { this.channel = channel; this.requestId = requestId; this.payload = payload; }
-    }
-
-    public static final class Response {
-        public final long requestId;
-        public final int status;
-        public final byte[] payload;
-        Response(long requestId, int status, byte[] payload) { this.requestId = requestId; this.status = status; this.payload = payload; }
     }
 }

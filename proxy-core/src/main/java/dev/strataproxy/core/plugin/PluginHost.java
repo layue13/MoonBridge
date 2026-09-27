@@ -1,11 +1,6 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.BackendChannelSubscription;
-import dev.strataproxy.api.BackendChannels;
-import dev.strataproxy.api.BackendMessage;
-import dev.strataproxy.api.BackendMessageHandler;
-import dev.strataproxy.api.BackendSendResult;
 import dev.strataproxy.api.MessageResult;
 import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.event.ConnectionAdmissionEvent;
@@ -16,6 +11,14 @@ import dev.strataproxy.api.event.Events;
 import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.messaging.Endpoint;
+import dev.strataproxy.messaging.Message;
+import dev.strataproxy.messaging.MessageKind;
+import dev.strataproxy.messaging.Messaging;
+import dev.strataproxy.messaging.MessagingException;
+import dev.strataproxy.messaging.PublishResult;
+import dev.strataproxy.messaging.SendResult;
+import dev.strataproxy.messaging.internal.LocalMessaging;
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.CommandHandler;
 import dev.strataproxy.api.CommandCompleter;
@@ -41,7 +44,6 @@ import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.BackendView;
 import dev.strataproxy.core.control.BackendChannelTransport;
-import dev.strataproxy.core.control.BackendNoHandlerException;
 import dev.strataproxy.core.event.EventDispatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,7 +112,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
     private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
     private final AtomicInteger pendingCompletionCount = new AtomicInteger();
-    private final ConcurrentHashMap<String, BackendHandlerRegistration> backendHandlers = new ConcurrentHashMap<>();
+    private final LocalMessaging localMessaging;
     private final ScheduledThreadPoolExecutor timer;
     private final AsyncEventDispatcher admissionEvents;
     private final AsyncEventDispatcher notificationEvents;
@@ -121,7 +123,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
-    private final Set<CompletableFuture<byte[]>> pendingBackendMessages = ConcurrentHashMap.newKeySet();
     private volatile State state = State.LOADING;
     private volatile BackendChannelTransport backendChannelTransport;
     private ScheduledFuture<?> notificationDropReporter;
@@ -196,6 +197,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 timer, namedThreads("strataproxy-plugin-admission"));
         this.notificationEvents = new AsyncEventDispatcher(eventTimeout, 1, 128,
                 timer, namedThreads("strataproxy-plugin-notification"));
+        this.localMessaging = new LocalMessaging(Endpoint.proxy(), new HostMessagingOutbound(), backendWorkers, timer);
     }
 
     /** Loads every JAR in the directory in filename order through Java's service provider mechanism. */
@@ -307,12 +309,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             for (LoadedPlugin loaded : plugins) {
                 loaded.enabled = true;
                 loaded.context.beginEventRegistration();
-                loaded.context.beginBackendChannelRegistration();
                 try {
                     loaded.plugin.onEnable();
                 } finally {
                     loaded.context.endEventRegistration();
-                    loaded.context.endBackendChannelRegistration();
                 }
             }
             freezeEventRegistrations();
@@ -371,65 +371,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         backendChannelTransport = Objects.requireNonNull(transport, "transport");
     }
 
-    /** Dispatches an authenticated request from a backend to the proxy plugin registered for its channel. */
-    public CompletionStage<byte[]> dispatchBackendMessage(BackendMessage message) {
-        Objects.requireNonNull(message, "message");
-        final BackendHandlerRegistration registration;
-        final CompletableFuture<byte[]> result = new CompletableFuture<>();
-        final ScheduledFuture<?> timeout;
-        synchronized (this) {
-            if (state != State.ENABLED) {
-                return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
-            }
-            registration = backendHandlers.get(message.channel());
-            if (registration == null || !registration.isActive()) {
-                return CompletableFuture.failedFuture(new BackendNoHandlerException(message.channel()));
-            }
-            pendingBackendMessages.add(result);
-            try {
-                timeout = timer.schedule(() -> result.completeExceptionally(
-                                new TimeoutException("Backend channel handler exceeded five seconds")),
-                        5, TimeUnit.SECONDS);
-            } catch (RuntimeException failure) {
-                pendingBackendMessages.remove(result);
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-        result.whenComplete((ignored, failure) -> {
-            timeout.cancel(false);
-            pendingBackendMessages.remove(result);
-        });
-        Runnable invocation = () -> {
-            if (result.isDone()) return;
-            if (state != State.ENABLED || !registration.isActive()
-                    || backendHandlers.get(message.channel()) != registration) {
-                result.completeExceptionally(new IllegalStateException("Backend channel handler is inactive"));
-                return;
-            }
-            try {
-                CompletionStage<byte[]> response = Objects.requireNonNull(
-                        registration.handler.handle(message), "backend message handler stage");
-                response.whenComplete((payload, failure) -> {
-                    if (failure != null) {
-                        result.completeExceptionally(failure);
-                    } else if (payload == null) {
-                        result.completeExceptionally(new IllegalStateException(
-                                "Backend message handler returned null"));
-                    } else {
-                        result.complete(payload.clone());
-                    }
-                });
-            } catch (Throwable failure) {
-                result.completeExceptionally(failure);
-            }
-        };
-        try {
-            backendWorkers.execute(invocation);
-        } catch (RejectedExecutionException overloaded) {
-            result.completeExceptionally(new PluginOverloadedException(overloaded));
-        }
-        return result;
-    }
+    /** Host-side dispatcher used by the authenticated control transport. */
+    public LocalMessaging localMessaging() { return localMessaging; }
 
     /** Returns empty when no plugin handles placement; plugin code always runs off the caller's event loop. */
     public CompletionStage<Optional<PlacementDecision>> placeInitial(PlayerView player) {
@@ -719,13 +662,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         // chain can skip the revoked subscriptions and incorrectly finish with allow().
         admissionEvents.close();
         notificationEvents.close();
+        localMessaging.close();
         if (notificationDropReporter != null) notificationDropReporter.cancel(false);
         logNotificationDrops();
         for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
-        for (LoadedPlugin loaded : plugins) loaded.context.revokeBackendChannelSubscriptions();
-        for (CompletableFuture<byte[]> request : pendingBackendMessages) {
-            request.completeExceptionally(new IllegalStateException("Plugin host closed"));
-        }
         for (PendingPlacement request : pendingPlacements) {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
@@ -756,7 +696,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         placementHandler = null;
         eventListeners = Map.of();
         eventRegistrations.clear();
-        backendHandlers.clear();
         backendChannelTransport = null;
     }
 
@@ -796,7 +735,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         LoadedPlugin loaded = new LoadedPlugin(plugin, owner, context);
         plugins.add(loaded);
         context.beginEventRegistration();
-        context.beginBackendChannelRegistration();
         try {
             plugin.onLoad(context);
         } catch (Throwable failure) {
@@ -805,7 +743,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             throw new PluginLoadException(id, failure);
         } finally {
             context.endEventRegistration();
-            context.endBackendChannelRegistration();
         }
     }
 
@@ -841,95 +778,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private void requireEventRegistrationState() {
         if (state != State.LOADING) {
             throw new IllegalStateException("Event subscriptions are only allowed during onLoad or onEnable");
-        }
-    }
-
-    private BackendChannelSubscription registerBackendHandler(
-            PluginContextImpl context, String channel, BackendMessageHandler handler) {
-        Objects.requireNonNull(channel, "channel");
-        Objects.requireNonNull(handler, "handler");
-        if (!channel.matches("[a-z0-9][a-z0-9_.-]{0,63}:[a-z0-9][a-z0-9_.-]{0,63}")) {
-            throw new IllegalArgumentException("invalid backend channel: " + channel);
-        }
-        synchronized (this) {
-            synchronized (context) {
-                context.requireBackendChannelRegistrationOpen();
-                BackendHandlerRegistration registration = new BackendHandlerRegistration(context, channel, handler);
-                if (backendHandlers.putIfAbsent(channel, registration) != null) {
-                    throw new IllegalArgumentException("Backend channel already registered: " + channel);
-                }
-                context.backendChannelSubscriptions.add(registration);
-                return registration;
-            }
-        }
-    }
-
-    private CompletionStage<BackendSendResult> sendBackendMessage(
-            PluginContextImpl context, String backendName, String channel, byte[] payload) {
-        Objects.requireNonNull(backendName, "backendName");
-        Objects.requireNonNull(channel, "channel");
-        byte[] copy = Objects.requireNonNull(payload, "payload").clone();
-        BackendChannelTransport transport;
-        synchronized (this) {
-            synchronized (context) {
-                context.requireActive();
-                if (state == State.CLOSED) return CompletableFuture.failedFuture(
-                        new IllegalStateException("Plugin host is closed"));
-                transport = backendChannelTransport;
-            }
-            if (transport == null) return CompletableFuture.failedFuture(
-                    new IllegalStateException("Backend channel transport is not available"));
-            try {
-                return Objects.requireNonNull(transport.send(backendName, channel, copy), "transport send stage");
-            } catch (Throwable failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-    }
-
-    private CompletionStage<byte[]> requestBackendMessage(
-            PluginContextImpl context, String backendName, String channel, byte[] payload) {
-        Objects.requireNonNull(backendName, "backendName");
-        Objects.requireNonNull(channel, "channel");
-        byte[] copy = Objects.requireNonNull(payload, "payload").clone();
-        BackendChannelTransport transport;
-        synchronized (this) {
-            synchronized (context) {
-                context.requireActive();
-                if (state == State.CLOSED) return CompletableFuture.failedFuture(
-                        new IllegalStateException("Plugin host is closed"));
-                transport = backendChannelTransport;
-            }
-            if (transport == null) return CompletableFuture.failedFuture(
-                    new IllegalStateException("Backend channel transport is not available"));
-            try {
-                CompletionStage<byte[]> response = Objects.requireNonNull(
-                        transport.request(backendName, channel, copy), "transport request stage");
-                CompletableFuture<byte[]> result = new CompletableFuture<>();
-                pendingBackendMessages.add(result);
-                ScheduledFuture<?> timeout;
-                try {
-                    timeout = timer.schedule(() -> result.completeExceptionally(
-                                    new TimeoutException("Backend request exceeded five seconds")),
-                            5, TimeUnit.SECONDS);
-                } catch (RuntimeException failure) {
-                    pendingBackendMessages.remove(result);
-                    return CompletableFuture.failedFuture(failure);
-                }
-                result.whenComplete((ignored, failure) -> {
-                    timeout.cancel(false);
-                    pendingBackendMessages.remove(result);
-                });
-                response.whenComplete((reply, failure) -> {
-                    if (failure != null) result.completeExceptionally(failure);
-                    else if (reply == null) result.completeExceptionally(
-                            new IllegalStateException("Backend channel transport returned null"));
-                    else result.complete(reply.clone());
-                });
-                return result;
-            } catch (Throwable failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
         }
     }
 
@@ -1003,24 +851,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
-    private final class BackendHandlerRegistration implements BackendChannelSubscription {
-        private final PluginContextImpl context;
-        private final String channel;
-        private final BackendMessageHandler handler;
-        private final AtomicBoolean active = new AtomicBoolean(true);
-
-        private BackendHandlerRegistration(PluginContextImpl context, String channel, BackendMessageHandler handler) {
-            this.context = context;
-            this.channel = channel;
-            this.handler = handler;
-        }
-
-        private boolean isActive() { return active.get() && context.active; }
-        @Override public void close() {
-            if (active.compareAndSet(true, false)) backendHandlers.remove(channel, this);
-        }
-    }
-
     private final class EventRegistration<E extends Event<R>, R>
             implements EventSubscription, AsyncEventDispatcher.EventHandler<R> {
         private final PluginContextImpl context;
@@ -1059,26 +889,24 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
     private final class PluginContextImpl implements PluginContext {
         private final BackendOwner owner;
+        private final Messaging pluginMessaging;
         private final Players pluginPlayers;
         private final PluginServers servers;
         private final Commands pluginCommands;
         private final Events pluginEvents;
-        private final BackendChannels pluginBackendChannels;
         private final Logger logger;
         private final Map<String, String> settings;
         private final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
-        private final Set<BackendHandlerRegistration> backendChannelSubscriptions = new HashSet<>();
         private volatile boolean active = true;
         private boolean eventRegistrationOpen;
-        private boolean backendChannelRegistrationOpen;
 
         private PluginContextImpl(BackendOwner owner, Map<String, String> settings) {
             this.owner = owner;
+            this.pluginMessaging = localMessaging.openScope(owner.id());
             this.pluginPlayers = new PluginPlayers(this);
             this.servers = new PluginServers(this);
             this.pluginCommands = new PluginCommands(this);
             this.pluginEvents = new PluginEvents(this);
-            this.pluginBackendChannels = new PluginBackendChannels(this);
             this.logger = LoggerFactory.getLogger("plugin." + owner.id());
             this.settings = Map.copyOf(settings);
         }
@@ -1087,14 +915,14 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         @Override public Servers servers() { return servers; }
         @Override public Commands commands() { return pluginCommands; }
         @Override public Events events() { return pluginEvents; }
-        @Override public BackendChannels backendChannels() { return pluginBackendChannels; }
+        @Override public Messaging messaging() { return pluginMessaging; }
         @Override public Logger logger() { return logger; }
         @Override public Map<String, String> settings() { return settings; }
 
         private synchronized void deactivateAndRemove() {
             active = false;
             eventRegistrationOpen = false;
-            backendChannelRegistrationOpen = false;
+            pluginMessaging.close();
             revokeEventSubscriptions();
             for (RegisteredCommand command : commands.values()) {
                 if (command.context == this) {
@@ -1103,7 +931,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                     }
                 }
             }
-            revokeBackendChannelSubscriptions();
             commands.entrySet().removeIf(entry -> entry.getValue().context == this);
             catalog.removeOwner(owner);
         }
@@ -1121,30 +948,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private synchronized void endEventRegistration() { eventRegistrationOpen = false; }
 
-        private synchronized void beginBackendChannelRegistration() {
-            if (!active) throw new IllegalStateException("Plugin context is inactive");
-            backendChannelRegistrationOpen = true;
-        }
-
-        private synchronized void endBackendChannelRegistration() { backendChannelRegistrationOpen = false; }
-
-        private synchronized void revokeBackendChannelSubscriptions() {
-            backendChannelRegistrationOpen = false;
-            backendChannelSubscriptions.forEach(BackendHandlerRegistration::close);
-            backendChannelSubscriptions.clear();
-        }
-
         private synchronized void requireEventRegistrationOpen() {
             requireActive();
             if (!eventRegistrationOpen || state != State.LOADING) {
                 throw new IllegalStateException("Event subscriptions are only allowed during onLoad or onEnable");
-            }
-        }
-
-        private synchronized void requireBackendChannelRegistrationOpen() {
-            requireActive();
-            if (!backendChannelRegistrationOpen || state != State.LOADING) {
-                throw new IllegalStateException("Backend channel subscriptions are only allowed during onLoad or onEnable");
             }
         }
 
@@ -1164,22 +971,80 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
-    private final class PluginBackendChannels implements BackendChannels {
-        private final PluginContextImpl context;
-
-        private PluginBackendChannels(PluginContextImpl context) { this.context = context; }
-
-        @Override public BackendChannelSubscription subscribe(String channel, BackendMessageHandler handler) {
-            return registerBackendHandler(context, channel, handler);
+    private final class HostMessagingOutbound implements LocalMessaging.Outbound {
+        @Override public CompletionStage<SendResult> send(Message message) {
+            if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.EVENT
+                    || message.target() == null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy message send"));
+            }
+            if (message.target().isProxy()) {
+                return CompletableFuture.completedFuture(localMessaging.receiveEvent(message));
+            }
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.completedFuture(SendResult.NOT_CONNECTED);
+            try {
+                return Objects.requireNonNull(transport.send(message), "transport send stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
         }
 
-        @Override public CompletionStage<BackendSendResult> send(String backendName, String channel, byte[] payload) {
-            return sendBackendMessage(context, backendName, channel, payload);
+        @Override public CompletionStage<Message> request(Message message, Duration timeout) {
+            if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.REQUEST
+                    || message.target() == null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy message request"));
+            }
+            if (message.target().isProxy()) return localMessaging.receiveRequest(message, timeout);
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.failedFuture(new MessagingException(
+                    MessagingException.Code.NOT_CONNECTED, "backend control transport is not available"));
+            try {
+                return Objects.requireNonNull(transport.request(message, timeout), "transport request stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
         }
 
-        @Override public CompletionStage<byte[]> request(String backendName, String channel, byte[] payload) {
-            return requestBackendMessage(context, backendName, channel, payload);
+        @Override public CompletionStage<PublishResult> publish(Message event) {
+            if (!Endpoint.proxy().equals(event.source()) || event.kind() != MessageKind.EVENT
+                    || event.target() != null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy event publication"));
+            }
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.completedFuture(new PublishResult(
+                    event.id(), Map.of(Endpoint.proxy(), localMessaging.receiveEvent(event))));
+            final CompletionStage<PublishResult> remote;
+            try {
+                remote = Objects.requireNonNull(transport.publish(event), "transport publish stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+            CompletableFuture<PublishResult> combinedResult = new CompletableFuture<>();
+            remote.whenComplete((result, failure) -> {
+                if (combinedResult.isCancelled()) return;
+                if (failure != null) {
+                    combinedResult.completeExceptionally(failure);
+                    return;
+                }
+                if (!event.id().equals(result.messageId()) || result.results().containsKey(Endpoint.proxy())) {
+                    combinedResult.completeExceptionally(new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
+                            "transport returned an invalid publish result"));
+                    return;
+                }
+                Map<Endpoint, SendResult> combined = new java.util.LinkedHashMap<>();
+                combined.put(Endpoint.proxy(), localMessaging.receiveEvent(event));
+                combined.putAll(result.results());
+                combinedResult.complete(new PublishResult(event.id(), combined));
+            });
+            combinedResult.whenComplete((ignored, failure) -> {
+                if (combinedResult.isCancelled()) remote.toCompletableFuture().cancel(false);
+            });
+            return combinedResult;
         }
+
     }
 
     private final class PluginCommands implements Commands {

@@ -155,7 +155,12 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public record Client(String backendName, String keyId, String secret, Set<String> allowedHosts,
-                         Set<String> allowedNamespaces) {
+                         Set<String> allowedNamespaces, Set<String> allowedReceiveNamespaces) {
+        public Client(String backendName, String keyId, String secret, Set<String> allowedHosts,
+                      Set<String> allowedNamespaces) {
+            this(backendName, keyId, secret, allowedHosts, allowedNamespaces, allowedNamespaces);
+        }
+
         public Client {
             if (backendName == null || backendName.isBlank())
                 throw new IllegalArgumentException("backendChannel client backendName is required");
@@ -167,9 +172,14 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             if (allowedHosts.isEmpty() || allowedHosts.stream().anyMatch(String::isBlank))
                 throw new IllegalArgumentException("backendChannel client allowedHosts must not be empty");
             allowedNamespaces = allowedNamespaces == null ? Set.of() : Set.copyOf(allowedNamespaces);
-            if (allowedNamespaces.isEmpty() || allowedNamespaces.stream()
+            if (allowedNamespaces.stream()
                     .anyMatch(namespace -> !namespace.matches("[a-z0-9][a-z0-9_.-]{0,63}")))
                 throw new IllegalArgumentException("backendChannel client allowedNamespaces is invalid");
+            allowedReceiveNamespaces = allowedReceiveNamespaces == null
+                    ? allowedNamespaces : Set.copyOf(allowedReceiveNamespaces);
+            if (allowedReceiveNamespaces.stream()
+                    .anyMatch(namespace -> !namespace.matches("[a-z0-9][a-z0-9_.-]{0,63}")))
+                throw new IllegalArgumentException("backendChannel client allowedReceiveNamespaces is invalid");
         }
     }
 

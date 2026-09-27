@@ -196,7 +196,7 @@ def control_register(host, backend_host, secret):
     peer = connect(host, 28081)
     try:
         hello = read_control_frame(peer)
-        if len(hello) != 37 or hello[0] != 1 or int.from_bytes(hello[1:5], "big") != 1:
+        if len(hello) != 37 or hello[0] != 1 or int.from_bytes(hello[1:5], "big") != 2:
             raise ValueError("invalid control HELLO")
         fields = ("container-network-smoke", "remote", f"tcp://{backend_host}:25565",
                   str(uuid.uuid4()), "primary")
