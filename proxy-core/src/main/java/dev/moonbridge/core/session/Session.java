@@ -89,6 +89,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private volatile PlayerView view;
     private BackendView selected;
     private CompletableFuture<Optional<PlacementDecision>> placementRequest;
+    private List<String> initialCandidates = List.of();
+    private int initialCandidateIndex;
+    private long initialRoutingDeadlineNanos;
     private CompletableFuture<AccessDecision> admissionRequest;
     private boolean loginDisconnectStarted;
     private volatile boolean published;
@@ -135,6 +138,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     void connectionAccepted() { resetLoginDeadline(owner.loginStageTimeout()); }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
+        if (ctx.channel() != frontend && ctx.channel() != backend) {
+            ReferenceCountUtil.release(message);
+            return;
+        }
         if (!(message instanceof ByteBuf packet)) {
             ReferenceCountUtil.release(message);
             closePair();
@@ -304,7 +311,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void beginPlacement() {
-        resetLoginDeadline(owner.placementTimeout().plusSeconds(1));
+        initialRoutingDeadlineNanos = System.nanoTime() + owner.placementTimeout().toNanos();
+        resetLoginDeadline(owner.placementTimeout());
         CompletableFuture<Optional<PlacementDecision>> request = owner.placement().apply(view).toCompletableFuture();
         placementRequest = request;
         request.whenComplete((decision, failure) -> {
@@ -345,7 +353,6 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void selectBackend(Optional<PlacementDecision> decision) {
-        BackendView backendView;
         if (decision.isPresent()) {
             if (decision.get() instanceof PlacementDecision.Reject rejected) {
                 disconnectLogin(rejected.reason());
@@ -355,73 +362,130 @@ final class Session extends ChannelInboundHandlerAdapter {
                 closePair();
                 return;
             }
-            backendView = owner.catalog().snapshot().stream()
-                    .filter(candidate -> candidate.handle().id().value().equals(selectedDecision.backendName()))
-                    .findFirst().orElse(null);
+            initialCandidates = selectedDecision.backendNames();
         } else {
-            backendView = owner.catalog().snapshot().stream().findFirst().orElse(null);
+            initialCandidates = owner.initialServers();
         }
-        if (backendView == null) {
-            disconnectLogin("No server is available.");
+        initialCandidateIndex = 0;
+        if (initialCandidates.isEmpty()) {
+            disconnectLogin("No entry servers are configured.");
             return;
         }
-        selected = backendView;
-        if (!"tcp".equalsIgnoreCase(selected.address().getScheme()) || selected.address().getHost() == null || selected.address().getPort() < 1) {
-            closePair();
+        connectNextInitialBackend();
+    }
+
+    /** Retries only before a backend has received any Minecraft handshake/login bytes. */
+    private void connectNextInitialBackend() {
+        if (closed.get() || disconnecting) return;
+        while (initialCandidateIndex < initialCandidates.size()) {
+            long remaining = initialRoutingDeadlineNanos - System.nanoTime();
+            if (remaining <= 0) {
+                disconnectLogin("Initial server routing timed out.");
+                return;
+            }
+            String name = initialCandidates.get(initialCandidateIndex++);
+            BackendView target = owner.catalog().find(new BackendId(name)).orElse(null);
+            if (target == null) continue;
+            URI address = target.address();
+            if (!"tcp".equalsIgnoreCase(address.getScheme()) || address.getHost() == null
+                    || address.getPort() < 1 || address.getPort() > 65535) continue;
+            connectInitialBackend(target, remaining);
             return;
         }
-        resetLoginDeadline(owner.loginStageTimeout());
+        disconnectLogin("No entry server could be reached.");
+    }
+
+    private void connectInitialBackend(BackendView target, long remainingNanos) {
         Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
                 .resolver(owner.backendResolver())
                 .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+                .option(ChannelOption.AUTO_READ, false)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
+                        (int) Math.max(1, Math.min(5000, TimeUnit.NANOSECONDS.toMillis(remainingNanos))))
                 .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel channel) {
                         requireSessionEventLoop(channel);
                         installCodecs(channel.pipeline());
-                        channel.pipeline().addLast("initial-session", Session.this);
+                        // Do not attach the shared Session until the attempt has won. A failed
+                        // dial's inactive/exception callbacks must not close a later connection.
                     }
                 });
-        ChannelFuture connect = bootstrap.connect(backendSocketAddress(selected.address()));
+        ChannelFuture connect;
+        try {
+            connect = bootstrap.connect(backendSocketAddress(target.address()));
+        } catch (RuntimeException failure) {
+            LOGGER.debug("Initial backend dial could not start for {} to {}", view.username(), target.address(), failure);
+            connectNextInitialBackend();
+            return;
+        }
         backend = connect.channel();
-        connect.addListener(future -> {
-            if (closed.get()) {
-                connect.channel().close();
-                return;
-            }
-            if (disconnecting) return;
-            if (!future.isSuccess()) {
-                LOGGER.debug("Backend connection failed for player {} to {}", view.username(), selected.address(),
-                        future.cause());
-                disconnectLogin("Could not connect to the selected server.");
-                return;
-            }
-            backendConnected = true;
-            LOGGER.debug("Initial backend TCP connection established for player {} to {}",
-                    view.username(), selected.address());
-            ByteBuf handshakeBody = null;
-            ByteBuf loginBody;
+        connect.addListener(ignored -> finishInitialConnection(connect, target));
+    }
+
+    private void finishInitialConnection(ChannelFuture connect, BackendView target) {
+        if (!frontend.eventLoop().inEventLoop()) {
             try {
-                handshakeBody = owner.onlineMode()
-                        ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                                (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
-                        : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
-                loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
-            } catch (RuntimeException failure) {
-                ReferenceCountUtil.release(handshakeBody);
-                disconnectLogin("Could not prepare backend login.");
-                return;
+                frontend.eventLoop().execute(() -> finishInitialConnection(connect, target));
+            } catch (RejectedExecutionException shutdown) {
+                connect.channel().close();
             }
-            backend.write(handshakeBody);
-            backend.writeAndFlush(loginBody).addListener(write -> {
-                if (write.isSuccess()) {
-                    LOGGER.debug("Initial backend login frames flushed for player {} to {}",
-                            view.username(), selected.address());
-                } else {
-                    LOGGER.debug("Initial backend login write failed for player {} to {}",
-                            view.username(), selected.address(), write.cause());
-                }
-            });
+            return;
+        }
+        if (closed.get() || disconnecting || backend != connect.channel()) {
+            connect.channel().close();
+            return;
+        }
+        if (!connect.isSuccess()) {
+            LOGGER.debug("Initial backend connection failed for player {} to {}", view.username(), target.address(),
+                    connect.cause());
+            backend = null;
+            connect.channel().close();
+            connectNextInitialBackend();
+            return;
+        }
+        BackendView current = owner.catalog().find(target.handle().id()).orElse(null);
+        if (current == null || !current.handle().equals(target.handle())
+                || !current.address().equals(target.address())) {
+            backend = null;
+            connect.channel().close();
+            connectNextInitialBackend();
+            return;
+        }
+        if (initialRoutingDeadlineNanos - System.nanoTime() <= 0) {
+            disconnectLogin("Initial server routing timed out.");
+            return;
+        }
+        selected = current;
+        backendConnected = true;
+        initialCandidates = List.of();
+        resetLoginDeadline(owner.loginStageTimeout());
+        backend.pipeline().addLast("initial-session", Session.this);
+        backend.config().setAutoRead(true);
+        LOGGER.debug("Initial backend TCP connection established for player {} to {}",
+                view.username(), selected.address());
+        ByteBuf handshakeBody = null;
+        ByteBuf loginBody;
+        try {
+            handshakeBody = owner.onlineMode()
+                    ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
+                            (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
+                    : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+            loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+        } catch (RuntimeException failure) {
+            ReferenceCountUtil.release(handshakeBody);
+            disconnectLogin("Could not prepare backend login.");
+            return;
+        }
+        backend.write(handshakeBody);
+        backend.writeAndFlush(loginBody).addListener(write -> {
+            if (write.isSuccess()) {
+                LOGGER.debug("Initial backend login frames flushed for player {} to {}",
+                        view.username(), selected.address());
+            } else {
+                LOGGER.debug("Initial backend login write failed for player {} to {}",
+                        view.username(), selected.address(), write.cause());
+                disconnectLogin("Could not start login on the selected server.");
+            }
         });
     }
 
@@ -1418,6 +1482,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void channelInactive(ChannelHandlerContext ctx) {
+        if (ctx.channel() != frontend && ctx.channel() != backend) return;
         if (!published && loginStart != null) {
             LOGGER.debug("{} channel closed during initial login for player {} with backend {}",
                     ctx.channel() == frontend ? "Client" : "Backend", loginStart.username(),
@@ -1432,6 +1497,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (ctx.channel() != frontend && ctx.channel() != backend) {
+            ctx.close();
+            return;
+        }
         LOGGER.debug("{} channel exception for player {}", ctx.channel() == frontend ? "Client" : "Backend",
                 view == null ? "<unknown>" : view.username(), cause);
         if (ctx.channel() == backend && loginDisconnectStarted) ctx.close();

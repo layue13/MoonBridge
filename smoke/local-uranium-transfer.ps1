@@ -210,6 +210,9 @@ try {
         @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
+initialRouting:
+  servers: [] # UraniumTransferPlugin owns initial placement.
+  timeoutSeconds: 15
 plugins:
   directory: "$pluginDirYaml"
   enabled:

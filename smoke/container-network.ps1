@@ -82,6 +82,8 @@ backendChannel:
 listen: "0.0.0.0:25577"
 authentication: OFFLINE
 allowOfflinePublicAccess: true
+initialRouting:
+  servers: [remote]
 plugins:
   directory: "/opt/moonbridge/plugins"
 $enabled

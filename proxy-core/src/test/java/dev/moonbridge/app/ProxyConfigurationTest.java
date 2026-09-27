@@ -120,7 +120,6 @@ final class ProxyConfigurationTest {
                     """);
             var plugins = new ProxyConfigurationLoader().load(config).plugins();
             assertEquals("extensions", plugins.directory());
-            assertEquals(15, plugins.initialPlacementTimeoutSeconds());
             assertEquals(5, plugins.eventTimeoutSeconds());
             assertEquals("_minecraft._tcp.example.net",
                     plugins.enabled().get("dev.example.DnsPlugin").get("record"));
@@ -132,21 +131,49 @@ final class ProxyConfigurationTest {
     }
 
     @Test
-    void readsAndBoundsInitialPlacementTimeout() throws Exception {
+    void readsAndBoundsInitialRoutingConfiguration() throws Exception {
         var config = Files.createTempFile("moonbridge-timeout", ".yml");
         try {
-            String prefix = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nplugins:\n"
-                    + "  directory: plugins\n  initialPlacementTimeoutSeconds: ";
+            String prefix = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\ninitialRouting:\n"
+                    + "  servers: [lobby-a, lobby-b]\n  timeoutSeconds: ";
             Files.writeString(config, prefix + "30\n");
-            assertEquals(30, new ProxyConfigurationLoader().load(config).plugins().initialPlacementTimeoutSeconds());
+            var routing = new ProxyConfigurationLoader().load(config).initialRouting();
+            assertEquals(java.util.List.of("lobby-a", "lobby-b"), routing.servers());
+            assertEquals(30, routing.timeoutSeconds());
+            Files.writeString(config, "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n");
+            routing = new ProxyConfigurationLoader().load(config).initialRouting();
+            assertTrue(routing.servers().isEmpty());
+            assertEquals(15, routing.timeoutSeconds());
             for (int invalid : new int[]{0, 121}) {
                 Files.writeString(config, prefix + invalid + "\n");
                 assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
                         () -> new ProxyConfigurationLoader().load(config));
             }
+            Files.writeString(config, prefix.replace("[lobby-a, lobby-b]", "[lobby-a, lobby-a]") + "15\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n"
+                    + "plugins:\n  initialPlacementTimeoutSeconds: 15\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config),
+                    "the old placement timeout setting is intentionally rejected");
         } finally {
             Files.deleteIfExists(config);
         }
+    }
+
+    @Test
+    void initialRoutingValidatesFallbackNamesAndPreservesOrder() {
+        var names = java.util.stream.IntStream.range(0, 16).mapToObj(i -> "server-" + i).toList();
+        assertEquals(names, new ProxyConfiguration.InitialRouting(names, 15).servers());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProxyConfiguration.InitialRouting(java.util.Collections.nCopies(17, "server"), 15));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProxyConfiguration.InitialRouting(java.util.List.of("lobby", "lobby"), 15));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProxyConfiguration.InitialRouting(java.util.List.of(" "), 15));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProxyConfiguration.InitialRouting(java.util.List.of("x".repeat(129)), 15));
     }
 
     @Test

@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -52,6 +54,29 @@ class ApiValueTypesTest {
                 ((PlacementDecision.Reject) PlacementDecision.reject("Try again later")).reason());
         assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject(" "));
         assertThrows(IllegalArgumentException.class, () -> PlacementDecision.reject("x".repeat(1025)));
+    }
+
+    @Test
+    void placementSelectCopiesAndPreservesOrderedCandidates() {
+        var candidates = new ArrayList<>(List.of("lobby-a", "lobby-b"));
+        var decision = (PlacementDecision.Select) PlacementDecision.select(candidates);
+        candidates.set(0, "changed");
+
+        assertEquals(List.of("lobby-a", "lobby-b"), decision.backendNames());
+        assertThrows(UnsupportedOperationException.class, () -> decision.backendNames().add("lobby-c"));
+        assertEquals(List.of("single"), ((PlacementDecision.Select) PlacementDecision.select("single")).backendNames());
+    }
+
+    @Test
+    void placementSelectRejectsInvalidCandidateLists() {
+        assertThrows(IllegalArgumentException.class, () -> PlacementDecision.select(List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> PlacementDecision.select(java.util.Collections.nCopies(17, "server")));
+        assertThrows(IllegalArgumentException.class,
+                () -> PlacementDecision.select(List.of("lobby", "lobby")));
+        assertThrows(IllegalArgumentException.class, () -> PlacementDecision.select(List.of(" ")));
+        assertThrows(IllegalArgumentException.class,
+                () -> PlacementDecision.select(List.of("x".repeat(129))));
     }
 
     @Test

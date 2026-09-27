@@ -106,6 +106,9 @@ try {
     @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
+initialRouting:
+  servers: [uranium]
+  timeoutSeconds: 15
 plugins:
   directory: "proxy-plugins"
   enabled: {}

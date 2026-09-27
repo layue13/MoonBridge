@@ -69,7 +69,7 @@ public final class ProxyMain {
         var serverListStatus = loader.loadServerListStatus(configuration, configPath);
         var catalog = new InMemoryBackendCatalog();
         StaticBackends.register(configuration, catalog);
-        Duration placementTimeout = Duration.ofSeconds(configuration.plugins().initialPlacementTimeoutSeconds());
+        Duration placementTimeout = Duration.ofSeconds(configuration.initialRouting().timeoutSeconds());
         Duration eventTimeout = Duration.ofSeconds(configuration.plugins().eventTimeoutSeconds());
         ExecutorService verifierWorkers = configuration.authentication() == ProxyConfiguration.Authentication.ONLINE_BUNGEE
                 ? Executors.newFixedThreadPool(2, task -> {
@@ -82,6 +82,7 @@ public final class ProxyMain {
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
         listener.setServerListStatus(serverListStatus);
+        listener.setInitialServers(configuration.initialRouting().servers());
         try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout);
              var control = configuration.backendChannel() == null ? null
                      : new BackendControlService(configuration.backendChannel(), catalog,
