@@ -60,7 +60,7 @@ import java.util.concurrent.ThreadFactory;
 /** Independent authenticated backend connection for registration and plugin control messages. */
 public final class BackendControlService implements BackendChannelTransport, AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(BackendControlService.class);
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final int MAX_FRAME = MessageCodec.MAX_FRAME_BYTES;
     private static final long MAX_QUEUED_BYTES = 1_048_576;
     private static final long MAX_GLOBAL_QUEUED_BYTES = 64L * 1_048_576;
@@ -73,6 +73,7 @@ public final class BackendControlService implements BackendChannelTransport, Aut
     private final ProxyConfiguration.BackendChannel configuration;
     private final BackendCatalog catalog;
     private final LocalMessaging messaging;
+    private final UUID proxyEpoch;
     private final Object lock = new Object();
     private final Map<String, Lease> byInstance = new HashMap<>();
     private final Map<String, Lease> byBackend = new HashMap<>();
@@ -91,9 +92,15 @@ public final class BackendControlService implements BackendChannelTransport, Aut
 
     public BackendControlService(ProxyConfiguration.BackendChannel configuration, BackendCatalog catalog,
                                  LocalMessaging messaging) {
+        this(configuration, catalog, messaging, UUID.randomUUID());
+    }
+
+    public BackendControlService(ProxyConfiguration.BackendChannel configuration, BackendCatalog catalog,
+                                 LocalMessaging messaging, UUID proxyEpoch) {
         this.configuration = Objects.requireNonNull(configuration, "configuration");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.messaging = Objects.requireNonNull(messaging, "messaging");
+        this.proxyEpoch = Objects.requireNonNull(proxyEpoch, "proxyEpoch");
         this.connectionSlots = new Semaphore(configuration.maxConnections());
     }
 
@@ -147,7 +154,11 @@ public final class BackendControlService implements BackendChannelTransport, Aut
             if (register.type != REGISTER) throw new IOException("expected backend registration");
             Registration requested = parseRegistration(register.input, nonce);
             register(connection, requested);
-            connection.write(REGISTERED, out -> out.writeLong(connection.epoch));
+            connection.write(REGISTERED, out -> {
+                out.writeLong(connection.epoch);
+                out.writeLong(proxyEpoch.getMostSignificantBits());
+                out.writeLong(proxyEpoch.getLeastSignificantBits());
+            });
             socket.setSoTimeout(configuration.leaseSeconds() * 1_000);
             while (!closed && connection.live.get()) {
                 Frame frame = readFrame(connection.input);

@@ -32,7 +32,10 @@ val verifyApiJar = tasks.register("verifyApiJar") {
         JarFile(apiJar.get().asFile).use { archive ->
             val entries = archive.entries().asSequence().toList()
             val classes = entries.filter { it.name.endsWith(".class") }
-            check(classes.map { it.name } == listOf("dev/moonbridge/bukkit/BukkitMessagingService.class")) {
+            check(classes.map { it.name }.toSet() == setOf(
+                "dev/moonbridge/bukkit/BackendPlayerSession.class",
+                "dev/moonbridge/bukkit/BukkitMessagingService.class",
+                "dev/moonbridge/bukkit/BukkitSessionService.class")) {
                 "Bukkit API artifact must contain only the public service contract"
             }
             check(entries.none { it.name == "plugin.yml" }) { "API is not a deployable plugin" }

@@ -61,6 +61,28 @@ class BungeeLegacyForwardingTest {
     }
 
     @Test
+    void addsHostAuthenticatedSessionProofToForwardedProfileProperties() throws Exception {
+        MinecraftHandshake original = new MinecraftHandshake(5, "play.example", 25565,
+                MinecraftHandshake.NextState.LOGIN);
+        UUID playerId = UUID.randomUUID();
+        String proof = dev.moonbridge.messaging.session.ForwardedSessionProof.create(UUID.randomUUID(), playerId,
+                42, "island-a", 99, UUID.randomUUID(), System.currentTimeMillis() + 10_000, new byte[32]);
+        VerifiedProfile profile = new VerifiedProfile(playerId, "Alice", List.of());
+        ByteBuf encoded = BungeeLegacyForwarding.encode(UnpooledByteBufAllocator.DEFAULT, original,
+                new InetSocketAddress("127.0.0.2", 12345), profile, proof);
+        try {
+            String[] fields = MinecraftHandshake.decode(encoded, BACKEND_PROFILE).serverAddress().split("\u0000", -1);
+            assertEquals(4, fields.length);
+            var properties = new ObjectMapper().readTree(fields[3]);
+            assertEquals(dev.moonbridge.messaging.session.ForwardedSessionProof.PROPERTY_NAME,
+                    properties.get(0).get("name").textValue());
+            assertEquals(proof, properties.get(0).get("value").textValue());
+        } finally {
+            encoded.release();
+        }
+    }
+
+    @Test
     void rejectsUnresolvedClientAddress() {
         MinecraftHandshake original = new MinecraftHandshake(5, "play.example", 25565,
                 MinecraftHandshake.NextState.LOGIN);

@@ -52,10 +52,15 @@ val verifyHostJar = tasks.register("verifyHostJar") {
             val names = entries.map { it.name }
             listOf("plugin.yml", "config.yml",
                 "dev/moonbridge/bukkit/BukkitMessagingService.class",
+                "dev/moonbridge/bukkit/BukkitSessionService.class",
+                "dev/moonbridge/bukkit/BackendPlayerSession.class",
                 "dev/moonbridge/messaging/Message.class",
                 "dev/moonbridge/messaging/internal/LocalMessaging.class",
                 "dev/moonbridge/messaging/protocol/MessageCodec.class",
-                "dev/moonbridge/backendchannel/BackendChannelClient.class").forEach {
+                "dev/moonbridge/messaging/session/ForwardedSessionProof.class",
+                "dev/moonbridge/messaging/session/ForwardedSessionProof\$Claims.class",
+                "dev/moonbridge/backendchannel/BackendChannelClient.class",
+                "dev/moonbridge/backendchannel/Wire\$RegisteredIdentity.class").forEach {
                 check(names.count { name -> name == it } == 1) { "Host jar must contain exactly one $it" }
             }
             check(names.none { it.startsWith("org/bukkit/") }) { "Bukkit API must remain server-provided" }

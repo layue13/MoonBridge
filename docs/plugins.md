@@ -4,7 +4,7 @@
 
 ## 生命周期和线程
 
-`onLoad(PluginContext)` 获得 `players()`、`servers()`、`commands()`、`permissions()`、`events()`、`messaging()`、专属 `dataDirectory()`、SLF4J `logger()` 和不可变 `settings()`。宿主在所有插件加载后调用 `onEnable()`；插件全部启用成功后、监听器启动前冻结事件订阅并确定唯一权限提供者。事件订阅只能在 `onLoad` 或 `onEnable` 注册，运行期间可以随时撤销。初始化失败会终止启动并回收已创建的注册。
+`onLoad(PluginContext)` 获得 `players()`、`servers()`、`commands()`、`permissions()`、`events()`、`messaging()`、专属 `dataDirectory()`、SLF4J `logger()` 、不可变 `settings()` 和本代理进程的 `proxyEpoch()`（每次启动重新生成，与后端会话绑定证明一致）。宿主在所有插件加载后调用 `onEnable()`；插件全部启用成功后、监听器启动前冻结事件订阅并确定唯一权限提供者。事件订阅只能在 `onLoad` 或 `onEnable` 注册，运行期间可以随时撤销。初始化失败会终止启动并回收已创建的注册。
 
 事件通过 `PluginContext.events()` 提供的 `dev.moonbridge.api.event.Events` 订阅。所有事件都使用同一 sealed `Event<R>`、`EventListener<E, R>` 和 `Events.subscribe` 方法；监听器返回 `CompletionStage<R>`。无结果事件使用 `Event<Void>`，准入事件返回 `AccessDecision`。数据库客户端、缓存和外部任务的生命周期由插件管理；返回 `CompletionStage` 表达异步结果，避免在回调里 `join()` 等待另一个任务。各连接的准入检查可以并发，插件共享数据必须支持并发访问。
 

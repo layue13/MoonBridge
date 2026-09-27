@@ -100,7 +100,7 @@ Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目�
 
 ## 配置与部署
 
-代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy-core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。
+代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy-core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。Channel registration v3 将代理启动 epoch 和 backend registration epoch 同时交给后端。代理用该 backend client secret 为发往该 backendName 的 legacy forwarding handshake 生成短时 HMAC 会话证明；证明绑定两端当前 epoch、backendName、UUID、connectionId、一次性 nonce 和到期时间。后端 `MoonBridgeBackend` 校验它并把会话绑定到实际 Bukkit Player 登录对象。两端身份或 secret 不匹配、registration 未完成或 epoch 已变化时，`BukkitSessionService.find(player)` 返回空值。证明不代表任何 AetherShard 操作。
 
 实例的游戏地址必须是代理实际可达的 `tcp://host:port`。Docker 中使用容器服务名，容器间不要使用 `127.0.0.1`。仅将玩家端口公开，控制端口放在私有网络。不要把真实凭据写入镜像或提交到仓库。
 

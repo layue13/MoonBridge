@@ -19,6 +19,7 @@ import dev.moonbridge.core.auth.VerifiedProfile;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.forwarding.BungeeLegacyForwarding;
+import dev.moonbridge.messaging.session.ForwardedSessionProof;
 import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.Minecraft1710EntityIds;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
@@ -491,8 +492,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf loginBody;
         try {
             handshakeBody = owner.onlineMode()
-                    ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                            (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
+                    ? encodeForwardedHandshake(selected.handle().id().value(), selected.owner().instanceGeneration())
                     : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
             loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         } catch (RuntimeException failure) {
@@ -1115,8 +1115,8 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void writeBackendLogin(Channel channel) {
         ByteBuf handshakeBody = owner.onlineMode()
-                ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                        (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
+                ? encodeForwardedHandshake(transfer.target.handle().id().value(),
+                        transfer.target.owner().instanceGeneration())
                 : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         channel.write(handshakeBody);
@@ -1132,6 +1132,24 @@ final class Session extends ChannelInboundHandlerAdapter {
                 failTransfer(transfer, "could not write replacement backend login");
             }
         });
+    }
+
+    private ByteBuf encodeForwardedHandshake(String backendName, long backendEpoch) {
+        String proof = null;
+        byte[] secret = owner.sessionBindingSecret(backendName);
+        if (secret != null && backendEpoch > 0) {
+            try {
+                long expiresAt = Math.addExact(System.currentTimeMillis(), ForwardedSessionProof.MAX_LIFETIME_MILLIS);
+                proof = ForwardedSessionProof.create(owner.proxyEpoch(), identity.playerId(), identity.connectionId(),
+                        backendName, backendEpoch, UUID.randomUUID(), expiresAt, secret);
+            } finally {
+                java.util.Arrays.fill(secret, (byte) 0);
+            }
+        } else if (secret != null) {
+            java.util.Arrays.fill(secret, (byte) 0);
+        }
+        return BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
+                (InetSocketAddress) frontend.remoteAddress(), verifiedProfile, proof);
     }
 
     private static InetSocketAddress backendSocketAddress(URI address) {

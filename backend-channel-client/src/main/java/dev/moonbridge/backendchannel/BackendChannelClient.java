@@ -22,6 +22,7 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -67,6 +68,7 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
     private final Object stateMonitor = new Object();
     private volatile boolean registered;
     private volatile long epoch;
+    private volatile UUID proxyEpoch = new UUID(0L, 0L);
     private final Thread connectionThread;
 
     public BackendChannelClient(String host, int port, String instanceId, String backendName, String gameAddress,
@@ -137,6 +139,7 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
     }
 
     public long getEpoch() { return epoch; }
+    public UUID getProxyEpoch() { return proxyEpoch; }
 
     @Override public void close() {
         final Session active;
@@ -328,7 +331,9 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
         byte[] signature = hmac(secret, signed);
         active.writeDirect(Wire.register(instanceId, backendName, gameAddress, generation, keyId, signature));
         byte[] registeredFrame = FrameCodec.read(active.in);
-        epoch = Wire.decodeRegistered(registeredFrame);
+        Wire.RegisteredIdentity registration = Wire.decodeRegisteredIdentity(registeredFrame);
+        epoch = registration.epoch;
+        proxyEpoch = registration.proxyEpoch;
         long pongTimeoutMillis = pongTimeoutMillis(heartbeatMillis);
         active.socket.setSoTimeout((int) Math.min(Integer.MAX_VALUE, pongTimeoutMillis));
         active.lastPongNanos = System.nanoTime();
