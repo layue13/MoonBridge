@@ -99,7 +99,7 @@ distributions {
             from(project(":messaging-protocol").tasks.named("jar")) {
                 into("backend-client")
             }
-            from(project(":backend-channel-bukkit").tasks.named("jar")) {
+            from(project(":backend-bukkit").tasks.named("jar")) {
                 into("backend-host")
             }
         }

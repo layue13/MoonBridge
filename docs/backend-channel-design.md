@@ -25,15 +25,15 @@ flowchart LR
 
 ## 后端插件接入
 
-在 Bukkit/Uranium 后端安装一次 `backend-channel-bukkit` 生成的 `strataproxy-backend-channel-bukkit` JAR，插件名为 `StrataProxyChannels`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
+在 Bukkit/Uranium 后端安装一次 `backend-bukkit` 生成的 `strataproxy-backend-bukkit` JAR，插件名为 `StrataProxyBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
 
 消费者 `plugin.yml` 声明：
 
 ```yaml
-depend: [StrataProxyChannels]
+depend: [StrataProxyBackend]
 ```
 
-消费者仅将 `uk.potatolab:backend-channel-bukkit` 作为 `compileOnly` / `provided` 依赖，不将 API、SDK 或宿主实现重新打包进自己的 JAR，确保各插件使用同一服务类。
+消费者仅将 `uk.potatolab:backend-bukkit` 作为 `compileOnly` / `provided` 依赖，不将 API、SDK 或宿主实现重新打包进自己的 JAR，确保各插件使用同一服务类。
 
 ```java
 BukkitMessagingService service = getServer().getServicesManager()

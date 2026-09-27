@@ -29,5 +29,5 @@ include(
     "backend-channel-client",
     "messaging-api",
     "messaging-protocol",
-    "backend-channel-bukkit",
+    "backend-bukkit",
 )

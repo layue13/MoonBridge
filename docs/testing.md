@@ -110,3 +110,17 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 新增验证包含组件构造与旧版 JSON 字段、模板变量作为文字插入、消息深度/节点/字节限制；根命令与后端候选合并、参数补全、原始后端回复透传；超时、迟到回复隔离、队列上限、转服代次切换、插件注销/关闭与取消回调线程。真实 TCP 测试同时核对富文本命令回复和补全，转服测试核对切换前后的补全上下文。
 
 此外用 Java 8 加载本机 Uranium 的实际组件解析器读取当前发行包生成的 JSON，核对正文、点击命令和悬浮文字通过。未启动真实客户端进行视觉/鼠标交互验收；没有测量本次改动的吞吐收益。最终远端 CI 按对应 PR 检查项记录。
+
+## 后端宿主真实服务端验收
+
+`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `StrataProxyBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。
+
+```powershell
+.\gradlew.bat check :proxy-core:installDist
+.\smoke\backend-uranium.ps1 -BundlePath C:\path\to\accepted-uranium-bundle `
+    -BukkitApiJar C:\path\to\accepted-uranium-bundle\Uranium-server.jar
+```
+
+脚本默认使用本机 Zulu Java 8 和 Java 25，可通过 `-Java8Home`、`-Java25Home` 指定其他路径。完整成功输出 `BACKEND_URANIUM_PASS`；任一阶段失败会返回非零退出码并保留日志。后台进程有启动、请求、停机期限，退出时只清理本次创建的进程。
+
+验收覆盖 Proxy→后端、后端→Proxy、后端→后端请求，UUID/replyTo、多个独立订阅者接收同一广播、Bukkit 主线程与零在线玩家、业务插件停用隔离、Proxy 重启后的自动重新注册、正常停服快速注销、异常退出后的租约清理和后端重启。具体构件哈希和运行结果见[2026-09-27 后端宿主记录](../smoke/results/2026-09-27-backend-host.md)。

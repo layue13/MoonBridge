@@ -15,7 +15,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 /** One process-level authenticated transport shared by all dependent plugins. */
-public final class StrataProxyChannelsPlugin extends JavaPlugin implements Listener {
+public final class StrataProxyBackendPlugin extends JavaPlugin implements Listener {
     private volatile boolean stopping;
     private BackendChannelClient client;
     private OwnedMessagingService service;

@@ -34,7 +34,7 @@ tasks.withType<Test>().configureEach { useJUnitPlatform() }
 // One provider owns the API classes, codec and transport. Consumers use compileOnly
 // and plugin.yml depend, so Bukkit resolves the same service class identity.
 tasks.jar {
-    archiveBaseName.set("strataproxy-backend-channel-bukkit")
+    archiveBaseName.set("strataproxy-backend-bukkit")
     dependsOn(configurations.runtimeClasspath)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from({ configurations.runtimeClasspath.get().filter { it.extension == "jar" }.map { zipTree(it) } })
@@ -76,9 +76,9 @@ publishing {
     publications {
         create<MavenPublication>("bukkitHost") {
             from(components["java"])
-            artifactId = "backend-channel-bukkit"
+            artifactId = "backend-bukkit"
             pom {
-                name.set("StrataProxy Bukkit Channel Host")
+                name.set("StrataProxy Backend Host")
                 description.set("Java 8 shared channel messaging service for Bukkit and Uranium plugins.")
             }
         }

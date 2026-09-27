@@ -3,7 +3,7 @@ package dev.strataproxy.bukkit;
 import dev.strataproxy.messaging.Messaging;
 import org.bukkit.plugin.Plugin;
 
-/** Shared service provided by the StrataProxyChannels Bukkit plugin. */
+/** Shared service provided by the StrataProxyBackend Bukkit plugin. */
 public interface BukkitMessagingService {
     /**
      * Returns this enabled plugin's owned messaging scope. Repeated lookups for

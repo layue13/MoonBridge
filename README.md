@@ -24,4 +24,6 @@
 
 ## 验证状态
 
+`StrataProxyBackend` 后端宿主已通过两个真实 Uranium / Java 8 服务端的注册、通信、主线程回调、插件停用、重连及注销/租约验收，见[后端宿主验收记录](smoke/results/2026-09-27-backend-host.md)。这是无玩家、隔离服务端上的功能验收，不代表生产容量测试。
+
 已完成当前 Prism 整合包的真实 Mojang 认证、连续 20 次转服、历史 DNS/Agent 发行包烟测及同条件流量对照，见[验收记录](benchmarks/results/2026-09-26-prism-pack.md)。验收覆盖单玩家与本机后端；生产容量需按部署环境测量。已知 Uranium 候选服登录停滞的调查见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
