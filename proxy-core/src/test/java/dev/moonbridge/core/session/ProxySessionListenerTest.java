@@ -2134,7 +2134,7 @@ final class ProxySessionListenerTest {
     }
 
     @Test
-    void failedBackendConnectSendsLoginDisconnectReason() throws Exception {
+    void exhaustedBackendCandidatesSendLoginDisconnectReason() throws Exception {
         int unavailablePort;
         try (ServerSocket unused = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
             unavailablePort = unused.getLocalPort();
@@ -2152,7 +2152,8 @@ final class ProxySessionListenerTest {
                 sendLogin(client, "ConnectFailure");
                 var response = new java.io.ByteArrayInputStream(readFrame(new DataInputStream(client.getInputStream())));
                 assertEquals(0, readVarInt(response));
-                assertTrue(readString(response, 32767).contains("Could not connect"));
+                assertEquals("No entry server could be reached.",
+                        new ObjectMapper().readTree(readString(response, 32767)).path("text").asText());
             }
         } finally {
             listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
