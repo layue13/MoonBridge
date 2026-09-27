@@ -1,4 +1,4 @@
-name: Verify StrataProxy
+name: Verify MoonBridge
 
 on:
   pull_request:

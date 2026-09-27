@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$installLib = Join-Path $repoRoot "proxy-core\build\install\strataproxy\lib"
+$installLib = Join-Path $repoRoot "proxy-core\build\install\moonbridge\lib"
 $classes = Join-Path $PSScriptRoot "build"
 
 Push-Location $repoRoot
@@ -23,7 +23,7 @@ try {
     & javac -cp "$installLib\*" -d $classes (Join-Path $PSScriptRoot "ProxySessionBenchmark.java")
     if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
 
-    & java -cp "$classes;$installLib\*" dev.strataproxy.core.session.ProxySessionBenchmark `
+    & java -cp "$classes;$installLib\*" dev.moonbridge.core.session.ProxySessionBenchmark `
         --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats `
         --window $Window --mode $Mode --command-interceptor $CommandInterceptor
     if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }

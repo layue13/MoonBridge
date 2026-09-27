@@ -25,19 +25,39 @@ flowchart LR
 
 ## 后端插件接入
 
-在 Bukkit/Uranium 后端安装一次 `backend-bukkit` 生成的 `strataproxy-backend-bukkit` JAR，插件名为 `StrataProxyBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
+在 Bukkit/Uranium 后端安装一次 `backend-bukkit` 生成的 `moonbridge-backend-bukkit` JAR，插件名为 `MoonBridgeBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
 
 消费者 `plugin.yml` 声明：
 
 ```yaml
-depend: [StrataProxyBackend]
+depend: [MoonBridgeBackend]
 ```
 
-消费者仅将 `uk.potatolab:backend-bukkit` 作为 `compileOnly` / `provided` 依赖，不将 API、SDK 或宿主实现重新打包进自己的 JAR，确保各插件使用同一服务类。
+消费者依赖独立的 `uk.potatolab:backend-bukkit-api:0.1.0-SNAPSHOT`，它传递依赖平台无关的 `messaging-api`。`backend-bukkit` 是部署到服务器的宿主实现，`backend-channel-client` 是其他平台实现宿主时使用的传输 SDK，普通业务插件不依赖它们。
+
+Gradle 示例（Bukkit API 仍由业务插件按目标服务器版本自行声明）：
+
+```kotlin
+repositories {
+    maven("https://git.nest.potatolab.uk:8443/api/packages/layue13/maven")
+}
+dependencies {
+    compileOnly("uk.potatolab:backend-bukkit-api:0.1.0-SNAPSHOT")
+}
+```
+
+Maven 使用同一坐标并设置 `<scope>provided</scope>`。本地发行包的 `backend-api/` 也包含编译所需的两个 API JAR。不要把 API、SDK 或宿主实现重新打包进业务插件 JAR，也不要把 API JAR 单独放进服务器 `plugins/`；运行时由 `MoonBridgeBackend` 提供同一份 API 类和服务实现。
 
 ```java
+import dev.moonbridge.bukkit.BukkitMessagingService;
+import dev.moonbridge.messaging.Endpoint;
+import dev.moonbridge.messaging.MessageChannel;
+import dev.moonbridge.messaging.Messaging;
+
+// 在业务插件的 onEnable 中取得服务；plugin.yml 声明 depend。
 BukkitMessagingService service = getServer().getServicesManager()
     .load(BukkitMessagingService.class);
+if (service == null) throw new IllegalStateException("MoonBridgeBackend service is unavailable");
 Messaging messaging = service.forPlugin(this);
 MessageChannel channel = messaging.channel("islands:control");
 
@@ -80,7 +100,7 @@ Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目�
 
 ## 配置与部署
 
-代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [strataproxy-channel.example.yml](../proxy-core/src/main/resources/config/strataproxy-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。
+代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy-core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。
 
 实例的游戏地址必须是代理实际可达的 `tcp://host:port`。Docker 中使用容器服务名，容器间不要使用 `127.0.0.1`。仅将玩家端口公开，控制端口放在私有网络。不要把真实凭据写入镜像或提交到仓库。
 

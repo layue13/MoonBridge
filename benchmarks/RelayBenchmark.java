@@ -1,9 +1,9 @@
-package dev.strataproxy.core.session;
+package dev.moonbridge.core.session;
 
-import dev.strataproxy.core.protocol.MinecraftFrameDecoder;
-import dev.strataproxy.core.protocol.ProtocolProfile;
-import dev.strataproxy.core.protocol.ProtocolVarInt;
-import dev.strataproxy.core.relay.RawRelay;
+import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
+import dev.moonbridge.core.protocol.ProtocolProfile;
+import dev.moonbridge.core.protocol.ProtocolVarInt;
+import dev.moonbridge.core.relay.RawRelay;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;

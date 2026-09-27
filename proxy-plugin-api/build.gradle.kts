@@ -1,5 +1,5 @@
 plugins {
-    id("strataproxy.java-library-conventions")
+    id("moonbridge.java-library-conventions")
     `maven-publish`
 }
 
@@ -21,8 +21,8 @@ publishing {
             from(components["java"])
             artifactId = "proxy-plugin-api"
             pom {
-                name.set("StrataProxy Plugin API")
-                description.set("Stable API for StrataProxy proxy-side plugins.")
+                name.set("MoonBridge Plugin API")
+                description.set("Stable API for MoonBridge proxy-side plugins.")
             }
         }
     }

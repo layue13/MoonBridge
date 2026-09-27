@@ -44,7 +44,7 @@ CompletionStage<DisconnectResult> disconnect(PlayerIdentity player, String reaso
 
 ```yaml
 status:
-  motd: "StrataProxy"
+  motd: "MoonBridge"
   maxPlayers: 100
   # icon: "server-icon.png"
 ```

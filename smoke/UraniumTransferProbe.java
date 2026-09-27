@@ -1,13 +1,13 @@
-package dev.strataproxy.smoke;
+package dev.moonbridge.smoke;
 
-import dev.strataproxy.api.PlayerView;
-import dev.strataproxy.api.TransferResult;
-import dev.strataproxy.api.TransferStatus;
-import dev.strataproxy.core.backend.BackendId;
-import dev.strataproxy.core.backend.BackendOwner;
-import dev.strataproxy.core.backend.BackendRegistration;
-import dev.strataproxy.core.backend.InMemoryBackendCatalog;
-import dev.strataproxy.core.session.ProxySessionListener;
+import dev.moonbridge.api.PlayerView;
+import dev.moonbridge.api.TransferResult;
+import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.core.backend.BackendId;
+import dev.moonbridge.core.backend.BackendOwner;
+import dev.moonbridge.core.backend.BackendRegistration;
+import dev.moonbridge.core.backend.InMemoryBackendCatalog;
+import dev.moonbridge.core.session.ProxySessionListener;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;

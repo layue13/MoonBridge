@@ -33,7 +33,7 @@ publishing {
             from(components["java"])
             artifactId = "messaging-api"
             pom {
-                name.set("StrataProxy Messaging API")
+                name.set("MoonBridge Messaging API")
                 description.set("Java 8-compatible shared message envelope and channel API.")
             }
         }

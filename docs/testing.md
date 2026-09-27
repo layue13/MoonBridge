@@ -113,7 +113,7 @@ PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Ma
 
 ## 后端宿主真实服务端验收
 
-`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `StrataProxyBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。
+`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `MoonBridgeBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。Bukkit 业务插件只使用发行包 `backend-api/` 中的 API JAR 和服务器 Bukkit API 编译，编译路径不包含宿主及传输 SDK，并在实际插件加载器下验证服务类身份一致。
 
 ```powershell
 .\gradlew.bat check :proxy-core:installDist

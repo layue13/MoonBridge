@@ -216,7 +216,7 @@ def client(mode, host, backend_host):
     wait_online(host, 0)
     control = None
     if mode == "control":
-        control = control_register(host, backend_host, os.environ["STRATAPROXY_CHANNEL_SECRET"])
+        control = control_register(host, backend_host, os.environ["MOONBRIDGE_CHANNEL_SECRET"])
     try:
         with wait_login(host) as peer:
             probe(peer, 42)

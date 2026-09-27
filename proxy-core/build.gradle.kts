@@ -1,7 +1,7 @@
 import org.gradle.api.tasks.Exec
 
 plugins {
-    id("strataproxy.application-conventions")
+    id("moonbridge.application-conventions")
 }
 
 val runtimeJavaHome = System.getProperty("java.home")
@@ -26,49 +26,49 @@ dependencies {
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {
     group = "verification"
-    description = "Runs the installed StrataProxy distribution in --validate-config mode."
+    description = "Runs the installed MoonBridge distribution in --validate-config mode."
     dependsOn(tasks.named("installDist"))
 
-    val installDir = layout.buildDirectory.dir("install/strataproxy")
+    val installDir = layout.buildDirectory.dir("install/moonbridge")
     inputs.dir(installDir)
     environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "strataproxy.bat" else "strataproxy").asFile
-        val config = installDir.get().file("config/strataproxy.yml").asFile
+        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
+        val config = installDir.get().file("config/moonbridge.yml").asFile
         commandLine(script.absolutePath, "--validate-config", config.absolutePath)
     }
 }
 
 val installedDistHelpSmokeTest = tasks.register<Exec>("installedDistHelpSmokeTest") {
     group = "verification"
-    description = "Runs the installed StrataProxy distribution help command."
+    description = "Runs the installed MoonBridge distribution help command."
     dependsOn(tasks.named("installDist"))
 
-    val installDir = layout.buildDirectory.dir("install/strataproxy")
+    val installDir = layout.buildDirectory.dir("install/moonbridge")
     inputs.dir(installDir)
     environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "strataproxy.bat" else "strataproxy").asFile
+        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
         commandLine(script.absolutePath, "--help")
     }
 }
 
 val installedDistVersionSmokeTest = tasks.register<Exec>("installedDistVersionSmokeTest") {
     group = "verification"
-    description = "Runs the installed StrataProxy distribution version command."
+    description = "Runs the installed MoonBridge distribution version command."
     dependsOn(tasks.named("installDist"))
 
-    val installDir = layout.buildDirectory.dir("install/strataproxy")
+    val installDir = layout.buildDirectory.dir("install/moonbridge")
     inputs.dir(installDir)
     environment("JAVA_HOME", runtimeJavaHome)
 
     doFirst {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "strataproxy.bat" else "strataproxy").asFile
+        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
         commandLine(script.absolutePath, "--version")
     }
 }
@@ -80,8 +80,8 @@ tasks.named("check") {
 }
 
 application {
-    mainClass.set("dev.strataproxy.app.ProxyMain")
-    applicationName = "strataproxy"
+    mainClass.set("dev.moonbridge.app.ProxyMain")
+    applicationName = "moonbridge"
 }
 
 distributions {
@@ -101,6 +101,10 @@ distributions {
             }
             from(project(":backend-bukkit").tasks.named("jar")) {
                 into("backend-host")
+            }
+            from(listOf(project(":backend-bukkit-api").tasks.named("jar"),
+                project(":messaging-api").tasks.named("jar"))) {
+                into("backend-api")
             }
         }
     }

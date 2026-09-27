@@ -1,12 +1,12 @@
-package dev.strataproxy.smoke;
+package dev.moonbridge.smoke;
 
-import dev.strataproxy.bukkit.BukkitMessagingService;
-import dev.strataproxy.messaging.Endpoint;
-import dev.strataproxy.messaging.Message;
-import dev.strataproxy.messaging.MessageChannel;
-import dev.strataproxy.messaging.MessageKind;
-import dev.strataproxy.messaging.Messaging;
-import dev.strataproxy.messaging.Subscription;
+import dev.moonbridge.bukkit.BukkitMessagingService;
+import dev.moonbridge.messaging.Endpoint;
+import dev.moonbridge.messaging.Message;
+import dev.moonbridge.messaging.MessageChannel;
+import dev.moonbridge.messaging.MessageKind;
+import dev.moonbridge.messaging.Messaging;
+import dev.moonbridge.messaging.Subscription;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 

@@ -35,7 +35,7 @@ publishing {
             from(components["java"])
             artifactId = "backend-channel-client"
             pom {
-                name.set("StrataProxy Backend Channel Client")
+                name.set("MoonBridge Backend Channel Client")
                 description.set("Java 8-compatible backend control channel SDK.")
             }
         }
