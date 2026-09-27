@@ -102,6 +102,8 @@ Write-Utf8 $config @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
 backends: []
+initialRouting:
+  servers: [] # The proxy plugin owns placement; this acceptance run has no player logins.
 plugins:
   directory: "$pluginYaml"
   enabled:

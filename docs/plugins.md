@@ -48,9 +48,21 @@ context.players().sendMessage(player.identity(), "目的地已准备好。").the
 
 ## 初始选服
 
-`Plugin.initialPlacementHandler()` 返回 `Optional<InitialPlacementHandler>`。整个代理最多有一个初始选服处理器，它收到 `PlayerView` 与当前 `List<ServerView>`，异步返回 `PlacementDecision.select(name)` 或 `reject(reason)`。未提供处理器时，核心选择目录中注册顺序的第一个后端。
+初始选服是登录策略：访问检查通过后，代理必须先确定一个或多个有序目标，再建立后端连接。后端注册只表示目标当前可被解析，不代表它适合作为新玩家入口；代理不根据注册顺序、标签或推测出的健康状态选服。
 
-访问检查全部通过后才调用选服。`plugins.initialPlacementTimeoutSeconds` 默认 15 秒；数据库查询和加载等待必须在期限内完成。失败或超时结束本次登录，后续登录仍可调用该插件。断线会取消未决请求，尽力取消插件返回的 future，并移除尚未运行的回调。
+没有插件接管时，`initialRouting.servers` 是明确配置的候选名称列表，按顺序尝试，最多 16 个且不得重名或为空白。默认空列表是 fail-closed：没有目标时拒绝本次登录，并向玩家说明没有可用的初始服务器。只由插件提供选服策略的配置可以保留空列表。候选名称在每次尝试时从当前服务器目录重新解析；不存在、已注销或连接期间被替换的条目会跳过，代理不会将旧地址用于新注册者。配置示例：
+
+```yaml
+initialRouting:
+  servers: [lobby-a, lobby-b]
+  timeoutSeconds: 15
+```
+
+`Plugin.initialPlacementHandler()` 返回 `Optional<InitialPlacementHandler>`。整个代理最多有一个处理器；它收到 `PlayerView` 和当前 `List<ServerView>` 快照，并异步返回 `PlacementDecision.select(name)`、按优先级依次尝试的 `select(List<String>)`，或 `reject(reason)`。只要处理器存在，它的选择完全接管初始路由，配置列表不会作为隐式备用目标；显式拒绝、异常、空结果或期限届满都结束本次登录。选择后目录会重新解析，因此插件异步等待实例启动时可以在其注册后返回名称。代理不会轮询目录、唤醒实例或偷偷改投默认大厅；实例编排由该插件负责。
+
+`initialRouting.timeoutSeconds` 默认 15 秒，范围 1–120 秒。一个总期限覆盖插件的异步选服和所有候选目标的 DNS/TCP 建连。只有 DNS/TCP 连接失败、且 Minecraft 握手或登录字节尚未发送时，才可尝试下一个候选；TCP 成功后会再次核对注册句柄仍有效，再发送协议数据。开始后端握手/登录后发生拒绝、断开或超时都以本次登录失败结束，不重放 Minecraft 或 Forge 登录流量。完成后端 TCP 建连后的登录阶段仍使用既有的 15 秒期限。
+
+断线会取消未决选服，尽力取消插件返回的 future，并移除尚未运行的回调。插件应及时完成其阶段；不得通过阻塞调用等待数据库、实例启动或网络操作。
 
 ## 玩家命令
 

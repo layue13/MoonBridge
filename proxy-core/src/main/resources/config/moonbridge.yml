@@ -5,9 +5,11 @@ status:
   motd: "MoonBridge"
   maxPlayers: 100
   # icon: "server-icon.png" # Optional 64x64 PNG, relative to this config (maximum 64 KiB).
+initialRouting:
+  servers: ["lobby"] # Used only when no placement plugin is installed; order is the retry order.
+  timeoutSeconds: 15
 plugins:
   directory: "../plugins"
-  initialPlacementTimeoutSeconds: 15
   eventTimeoutSeconds: 5
   enabled: {}
 backends:

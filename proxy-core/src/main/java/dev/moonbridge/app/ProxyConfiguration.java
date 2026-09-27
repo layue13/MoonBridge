@@ -11,7 +11,7 @@ import java.util.Set;
 /** Configuration understood by the new proxy runtime. */
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                                  Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
-                                 Status status, BackendChannel backendChannel) {
+                                 Status status, BackendChannel backendChannel, InitialRouting initialRouting) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     public ProxyConfiguration {
@@ -27,7 +27,8 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             throw new IllegalArgumentException("OFFLINE requires a literal loopback listen IP or allowOfflinePublicAccess: true");
         }
         backends = backends == null ? List.of() : List.copyOf(backends);
-        plugins = plugins == null ? new Plugins("plugins", Map.of(), null, null) : plugins;
+        plugins = plugins == null ? new Plugins("plugins", Map.of(), null) : plugins;
+        initialRouting = initialRouting == null ? new InitialRouting(List.of(), null) : initialRouting;
         maxConnections = maxConnections == null ? 4096 : maxConnections;
         if (maxConnections < 1 || maxConnections > 1_000_000) {
             throw new IllegalArgumentException("maxConnections must be between 1 and 1000000");
@@ -42,13 +43,46 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends) {
-        this(listen, authentication, backends, null, null, false, null, null);
+        this(listen, authentication, backends, null, null, false, null, null, null);
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                               Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
                               Status status) {
-        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status, null);
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status, null, null);
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                              Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                              Status status, BackendChannel backendChannel) {
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
+                backendChannel, null);
+    }
+
+    /** Explicit default destinations used only when no plugin owns initial placement. */
+    public record InitialRouting(List<String> servers, Integer timeoutSeconds) {
+        public InitialRouting {
+            servers = servers == null ? List.of() : List.copyOf(servers);
+            if (servers.size() > 16) {
+                throw new IllegalArgumentException("initialRouting.servers must contain at most 16 names");
+            }
+            var uniqueNames = new java.util.HashSet<String>();
+            for (String name : servers) {
+                if (name == null || name.isBlank() || !name.equals(name.trim())) {
+                    throw new IllegalArgumentException("initialRouting server names must not be blank or have surrounding whitespace");
+                }
+                if (name.length() > 128) {
+                    throw new IllegalArgumentException("initialRouting server names must contain at most 128 characters");
+                }
+                if (!uniqueNames.add(name)) {
+                    throw new IllegalArgumentException("duplicate initialRouting server: " + name);
+                }
+            }
+            timeoutSeconds = timeoutSeconds == null ? 15 : timeoutSeconds;
+            if (timeoutSeconds < 1 || timeoutSeconds > 120) {
+                throw new IllegalArgumentException("initialRouting.timeoutSeconds must be between 1 and 120");
+            }
+        }
     }
 
     /** User-facing server list values; icon validation needs the config file location and happens in the loader. */
@@ -184,15 +218,10 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public record Plugins(String directory, Map<String, Map<String, String>> enabled,
-                          Integer initialPlacementTimeoutSeconds, Integer eventTimeoutSeconds) {
+                          Integer eventTimeoutSeconds) {
         public Plugins {
             if (directory == null || directory.isBlank()) {
                 throw new IllegalArgumentException("plugin directory is required");
-            }
-            initialPlacementTimeoutSeconds = initialPlacementTimeoutSeconds == null
-                    ? 15 : initialPlacementTimeoutSeconds;
-            if (initialPlacementTimeoutSeconds < 1 || initialPlacementTimeoutSeconds > 120) {
-                throw new IllegalArgumentException("initialPlacementTimeoutSeconds must be between 1 and 120");
             }
             eventTimeoutSeconds = eventTimeoutSeconds == null ? 5 : eventTimeoutSeconds;
             if (eventTimeoutSeconds < 1 || eventTimeoutSeconds > 30) {

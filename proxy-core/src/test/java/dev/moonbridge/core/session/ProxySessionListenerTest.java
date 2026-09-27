@@ -823,6 +823,7 @@ final class ProxySessionListenerTest {
                 }));
                 plugins.enable();
                 listener.setPlacement(plugins::placeInitial);
+                listener.setInitialServers(List.of("lobby"));
                 listener.setEvents(plugins, Duration.ofSeconds(5));
                 listener.setCommandDispatcher(plugins::dispatchCommand);
                 listener.setCommandCompletion(plugins::commandNames, plugins::completeCommand);

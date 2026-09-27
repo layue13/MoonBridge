@@ -78,6 +78,8 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger onlineCount = new AtomicInteger();
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
+    private List<String> initialServers = List.of();
+    private boolean initialServersConfigured;
     private volatile CommandDispatcher commandDispatcher;
     private Function<String, List<String>> commandNames;
     private java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> completions;
@@ -172,6 +174,16 @@ public final class ProxySessionListener implements Players {
             throw new IllegalStateException("Placement must be configured once before listener start");
         }
         this.placement = Objects.requireNonNull(placement, "placement");
+    }
+
+    /** Configures the explicit, ordered entry route used only when no plugin selects a route. */
+    public synchronized void setInitialServers(List<String> servers) {
+        if (started || closed || initialServersConfigured) {
+            throw new IllegalStateException("Initial servers must be configured once before listener start");
+        }
+        Objects.requireNonNull(servers, "servers");
+        initialServers = servers.isEmpty() ? List.of() : new PlacementDecision.Select(servers).backendNames();
+        initialServersConfigured = true;
     }
 
     /** Configures optional plugin command dispatch before the listener starts. */
@@ -366,6 +378,7 @@ public final class ProxySessionListener implements Players {
     SessionVerifier verifier() { return verifier; }
     Duration loginStageTimeout() { return loginStageTimeout; }
     Duration placementTimeout() { return placementTimeout; }
+    List<String> initialServers() { return initialServers; }
     Duration transferCutoverTimeout() { return transferCutoverTimeout; }
     Duration initialPlayTimeout() { return initialPlayTimeout; }
     KeyPair encryptionKeys() { return encryptionKeys; }

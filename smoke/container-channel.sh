@@ -25,6 +25,8 @@ cat > "$work/config.yml" <<EOF
 listen: "0.0.0.0:25577"
 authentication: OFFLINE
 allowOfflinePublicAccess: true
+initialRouting:
+  servers: [remote]
 backends: []
 plugins:
   directory: "/opt/moonbridge/plugins"

@@ -2,6 +2,9 @@
 listen: "127.0.0.1:25577"
 authentication: OFFLINE
 backends: []
+initialRouting:
+  servers: [] # Configure public entry servers or install a placement plugin; registered islands are not public entries.
+  timeoutSeconds: 15
 plugins:
   directory: "../plugins"
   enabled: {}

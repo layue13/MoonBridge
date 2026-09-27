@@ -7,6 +7,7 @@
 - [设计文档索引](docs/README.md)
 - [架构与边界](docs/architecture.md)：会话、协议、线程模型、转服、后端目录。
 - [插件开发](docs/plugins.md)：生命周期、ServerView、选服、Command 和统一类型化事件 API。
+- 首次登录使用显式有序入口服务器配置；空列表会拒绝登录，插件策略可完全接管选服。详见[初始选服契约](docs/plugins.md#初始选服)。
 - [运行配置](docs/operations.md)与[后端控制通道](docs/backend-channel-design.md)。
 - [消息服务设计契约](docs/channel-messaging-v2.md)：消息身份、路由、插件生命周期及失败语义。
 - [测试与性能验证](docs/testing.md)：构建、烟测、真实客户端记录和基准方法。
