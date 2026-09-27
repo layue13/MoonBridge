@@ -15,6 +15,10 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         maven {
+            url = uri("https://repo.lucko.me/")
+            content { includeGroup("me.lucko.configurate") }
+        }
+        maven {
             url = uri("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
             content { includeGroup("org.spigotmc") }
         }
@@ -22,6 +26,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "moonbridge"
+
+includeBuild("luckperms-moonbridge/upstream-build")
 
 include(
     "proxy-core",
@@ -31,4 +37,5 @@ include(
     "messaging-protocol",
     "backend-bukkit",
     "backend-bukkit-api",
+    "luckperms-moonbridge",
 )

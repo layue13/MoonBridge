@@ -8,6 +8,7 @@
 - [运行配置](docs/operations.md)：认证模式、监听范围、入口后端和部署约束。
 - [初次登录路由](docs/initial-routing.md)：候选顺序、插件接管、期限和安全重试边界。
 - [插件开发](docs/plugins.md)：Proxy API、事件、命令、转服和初始选服。
+- [玩家权限与 LuckPerms](docs/permissions.md)：统一权限接口、命令鉴权和原生平台插件。
 - [后端 Bukkit 插件接入](docs/backend-channel-design.md#后端插件接入)：共享宿主、API 依赖与 Channel 示例。
 - [发布与依赖版本](docs/publishing.md)、[架构](docs/architecture.md)与[验证方法](docs/testing.md)。
 
@@ -16,6 +17,7 @@
 需要 JDK 25。发行包不包含 Minecraft 后端；要完成玩家登录，需启动一个 Minecraft 1.7.10 后端，并让 `initialRouting.servers` 中至少一个名称能解析到它。
 
 ```powershell
+git submodule update --init --recursive
 .\gradlew.bat check :proxy-core:installDist
 .\proxy-core\build\install\moonbridge\bin\moonbridge.bat --config .\proxy-core\build\install\moonbridge\config\moonbridge.yml
 ```

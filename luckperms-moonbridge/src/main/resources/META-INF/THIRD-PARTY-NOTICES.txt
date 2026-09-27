@@ -1,0 +1,15 @@
+LuckPerms MoonBridge includes:
+
+LuckPerms common engine, API and loader utilities
+Copyright lucko (Luck) and contributors
+MIT License; see /LICENSE.txt
+Source: https://github.com/LuckPerms/LuckPerms
+Revision: 25f223317a9ec2b6e73369126b630eca07d79506
+
+Guava 19.0
+Copyright The Guava Authors
+Apache License, Version 2.0; see /META-INF/LICENSE-Guava.txt
+Source: https://github.com/google/guava/tree/v19.0
+
+Other runtime libraries are downloaded by LuckPerms into its data directory.
+Their original JARs, metadata and bundled license notices remain in libs/.

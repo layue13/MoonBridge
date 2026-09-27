@@ -4,7 +4,7 @@
 
 ## 生命周期和线程
 
-`onLoad(PluginContext)` 获得 `players()`、`servers()`、`commands()`、`events()`、SLF4J `logger()` 和不可变 `settings()`。宿主在所有插件加载后调用 `onEnable()`；插件全部启用成功后、监听器启动前冻结事件订阅。事件订阅只能在 `onLoad` 或 `onEnable` 注册，运行期间可以随时撤销。初始化失败会终止启动并回收已创建的注册。
+`onLoad(PluginContext)` 获得 `players()`、`servers()`、`commands()`、`permissions()`、`events()`、`messaging()`、专属 `dataDirectory()`、SLF4J `logger()` 和不可变 `settings()`。宿主在所有插件加载后调用 `onEnable()`；插件全部启用成功后、监听器启动前冻结事件订阅并确定唯一权限提供者。事件订阅只能在 `onLoad` 或 `onEnable` 注册，运行期间可以随时撤销。初始化失败会终止启动并回收已创建的注册。
 
 事件通过 `PluginContext.events()` 提供的 `dev.moonbridge.api.event.Events` 订阅。所有事件都使用同一 sealed `Event<R>`、`EventListener<E, R>` 和 `Events.subscribe` 方法；监听器返回 `CompletionStage<R>`。无结果事件使用 `Event<Void>`，准入事件返回 `AccessDecision`。数据库客户端、缓存和外部任务的生命周期由插件管理；返回 `CompletionStage` 表达异步结果，避免在回调里 `join()` 等待另一个任务。各连接的准入检查可以并发，插件共享数据必须支持并发访问。
 
@@ -76,7 +76,7 @@ context.commands().register("where", command -> {
 
 名称不区分大小写且全局唯一；别名可分别注册。返回的 `CommandRegistration.close()` 可撤销该命令，插件停用时自动撤销。`CommandInvocation` 包含 `player()`、实际调用的 `name()`、未拆词的 `arguments()` 和纯文本 `reply(String)`；异步完成后可继续使用 invocation 回复原连接，已断线的连接不会收到回复。
 
-只消费已注册的 `/命令`，普通聊天和未知命令原样交给后端。权限判断属于插件：必须先检查调用者权限再执行 `/ban` 等管理操作。命令回调使用独立有界工作池，异常返回通用失败信息，队列满时告知玩家稍后重试。
+只消费已注册的 `/命令`，普通聊天和未知命令原样交给后端。通过 `register(name, permission, handler)` 声明权限节点后，核心统一检查执行与补全；拒绝的已注册命令仍被代理消费。原有不带权限节点的注册表示公开玩家命令，复杂子命令可通过 `context.permissions()` 查询各自权限。控制台命令需用 `CommandRegistrationOptions` 显式启用，并从 `invocation.source()` 读取来源。详见[玩家权限与 LuckPerms](permissions.md)。命令回调使用独立有界工作池，异常返回通用失败信息，队列满时告知玩家稍后重试。
 
 每位玩家可突发调用 10 次代理命令，之后每 200 毫秒恢复一次额度；超额命令仍由代理消费，限速提示每两秒至多一次。`reply` 复用玩家消息实现：最多 1024 个 Unicode 码点，与主动消息共享每连接 64 条未完成写入上限；不可写、已离线或协议过渡期间丢弃回复。命令回调仍可发起转服。
 

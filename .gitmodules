@@ -1,0 +1,3 @@
+[submodule "vendor/luckperms"]
+	path = vendor/luckperms
+	url = https://github.com/LuckPerms/LuckPerms.git

@@ -20,11 +20,14 @@ import dev.moonbridge.messaging.PublishResult;
 import dev.moonbridge.messaging.SendResult;
 import dev.moonbridge.messaging.internal.LocalMessaging;
 import dev.moonbridge.api.InitialPlacementHandler;
+import dev.moonbridge.api.AsyncCommandHandler;
 import dev.moonbridge.api.CommandHandler;
 import dev.moonbridge.api.CommandCompleter;
 import dev.moonbridge.api.CommandCompletion;
 import dev.moonbridge.api.CommandInvocation;
 import dev.moonbridge.api.CommandRegistration;
+import dev.moonbridge.api.CommandRegistrationOptions;
+import dev.moonbridge.api.CommandSource;
 import dev.moonbridge.api.Commands;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.PlayerIdentity;
@@ -37,6 +40,8 @@ import dev.moonbridge.api.ServerRegistration;
 import dev.moonbridge.api.ServerView;
 import dev.moonbridge.api.Servers;
 import dev.moonbridge.api.TransferResult;
+import dev.moonbridge.api.permission.PermissionProvider;
+import dev.moonbridge.api.permission.PermissionResult;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendId;
@@ -45,6 +50,7 @@ import dev.moonbridge.core.backend.BackendRegistration;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.control.BackendChannelTransport;
 import dev.moonbridge.core.event.EventDispatcher;
+import dev.moonbridge.core.permission.PermissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,6 +100,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final Logger LOGGER = LoggerFactory.getLogger(PluginHost.class);
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
     private static final int MAX_PENDING_COMMAND_COMPLETIONS = 128;
+    private static final int MAX_PENDING_COMMAND_EXECUTIONS = 128;
     private static final int MAX_COMPLETION_RESULTS = 100;
     // Leave room for bounded protocol encoding overhead beyond suggestion UTF-8 bodies.
     private static final int MAX_COMPLETION_BYTES = 32_000;
@@ -105,13 +112,16 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final BackendCatalog catalog;
     private final Players players;
     private final Duration placementTimeout;
+    private final PermissionService permissionService;
     private final Duration shutdownTimeout;
     private final ThreadPoolExecutor callbacks;
     private final ThreadPoolExecutor commandWorkers;
     private final ThreadPoolExecutor backendWorkers;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
     private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
+    private final Set<CommandExecution> pendingCommandExecutions = ConcurrentHashMap.newKeySet();
     private final AtomicInteger pendingCompletionCount = new AtomicInteger();
+    private final AtomicInteger pendingCommandCount = new AtomicInteger();
     private final LocalMessaging localMessaging;
     private final ScheduledThreadPoolExecutor timer;
     private final AsyncEventDispatcher admissionEvents;
@@ -165,6 +175,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         this.players = Objects.requireNonNull(players, "players");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         Objects.requireNonNull(eventTimeout, "eventTimeout");
+        this.permissionService = new PermissionService(eventTimeout);
         this.shutdownTimeout = Objects.requireNonNull(shutdownTimeout, "shutdownTimeout");
         if (placementTimeout.isZero() || placementTimeout.isNegative()) {
             throw new IllegalArgumentException("placementTimeout must be positive");
@@ -230,13 +241,14 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 List<String> selected = enabled == null ? null : declaredProviders(jar).stream()
                         .filter(enabled::containsKey).toList();
                 if (selected != null && selected.isEmpty()) continue;
-                URLClassLoader loader = new URLClassLoader(new java.net.URL[]{jar.toUri().toURL()},
+                HostPluginClassLoader loader = new HostPluginClassLoader(new java.net.URL[]{jar.toUri().toURL()},
                         Plugin.class.getClassLoader());
                 classLoaders.add(loader);
                 if (selected == null) {
                     ServiceLoader.load(Plugin.class, loader).stream().forEach(provider -> {
                         String className = provider.type().getName();
-                        loadOne(provider.get(), jar.getFileName() + ":" + className, Map.of());
+                        loadOne(provider.get(), jar.getFileName() + ":" + className, Map.of(),
+                                directory.resolve("data").resolve(className), loader);
                     });
                 } else {
                     for (String className : selected) {
@@ -245,7 +257,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                         }
                         Plugin plugin = Class.forName(className, true, loader).asSubclass(Plugin.class)
                                 .getConstructor().newInstance();
-                        loadOne(plugin, jar.getFileName() + ":" + className, enabled.get(className));
+                        loadOne(plugin, jar.getFileName() + ":" + className, enabled.get(className),
+                                directory.resolve("data").resolve(className), loader);
                     }
                 }
             } catch (Throwable failure) {
@@ -283,7 +296,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         try {
             for (Plugin plugin : instances) {
                 Objects.requireNonNull(plugin, "plugin");
-                loadOne(plugin, "instance:" + plugin.getClass().getName() + ":" + plugins.size(), Map.of());
+                loadOne(plugin, "instance:" + plugin.getClass().getName() + ":" + plugins.size(), Map.of(),
+                        Path.of("plugins").resolve(plugin.getClass().getName()), null);
             }
         } catch (RuntimeException | Error failure) {
             close();
@@ -315,6 +329,21 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                     loaded.context.endEventRegistration();
                 }
             }
+            PermissionProvider selectedPermissions = null;
+            String permissionProviderOwner = null;
+            for (LoadedPlugin loaded : plugins) {
+                Optional<PermissionProvider> candidate = Objects.requireNonNull(
+                        loaded.plugin.permissionProvider(), "permissionProvider result");
+                if (candidate.isPresent()) {
+                    if (selectedPermissions != null) {
+                        throw new IllegalStateException("Only one plugin may provide player permissions; conflict at "
+                                + loaded.owner.id() + " (already provided by " + permissionProviderOwner + ")");
+                    }
+                    selectedPermissions = candidate.get();
+                    permissionProviderOwner = loaded.owner.id();
+                }
+            }
+            if (selectedPermissions != null) permissionService.configure(selectedPermissions);
             freezeEventRegistrations();
             state = State.ENABLED;
             if (eventListeners.containsKey(ServerConnectedEvent.class)
@@ -373,6 +402,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
     /** Host-side dispatcher used by the authenticated control transport. */
     public LocalMessaging localMessaging() { return localMessaging; }
+
+    /** Player permission lifecycle and query service used by the connection/session layer. */
+    public PermissionService permissionService() { return permissionService; }
 
     /** Returns empty when no plugin handles placement; plugin code always runs off the caller's event loop. */
     public CompletionStage<Optional<PlacementDecision>> placeInitial(PlayerView player) {
@@ -465,11 +497,39 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         if (state != State.ENABLED) return List.of();
         String normalized = prefix.toLowerCase(Locale.ROOT);
         return commands.values().stream()
-                .filter(command -> command.context.active && command.name.startsWith(normalized))
+                .filter(command -> command.context.active && command.options.permission().isEmpty()
+                        && command.name.startsWith(normalized))
                 .map(command -> "/" + command.name)
                 .sorted()
                 .limit(MAX_COMPLETION_RESULTS)
                 .toList();
+    }
+
+    /** Returns roots visible to this player; unavailable, undefined, and denied nodes stay hidden. */
+    public List<String> commandNames(PlayerView player, String prefix) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(prefix, "prefix");
+        if (state != State.ENABLED) return List.of();
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return commands.values().stream()
+                .filter(command -> command.context.active && command.name.startsWith(normalized)
+                        && authorized(player, command))
+                .map(command -> "/" + command.name)
+                .sorted()
+                .limit(MAX_COMPLETION_RESULTS)
+                .toList();
+    }
+
+    /** Filters a root suggestion without hiding suggestions owned only by a backend. */
+    public boolean commandVisible(PlayerView player, String suggestion) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(suggestion, "suggestion");
+        String root = suggestion.startsWith("/") ? suggestion.substring(1) : suggestion;
+        int separator = 0;
+        while (separator < root.length() && !Character.isWhitespace(root.charAt(separator))) separator++;
+        if (separator == 0) return true;
+        RegisteredCommand registered = commands.get(root.substring(0, separator).toLowerCase(Locale.ROOT));
+        return registered == null || registered.context.active && authorized(player, registered);
     }
 
     /**
@@ -486,6 +546,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         String name = input.substring(1, end).toLowerCase(Locale.ROOT);
         RegisteredCommand registered = commands.get(name);
         if (registered == null || !registered.context.active) return Optional.empty();
+        if (!authorized(player, registered)) {
+            return Optional.of(CompletableFuture.completedFuture(List.of()));
+        }
         String arguments = input.substring(end + 1);
         if (registered.completer == null) {
             return Optional.of(CompletableFuture.completedFuture(List.of()));
@@ -541,6 +604,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         if (state != State.ENABLED || !pending.registered.context.active
                 || commands.get(pending.commandName) != pending.registered) {
             finishCompletion(pending, null, new IllegalStateException("Command is no longer registered"), true);
+            return;
+        }
+        if (!authorized(pending.player, pending.registered)) {
+            finishCompletion(pending, List.of(), null, true);
             return;
         }
         try {
@@ -611,7 +678,11 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             PLAYER_COMPLETIONS.execute(() -> pluginStage.cancel(true));
         }
         if (failure != null) pending.result.completeExceptionally(failure);
-        else pending.result.complete(Objects.requireNonNull(suggestions, "suggestions"));
+        else {
+            List<String> safeSuggestions = Objects.requireNonNull(suggestions, "suggestions");
+            if (!authorized(pending.player, pending.registered)) safeSuggestions = List.of();
+            pending.result.complete(safeSuggestions);
+        }
     }
 
     /** Claims only known root commands; caller retains and forwards every other chat frame. */
@@ -636,20 +707,185 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         String arguments = end == message.length() ? "" : message.substring(end + 1);
         CommandInvocation invocation = new CommandInvocation(player, name, arguments,
                 component -> { if (registered.context.active) reply.accept(component); });
+        CommandExecution execution = beginCommandExecution(registered, null);
+        if (execution == null) {
+            reply.accept(Component.text("Proxy command service is busy. Please try again."));
+            return true;
+        }
         try {
             commandWorkers.execute(() -> {
-                if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) return;
+                if (execution.finished.get()) return;
+                if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) {
+                    execution.finish(null, null, null);
+                    return;
+                }
                 try {
-                    registered.handler.execute(invocation);
+                    if (!authorized(player, registered)) {
+                        invocation.reply("You do not have permission to use this command.");
+                        execution.finish(null, null, null);
+                        return;
+                    }
+                    invokeAsyncCommand(registered, invocation, execution);
                 } catch (Throwable failure) {
-                    LOGGER.warn("Plugin {} command /{} failed", registered.context.owner.id(), name, failure);
-                    invocation.reply("Proxy command failed.");
+                    execution.finish(failure, invocation, "Proxy command failed.");
                 }
             });
         } catch (RejectedExecutionException overloaded) {
-            reply.accept(Component.text("Proxy command service is busy. Please try again."));
+            execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
         }
         return true;
+    }
+
+    /** Dispatches a command from the trusted local console, with no synthetic player identity. */
+    public boolean dispatchConsoleCommand(String input, Consumer<Component> reply) {
+        Objects.requireNonNull(input, "input");
+        Objects.requireNonNull(reply, "reply");
+        if (state != State.ENABLED) return false;
+        String message = input.startsWith("/") ? input.substring(1) : input;
+        if (message.isEmpty()) return false;
+        int end = 0;
+        while (end < message.length() && !Character.isWhitespace(message.charAt(end))) end++;
+        if (end == 0) return false;
+        String name = message.substring(0, end).toLowerCase(Locale.ROOT);
+        RegisteredCommand registered = commands.get(name);
+        if (registered == null || !registered.context.active) return false;
+        if (!registered.options.allowConsole()) {
+            reply.accept(Component.text("This command can only be used by a player."));
+            return true;
+        }
+        String arguments = end == message.length() ? "" : message.substring(end + 1);
+        CommandSource source = CommandSource.console(component -> {
+            if (registered.context.active) reply.accept(component);
+        });
+        CommandInvocation invocation = new CommandInvocation(source, name, arguments);
+        CommandExecution execution = beginCommandExecution(registered, null);
+        if (execution == null) {
+            reply.accept(Component.text("Proxy command service is busy. Please try again."));
+            return true;
+        }
+        try {
+            commandWorkers.execute(() -> {
+                if (execution.finished.get()) return;
+                if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) {
+                    execution.finish(null, null, null);
+                    return;
+                }
+                try {
+                    invokeAsyncCommand(registered, invocation, execution);
+                } catch (Throwable failure) {
+                    execution.finish(failure, invocation, "Proxy command failed.");
+                }
+            });
+        } catch (RejectedExecutionException overloaded) {
+            execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
+        }
+        return true;
+    }
+
+    private boolean authorized(PlayerView player, RegisteredCommand command) {
+        return command.options.permission().map(node ->
+                permissionService.check(player.identity(), node) == PermissionResult.ALLOW).orElse(true);
+    }
+
+    private synchronized CompletionStage<Boolean> executeCommand(PluginContextImpl caller, CommandSource source,
+                                                                  String input) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(input, "command");
+        synchronized (caller) { caller.requireActive(); }
+        if (state != State.ENABLED) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
+        }
+        String message = input.startsWith("/") ? input.substring(1) : input;
+        if (message.isEmpty()) return CompletableFuture.completedFuture(false);
+        int end = 0;
+        while (end < message.length() && !Character.isWhitespace(message.charAt(end))) end++;
+        if (end == 0) return CompletableFuture.completedFuture(false);
+        String name = message.substring(0, end).toLowerCase(Locale.ROOT);
+        RegisteredCommand registered = commands.get(name);
+        if (registered == null || !registered.context.active) return CompletableFuture.completedFuture(false);
+        final Optional<PlayerView> requestedPlayer;
+        try {
+            requestedPlayer = Objects.requireNonNull(source.player(), "command source player");
+        } catch (Throwable failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        if (requestedPlayer.isEmpty() && !registered.options.allowConsole()) {
+            try {
+                source.reply(Component.text("This command can only be used by a player."));
+                return CompletableFuture.completedFuture(true);
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        String arguments = end == message.length() ? "" : message.substring(end + 1);
+        CommandInvocation failureInvocation = new CommandInvocation(source, name, arguments);
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
+        CommandExecution execution = beginCommandExecution(registered, result);
+        if (execution == null) {
+            result.completeExceptionally(new PluginOverloadedException(
+                    new RejectedExecutionException("Too many pending command executions")));
+            return result.minimalCompletionStage();
+        }
+        try {
+            commandWorkers.execute(() -> {
+                if (execution.finished.get()) return;
+                try {
+                    if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) {
+                        execution.finish(null, null, null);
+                        return;
+                    }
+                    CommandSource effectiveSource = CommandSource.console(component -> {
+                        if (registered.context.active) source.reply(component);
+                    });
+                    if (requestedPlayer.isPresent()) {
+                        PlayerIdentity identity = requestedPlayer.get().identity();
+                        Optional<PlayerView> current = players.find(identity);
+                        if (current.isEmpty()) {
+                            source.reply(Component.text("Your player session is no longer active."));
+                            execution.finish(null, null, null);
+                            return;
+                        }
+                        PlayerView livePlayer = current.get();
+                        effectiveSource = CommandSource.player(livePlayer, component -> {
+                            if (registered.context.active) source.reply(component);
+                        });
+                        if (!authorized(livePlayer, registered)) {
+                            effectiveSource.reply(Component.text("You do not have permission to use this command."));
+                            execution.finish(null, null, null);
+                            return;
+                        }
+                    }
+                    invokeAsyncCommand(registered, new CommandInvocation(effectiveSource, name, arguments), execution);
+                } catch (Throwable failure) {
+                    execution.finish(failure, failureInvocation, "Proxy command failed.");
+                }
+            });
+        } catch (RejectedExecutionException overloaded) {
+            execution.finish(new PluginOverloadedException(overloaded), null,
+                    "Proxy command service is busy. Please try again.");
+        }
+        return result.minimalCompletionStage();
+    }
+
+    private synchronized CommandExecution beginCommandExecution(RegisteredCommand command,
+                                                                 CompletableFuture<Boolean> result) {
+        if (state != State.ENABLED) return null;
+        while (true) {
+            int current = pendingCommandCount.get();
+            if (current >= MAX_PENDING_COMMAND_EXECUTIONS) return null;
+            if (pendingCommandCount.compareAndSet(current, current + 1)) break;
+        }
+        CommandExecution execution = new CommandExecution(command, result);
+        pendingCommandExecutions.add(execution);
+        return execution;
+    }
+
+    private void invokeAsyncCommand(RegisteredCommand command, CommandInvocation invocation,
+                                    CommandExecution execution) throws Exception {
+        CompletionStage<Void> stage = Objects.requireNonNull(command.handler.execute(invocation),
+                "command handler returned a null stage");
+        stage.whenComplete((ignored, failure) -> execution.finish(failure, invocation,
+                failure == null ? null : "Proxy command failed."));
     }
 
     @Override
@@ -658,6 +894,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return;
         }
         state = State.CLOSED;
+        permissionService.close();
+        for (CommandExecution execution : pendingCommandExecutions) {
+            execution.finish(new IllegalStateException("Plugin host closed"), null, null);
+        }
         // Settle pending admission chains before revoking listeners. Otherwise a queued
         // chain can skip the revoked subscriptions and incorrectly finish with allow().
         admissionEvents.close();
@@ -723,7 +963,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
-    private void loadOne(Plugin plugin, String id, Map<String, String> settings) {
+    private void loadOne(Plugin plugin, String id, Map<String, String> settings, Path dataDirectory,
+                         HostPluginClassLoader pluginClassLoader) {
         long generation = NEXT_HOST_GENERATION.updateAndGet(value -> {
             if (value == Long.MAX_VALUE) {
                 throw new IllegalStateException("Plugin host generation exhausted");
@@ -731,7 +972,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return value + 1;
         });
         BackendOwner owner = new BackendOwner(id, generation);
-        PluginContextImpl context = new PluginContextImpl(owner, settings);
+        PluginContextImpl context = new PluginContextImpl(owner, settings, dataDirectory, pluginClassLoader);
         LoadedPlugin loaded = new LoadedPlugin(plugin, owner, context);
         plugins.add(loaded);
         context.beginEventRegistration();
@@ -819,16 +1060,53 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final class RegisteredCommand {
         private final String name;
         private final PluginContextImpl context;
-        private final CommandHandler handler;
+        private final AsyncCommandHandler handler;
         private final CommandCompleter completer;
+        private final CommandRegistrationOptions options;
         private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
 
-        private RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler,
-                                  CommandCompleter completer) {
+        private RegisteredCommand(String name, PluginContextImpl context, AsyncCommandHandler handler,
+                                  CommandCompleter completer, CommandRegistrationOptions options) {
             this.name = name;
             this.context = context;
             this.handler = handler;
             this.completer = completer;
+            this.options = options;
+        }
+    }
+
+    private final class CommandExecution {
+        private final RegisteredCommand command;
+        private final CompletableFuture<Boolean> result;
+        private final AtomicBoolean finished = new AtomicBoolean();
+
+        private CommandExecution(RegisteredCommand command, CompletableFuture<Boolean> result) {
+            this.command = command;
+            this.result = result;
+        }
+
+        private void finish(Throwable failure, CommandInvocation invocation, String failureMessage) {
+            if (!finished.compareAndSet(false, true)) return;
+            pendingCommandExecutions.remove(this);
+            pendingCommandCount.decrementAndGet();
+            if (failure == null) {
+                if (result != null) result.complete(true);
+                return;
+            }
+            if (result != null) result.completeExceptionally(failure);
+            try {
+                LOGGER.warn("Plugin {} command /{} failed", command.context.owner.id(), command.name, failure);
+            } catch (Throwable ignored) { }
+            if (invocation != null && failureMessage != null && command.context.active) {
+                try {
+                    invocation.reply(failureMessage);
+                } catch (Throwable replyFailure) {
+                    if (replyFailure != failure) {
+                        try { failure.addSuppressed(replyFailure); }
+                        catch (Throwable ignored) { }
+                    }
+                }
+            }
         }
     }
 
@@ -887,6 +1165,37 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
+    /** URLClassLoader with a supported, narrowly-scoped hook for plugin-owned extension libraries. */
+    private static final class HostPluginClassLoader extends URLClassLoader {
+        private final Set<Path> libraries = new HashSet<>();
+
+        private HostPluginClassLoader(java.net.URL[] urls, ClassLoader parent) {
+            super(urls, parent);
+        }
+
+        private synchronized void addLibrary(Path requested, Path pluginDataDirectory) throws IOException {
+            Objects.requireNonNull(requested, "jar");
+            Path absoluteDataDirectory = pluginDataDirectory.toAbsolutePath().normalize();
+            Files.createDirectories(absoluteDataDirectory);
+            Path realDataDirectory = absoluteDataDirectory.toRealPath();
+            Path absoluteRequest = requested.toAbsolutePath().normalize();
+            Path candidate = requested.isAbsolute() || absoluteRequest.startsWith(absoluteDataDirectory)
+                    ? absoluteRequest : realDataDirectory.resolve(requested);
+            Path realJar = candidate.toRealPath();
+            if (!realJar.startsWith(realDataDirectory)) {
+                throw new IOException("Plugin library must be inside its data directory: " + requested);
+            }
+            if (!Files.isRegularFile(realJar) || !realJar.getFileName().toString().toLowerCase(Locale.ROOT)
+                    .endsWith(".jar")) {
+                throw new IOException("Plugin library must be a regular JAR file: " + requested);
+            }
+            try (JarFile ignored = new JarFile(realJar.toFile())) {
+                // Opening the archive validates that it is a readable JAR before it enters the class path.
+            }
+            if (libraries.add(realJar)) addURL(realJar.toUri().toURL());
+        }
+    }
+
     private final class PluginContextImpl implements PluginContext {
         private final BackendOwner owner;
         private final Messaging pluginMessaging;
@@ -894,21 +1203,42 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private final PluginServers servers;
         private final Commands pluginCommands;
         private final Events pluginEvents;
+        private final dev.moonbridge.api.permission.Permissions pluginPermissions;
         private final Logger logger;
         private final Map<String, String> settings;
+        private final Path dataDirectory;
+        private final HostPluginClassLoader pluginClassLoader;
         private final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
         private volatile boolean active = true;
         private boolean eventRegistrationOpen;
 
-        private PluginContextImpl(BackendOwner owner, Map<String, String> settings) {
+        private PluginContextImpl(BackendOwner owner, Map<String, String> settings, Path dataDirectory,
+                                  HostPluginClassLoader pluginClassLoader) {
             this.owner = owner;
             this.pluginMessaging = localMessaging.openScope(owner.id());
             this.pluginPlayers = new PluginPlayers(this);
             this.servers = new PluginServers(this);
             this.pluginCommands = new PluginCommands(this);
             this.pluginEvents = new PluginEvents(this);
+            this.pluginPermissions = new dev.moonbridge.api.permission.Permissions() {
+                @Override public PermissionResult check(PlayerIdentity identity, String node) {
+                    synchronized (PluginContextImpl.this) {
+                        if (!active) return PermissionResult.UNAVAILABLE;
+                        return permissionService.check(identity, node);
+                    }
+                }
+                @Override public PermissionResult check(PlayerIdentity identity, String node,
+                                                        dev.moonbridge.api.permission.PermissionContext permissionContext) {
+                    synchronized (PluginContextImpl.this) {
+                        if (!active) return PermissionResult.UNAVAILABLE;
+                        return permissionService.check(identity, node, permissionContext);
+                    }
+                }
+            };
             this.logger = LoggerFactory.getLogger("plugin." + owner.id());
             this.settings = Map.copyOf(settings);
+            this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
+            this.pluginClassLoader = pluginClassLoader;
         }
 
         @Override public Players players() { return pluginPlayers; }
@@ -917,6 +1247,19 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         @Override public Events events() { return pluginEvents; }
         @Override public Messaging messaging() { return pluginMessaging; }
         @Override public Logger logger() { return logger; }
+        @Override public dev.moonbridge.api.permission.Permissions permissions() { return pluginPermissions; }
+        @Override public Path dataDirectory() {
+            synchronized (this) { requireActive(); return dataDirectory; }
+        }
+        @Override public void addLibrary(Path jar) throws IOException {
+            synchronized (this) {
+                requireActive();
+                if (pluginClassLoader == null) {
+                    throw new UnsupportedOperationException("Dynamic libraries require a JAR-loaded plugin");
+                }
+                pluginClassLoader.addLibrary(jar, dataDirectory);
+            }
+        }
         @Override public Map<String, String> settings() { return settings; }
 
         private synchronized void deactivateAndRemove() {
@@ -1053,7 +1396,23 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private PluginCommands(PluginContextImpl context) { this.context = context; }
 
         @Override public CommandRegistration register(String name, CommandHandler handler, CommandCompleter completer) {
+            return register(name, CommandRegistrationOptions.defaults(), handler, completer);
+        }
+
+        @Override public CommandRegistration register(String name, CommandRegistrationOptions options,
+                                                       CommandHandler handler, CommandCompleter completer) {
+            Objects.requireNonNull(handler, "handler");
+            return registerAsync(name, options, invocation -> {
+                handler.execute(invocation);
+                return CompletableFuture.completedFuture(null);
+            }, completer);
+        }
+
+        @Override public CommandRegistration registerAsync(String name, CommandRegistrationOptions options,
+                                                            AsyncCommandHandler handler,
+                                                            CommandCompleter completer) {
             Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(options, "options");
             Objects.requireNonNull(handler, "handler");
             String normalized = name.toLowerCase(Locale.ROOT);
             if (!normalized.matches("[a-z0-9_.:-]{1,32}")) {
@@ -1061,7 +1420,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
             synchronized (context) {
                 context.requireActive();
-                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler, completer);
+                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler, completer,
+                        options);
                 if (commands.putIfAbsent(normalized, registration) != null) {
                     throw new IllegalArgumentException("Command already registered: /" + normalized);
                 }
@@ -1075,6 +1435,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                     }
                 };
             }
+        }
+
+        @Override public CompletionStage<Boolean> execute(CommandSource source, String command) {
+            return PluginHost.this.executeCommand(context, source, command);
         }
     }
 

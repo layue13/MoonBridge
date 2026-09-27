@@ -12,6 +12,10 @@ plugins:
   directory: "../plugins"
   eventTimeoutSeconds: 5
   enabled: {}
+  # To enable the bundled native LuckPerms platform, replace the empty map above:
+  # enabled:
+  #   dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin:
+  #     proxy-id: "proxy-1"
 backends:
   - name: "lobby"
     address: "127.0.0.1:25565"
