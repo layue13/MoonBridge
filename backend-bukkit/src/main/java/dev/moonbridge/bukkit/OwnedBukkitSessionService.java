@@ -12,6 +12,7 @@ import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -37,15 +38,28 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         this.proxyEpoch = java.util.Objects.requireNonNull(proxyEpoch, "proxyEpoch");
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        if (closed) return;
         Player player = event.getPlayer();
-        String proof = forwardedProof(player).orElse(null);
-        if (proof == null) return;
+        if (player == null) return;
+        // The proof is transport metadata, not a game-profile property. Uranium
+        // broadcasts every profile property when it spawns this player; its
+        // legacy packet writer expects every property signature to be non-null.
+        // Remove the private property before any normal-priority join handler
+        // or the playerLoggedIn spawn broadcast can observe the profile.
+        BoundSession previous = sessions.get(player.getUniqueId());
+        if (previous != null && previous.player == player) sessions.remove(player.getUniqueId(), previous);
+        if (closed) return;
+        ProofProperty stripped = stripForwardedProof(player);
+        if (!stripped.removed) {
+            // Fail closed: do not bind a session when the forwarding credential
+            // could not be removed from the profile before it is broadcast.
+            if (stripped.foundProperty) player.kickPlayer("Unable to validate forwarded session");
+            return;
+        }
         long now = System.currentTimeMillis();
         ForwardedSessionProof.Claims claims = ForwardedSessionProof.verify(
-                proof, secret, backendName, proxyEpoch.get(), backendEpoch.getAsLong(),
+                stripped.proof, secret, backendName, proxyEpoch.get(), backendEpoch.getAsLong(),
                 player.getUniqueId(), now).orElse(null);
         if (claims == null || !consumeNonce(claims.nonce(), claims.expiresAtEpochMillis(), now)) return;
 
@@ -77,25 +91,35 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         return true;
     }
 
-    private static Optional<String> forwardedProof(Player player) {
+    static ProofProperty stripForwardedProof(Player player) {
         Object profile = invokeNoArg(player, "getProfile");
         if (profile == null) profile = invokeNoArg(player, "getGameProfile");
-        if (profile == null) return Optional.empty();
+        if (profile == null) return ProofProperty.unavailable();
         Object properties = invokeNoArg(profile, "getProperties");
-        if (properties == null) return Optional.empty();
+        if (properties == null) return ProofProperty.unavailable();
         Object matches = invoke(properties, "get", new Class<?>[]{Object.class}, ForwardedSessionProof.PROPERTY_NAME);
-        if (!(matches instanceof Iterable<?>)) return Optional.empty();
-        Iterable<?> iterable = (Iterable<?>) matches;
+        if (!(matches instanceof Iterable<?>)) return ProofProperty.unavailable();
+        Collection<Object> propertiesToRemove = new java.util.ArrayList<Object>();
         Collection<String> values = new java.util.ArrayList<>(2);
-        for (Object property : iterable) {
-            Object name = invokeNoArg(property, "getName");
-            if (!ForwardedSessionProof.PROPERTY_NAME.equals(name)) continue;
+        boolean allValuesValid = true;
+        for (Object property : (Iterable<?>) matches) {
+            if (property == null) return ProofProperty.failed(true);
+            propertiesToRemove.add(property);
             Object value = invokeNoArg(property, "getValue");
             if (value instanceof String && ((String) value).length() <= 2048) values.add((String) value);
-            else return Optional.empty();
-            if (values.size() > 1) return Optional.empty();
+            else allValuesValid = false;
         }
-        return values.size() == 1 ? Optional.of(values.iterator().next()) : Optional.empty();
+        for (Object property : propertiesToRemove) {
+            Object removed = invoke(properties, "remove", new Class<?>[]{Object.class, Object.class},
+                    ForwardedSessionProof.PROPERTY_NAME, property);
+            if (!Boolean.TRUE.equals(removed)) return ProofProperty.failed(true);
+        }
+        Object remaining = invoke(properties, "get", new Class<?>[]{Object.class},
+                ForwardedSessionProof.PROPERTY_NAME);
+        if (!(remaining instanceof Iterable<?>) || ((Iterable<?>) remaining).iterator().hasNext())
+            return ProofProperty.failed(!propertiesToRemove.isEmpty());
+        return ProofProperty.removed(propertiesToRemove.size() == 1 && allValuesValid && values.size() == 1
+                ? values.iterator().next() : null);
     }
 
     private static Object invokeNoArg(Object receiver, String methodName) {
@@ -116,6 +140,22 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         } catch (ReflectiveOperationException | RuntimeException unavailable) {
             return null;
         }
+    }
+
+    static final class ProofProperty {
+        final String proof;
+        final boolean removed;
+        final boolean foundProperty;
+
+        private ProofProperty(String proof, boolean removed, boolean foundProperty) {
+            this.proof = proof;
+            this.removed = removed;
+            this.foundProperty = foundProperty;
+        }
+
+        private static ProofProperty unavailable() { return new ProofProperty(null, false, false); }
+        private static ProofProperty failed(boolean found) { return new ProofProperty(null, false, found); }
+        private static ProofProperty removed(String proof) { return new ProofProperty(proof, true, proof != null); }
     }
 
     @Override
