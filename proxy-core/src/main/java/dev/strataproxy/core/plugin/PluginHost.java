@@ -1,11 +1,6 @@
 package dev.strataproxy.core.plugin;
 
 import dev.strataproxy.api.AccessDecision;
-import dev.strataproxy.api.BackendChannelSubscription;
-import dev.strataproxy.api.BackendChannels;
-import dev.strataproxy.api.BackendMessage;
-import dev.strataproxy.api.BackendMessageHandler;
-import dev.strataproxy.api.BackendSendResult;
 import dev.strataproxy.api.MessageResult;
 import dev.strataproxy.api.DisconnectResult;
 import dev.strataproxy.api.event.ConnectionAdmissionEvent;
@@ -16,8 +11,18 @@ import dev.strataproxy.api.event.Events;
 import dev.strataproxy.api.event.PlayerAdmissionEvent;
 import dev.strataproxy.api.event.PlayerDisconnectedEvent;
 import dev.strataproxy.api.event.ServerConnectedEvent;
+import dev.strataproxy.messaging.Endpoint;
+import dev.strataproxy.messaging.Message;
+import dev.strataproxy.messaging.MessageKind;
+import dev.strataproxy.messaging.Messaging;
+import dev.strataproxy.messaging.MessagingException;
+import dev.strataproxy.messaging.PublishResult;
+import dev.strataproxy.messaging.SendResult;
+import dev.strataproxy.messaging.internal.LocalMessaging;
 import dev.strataproxy.api.InitialPlacementHandler;
 import dev.strataproxy.api.CommandHandler;
+import dev.strataproxy.api.CommandCompleter;
+import dev.strataproxy.api.CommandCompletion;
 import dev.strataproxy.api.CommandInvocation;
 import dev.strataproxy.api.CommandRegistration;
 import dev.strataproxy.api.Commands;
@@ -32,13 +37,13 @@ import dev.strataproxy.api.ServerRegistration;
 import dev.strataproxy.api.ServerView;
 import dev.strataproxy.api.Servers;
 import dev.strataproxy.api.TransferResult;
+import net.kyori.adventure.text.Component;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
 import dev.strataproxy.core.backend.BackendView;
 import dev.strataproxy.core.control.BackendChannelTransport;
-import dev.strataproxy.core.control.BackendNoHandlerException;
 import dev.strataproxy.core.event.EventDispatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +83,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -87,6 +93,12 @@ import java.util.jar.JarFile;
 public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final Logger LOGGER = LoggerFactory.getLogger(PluginHost.class);
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
+    private static final int MAX_PENDING_COMMAND_COMPLETIONS = 128;
+    private static final int MAX_COMPLETION_RESULTS = 100;
+    // Leave room for bounded protocol encoding overhead beyond suggestion UTF-8 bodies.
+    private static final int MAX_COMPLETION_BYTES = 32_000;
+    private static final int MAX_COMPLETION_CANDIDATES_SCANNED = 4096;
+    private static final Duration COMMAND_COMPLETION_TIMEOUT = Duration.ofSeconds(1);
     private static final ThreadFactory PLAYER_COMPLETION_THREADS = Thread.ofVirtual()
             .name("strataproxy-plugin-player-", 0).factory();
     private static final Executor PLAYER_COMPLETIONS = task -> PLAYER_COMPLETION_THREADS.newThread(task).start();
@@ -98,7 +110,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final ThreadPoolExecutor commandWorkers;
     private final ThreadPoolExecutor backendWorkers;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, BackendHandlerRegistration> backendHandlers = new ConcurrentHashMap<>();
+    private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger pendingCompletionCount = new AtomicInteger();
+    private final LocalMessaging localMessaging;
     private final ScheduledThreadPoolExecutor timer;
     private final AsyncEventDispatcher admissionEvents;
     private final AsyncEventDispatcher notificationEvents;
@@ -109,7 +123,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
-    private final Set<CompletableFuture<byte[]>> pendingBackendMessages = ConcurrentHashMap.newKeySet();
     private volatile State state = State.LOADING;
     private volatile BackendChannelTransport backendChannelTransport;
     private ScheduledFuture<?> notificationDropReporter;
@@ -184,6 +197,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 timer, namedThreads("strataproxy-plugin-admission"));
         this.notificationEvents = new AsyncEventDispatcher(eventTimeout, 1, 128,
                 timer, namedThreads("strataproxy-plugin-notification"));
+        this.localMessaging = new LocalMessaging(Endpoint.proxy(), new HostMessagingOutbound(), backendWorkers, timer);
     }
 
     /** Loads every JAR in the directory in filename order through Java's service provider mechanism. */
@@ -295,12 +309,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             for (LoadedPlugin loaded : plugins) {
                 loaded.enabled = true;
                 loaded.context.beginEventRegistration();
-                loaded.context.beginBackendChannelRegistration();
                 try {
                     loaded.plugin.onEnable();
                 } finally {
                     loaded.context.endEventRegistration();
-                    loaded.context.endBackendChannelRegistration();
                 }
             }
             freezeEventRegistrations();
@@ -359,65 +371,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         backendChannelTransport = Objects.requireNonNull(transport, "transport");
     }
 
-    /** Dispatches an authenticated request from a backend to the proxy plugin registered for its channel. */
-    public CompletionStage<byte[]> dispatchBackendMessage(BackendMessage message) {
-        Objects.requireNonNull(message, "message");
-        final BackendHandlerRegistration registration;
-        final CompletableFuture<byte[]> result = new CompletableFuture<>();
-        final ScheduledFuture<?> timeout;
-        synchronized (this) {
-            if (state != State.ENABLED) {
-                return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
-            }
-            registration = backendHandlers.get(message.channel());
-            if (registration == null || !registration.isActive()) {
-                return CompletableFuture.failedFuture(new BackendNoHandlerException(message.channel()));
-            }
-            pendingBackendMessages.add(result);
-            try {
-                timeout = timer.schedule(() -> result.completeExceptionally(
-                                new TimeoutException("Backend channel handler exceeded five seconds")),
-                        5, TimeUnit.SECONDS);
-            } catch (RuntimeException failure) {
-                pendingBackendMessages.remove(result);
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-        result.whenComplete((ignored, failure) -> {
-            timeout.cancel(false);
-            pendingBackendMessages.remove(result);
-        });
-        Runnable invocation = () -> {
-            if (result.isDone()) return;
-            if (state != State.ENABLED || !registration.isActive()
-                    || backendHandlers.get(message.channel()) != registration) {
-                result.completeExceptionally(new IllegalStateException("Backend channel handler is inactive"));
-                return;
-            }
-            try {
-                CompletionStage<byte[]> response = Objects.requireNonNull(
-                        registration.handler.handle(message), "backend message handler stage");
-                response.whenComplete((payload, failure) -> {
-                    if (failure != null) {
-                        result.completeExceptionally(failure);
-                    } else if (payload == null) {
-                        result.completeExceptionally(new IllegalStateException(
-                                "Backend message handler returned null"));
-                    } else {
-                        result.complete(payload.clone());
-                    }
-                });
-            } catch (Throwable failure) {
-                result.completeExceptionally(failure);
-            }
-        };
-        try {
-            backendWorkers.execute(invocation);
-        } catch (RejectedExecutionException overloaded) {
-            result.completeExceptionally(new PluginOverloadedException(overloaded));
-        }
-        return result;
-    }
+    /** Host-side dispatcher used by the authenticated control transport. */
+    public LocalMessaging localMessaging() { return localMessaging; }
 
     /** Returns empty when no plugin handles placement; plugin code always runs off the caller's event loop. */
     public CompletionStage<Optional<PlacementDecision>> placeInitial(PlayerView player) {
@@ -504,13 +459,168 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         return result;
     }
 
+    /** Returns up to 100 registered roots matching a case-insensitive prefix without a leading slash. */
+    public List<String> commandNames(String prefix) {
+        Objects.requireNonNull(prefix, "prefix");
+        if (state != State.ENABLED) return List.of();
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return commands.values().stream()
+                .filter(command -> command.context.active && command.name.startsWith(normalized))
+                .map(command -> "/" + command.name)
+                .sorted()
+                .limit(MAX_COMPLETION_RESULTS)
+                .toList();
+    }
+
+    /**
+     * Completes arguments for a known slash command. Root-only input belongs to {@link #commandNames(String)};
+     * the callback receives arguments after exactly one root separator, preserving all remaining whitespace.
+     */
+    public Optional<CompletionStage<List<String>>> completeCommand(PlayerView player, String input) {
+        Objects.requireNonNull(player, "player");
+        Objects.requireNonNull(input, "input");
+        if (state != State.ENABLED || input.length() < 2 || input.charAt(0) != '/') return Optional.empty();
+        int end = 1;
+        while (end < input.length() && !Character.isWhitespace(input.charAt(end))) end++;
+        if (end == input.length()) return Optional.empty();
+        String name = input.substring(1, end).toLowerCase(Locale.ROOT);
+        RegisteredCommand registered = commands.get(name);
+        if (registered == null || !registered.context.active) return Optional.empty();
+        String arguments = input.substring(end + 1);
+        if (registered.completer == null) {
+            return Optional.of(CompletableFuture.completedFuture(List.of()));
+        }
+        synchronized (this) {
+            if (state != State.ENABLED || commands.get(name) != registered || !registered.context.active) {
+                return Optional.empty();
+            }
+            if (!reserveCompletionSlot()) {
+                return Optional.of(CompletableFuture.failedFuture(new PluginOverloadedException(
+                        new RejectedExecutionException("Too many pending command completions"))));
+            }
+            PendingCompletion pending = new PendingCompletion(registered, player, name, arguments);
+            pendingCompletions.add(pending);
+            registered.pendingCompletions.add(pending);
+            pending.result.whenComplete((ignored, failure) -> {
+                if (pending.result.isCancelled()) finishCompletion(pending, null,
+                        new java.util.concurrent.CancellationException("Command completion cancelled"), true);
+            });
+            try {
+                pending.timeout = timer.schedule(() -> finishCompletion(pending, null,
+                                new TimeoutException("Plugin command completion timed out"), true),
+                        COMMAND_COMPLETION_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+                FutureTask<Void> invocation = new FutureTask<>(() -> {
+                    invokeCompleter(pending);
+                    return null;
+                });
+                pending.invocation = invocation;
+                commandWorkers.execute(invocation);
+                if (pending.finished.get()) {
+                    invocation.cancel(true);
+                    commandWorkers.remove(invocation);
+                }
+            } catch (RejectedExecutionException overloaded) {
+                finishCompletion(pending, null, new PluginOverloadedException(overloaded), true);
+            } catch (RuntimeException failure) {
+                finishCompletion(pending, null, failure, true);
+            }
+            return Optional.of(pending.result);
+        }
+    }
+
+    private boolean reserveCompletionSlot() {
+        while (true) {
+            int current = pendingCompletionCount.get();
+            if (current >= MAX_PENDING_COMMAND_COMPLETIONS) return false;
+            if (pendingCompletionCount.compareAndSet(current, current + 1)) return true;
+        }
+    }
+
+    private void invokeCompleter(PendingCompletion pending) {
+        if (pending.finished.get()) return;
+        if (state != State.ENABLED || !pending.registered.context.active
+                || commands.get(pending.commandName) != pending.registered) {
+            finishCompletion(pending, null, new IllegalStateException("Command is no longer registered"), true);
+            return;
+        }
+        try {
+            CompletionStage<List<String>> stage = Objects.requireNonNull(
+                    pending.registered.completer.complete(new CommandCompletion(
+                            pending.player, pending.commandName, pending.arguments)),
+                    "Command completer returned a null stage");
+            CompletableFuture<List<String>> cancellable = stage.toCompletableFuture();
+            pending.pluginStage.set(cancellable);
+            if (pending.finished.get()) cancellable.cancel(true);
+            stage.whenCompleteAsync((suggestions, failure) -> {
+                if (failure != null) finishCompletion(pending, null, failure, false);
+                else {
+                    try {
+                        finishCompletion(pending, sanitizeSuggestions(
+                                Objects.requireNonNull(suggestions, "Command completer returned null suggestions")),
+                                null, false);
+                    } catch (Throwable invalid) {
+                        finishCompletion(pending, null, invalid, false);
+                    }
+                }
+            }, commandWorkers);
+        } catch (Throwable failure) {
+            finishCompletion(pending, null, failure, true);
+        }
+    }
+
+    private static List<String> sanitizeSuggestions(List<String> suggestions) {
+        var result = new ArrayList<String>(Math.min(suggestions.size(), MAX_COMPLETION_RESULTS));
+        var unique = new HashSet<String>();
+        int utf8Bytes = 0;
+        int scanned = 0;
+        for (String suggestion : suggestions) {
+            if (scanned++ >= MAX_COMPLETION_CANDIDATES_SCANNED || result.size() >= MAX_COMPLETION_RESULTS) break;
+            if (suggestion == null || suggestion.isEmpty() || suggestion.length() > 100 || containsWhitespace(suggestion)
+                    || !unique.add(suggestion)) continue;
+            int bytes = suggestion.getBytes(StandardCharsets.UTF_8).length;
+            if (utf8Bytes + bytes > MAX_COMPLETION_BYTES) continue;
+            result.add(suggestion);
+            utf8Bytes += bytes;
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean containsWhitespace(String value) {
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) return true;
+            offset += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private void finishCompletion(PendingCompletion pending, List<String> suggestions, Throwable failure,
+                                  boolean cancelExecution) {
+        if (!pending.finished.compareAndSet(false, true)) return;
+        pendingCompletions.remove(pending);
+        pending.registered.pendingCompletions.remove(pending);
+        pendingCompletionCount.decrementAndGet();
+        if (pending.timeout != null) pending.timeout.cancel(false);
+        FutureTask<Void> invocation = pending.invocation;
+        if (invocation != null && cancelExecution && !invocation.isDone()) {
+            commandWorkers.remove(invocation);
+            invocation.cancel(true);
+        }
+        CompletableFuture<List<String>> pluginStage = pending.pluginStage.get();
+        if (pluginStage != null && cancelExecution && !pluginStage.isDone()) {
+            PLAYER_COMPLETIONS.execute(() -> pluginStage.cancel(true));
+        }
+        if (failure != null) pending.result.completeExceptionally(failure);
+        else pending.result.complete(Objects.requireNonNull(suggestions, "suggestions"));
+    }
+
     /** Claims only known root commands; caller retains and forwards every other chat frame. */
-    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply) {
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<Component> reply) {
         return dispatchCommand(player, message, reply, () -> true);
     }
 
     /** Admission is checked only after the command name is known, preserving unknown-command passthrough. */
-    public boolean dispatchCommand(PlayerView player, String message, Consumer<String> reply,
+    public boolean dispatchCommand(PlayerView player, String message, Consumer<Component> reply,
                                    BooleanSupplier admission) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(message, "message");
@@ -523,9 +633,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         RegisteredCommand registered = commands.get(name);
         if (registered == null || !registered.context.active) return false;
         if (!admission.getAsBoolean()) return true;
-        String arguments = end == message.length() ? "" : message.substring(end).stripLeading();
+        String arguments = end == message.length() ? "" : message.substring(end + 1);
         CommandInvocation invocation = new CommandInvocation(player, name, arguments,
-                text -> { if (registered.context.active) reply.accept(text); });
+                component -> { if (registered.context.active) reply.accept(component); });
         try {
             commandWorkers.execute(() -> {
                 if (state != State.ENABLED || !registered.context.active || commands.get(name) != registered) return;
@@ -537,7 +647,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 }
             });
         } catch (RejectedExecutionException overloaded) {
-            reply.accept("Proxy command service is busy. Please try again.");
+            reply.accept(Component.text("Proxy command service is busy. Please try again."));
         }
         return true;
     }
@@ -552,16 +662,16 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         // chain can skip the revoked subscriptions and incorrectly finish with allow().
         admissionEvents.close();
         notificationEvents.close();
+        localMessaging.close();
         if (notificationDropReporter != null) notificationDropReporter.cancel(false);
         logNotificationDrops();
         for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
-        for (LoadedPlugin loaded : plugins) loaded.context.revokeBackendChannelSubscriptions();
-        for (CompletableFuture<byte[]> request : pendingBackendMessages) {
-            request.completeExceptionally(new IllegalStateException("Plugin host closed"));
-        }
         for (PendingPlacement request : pendingPlacements) {
             request.decided().set(true);
             request.result().completeExceptionally(new IllegalStateException("Plugin host closed"));
+        }
+        for (PendingCompletion pending : pendingCompletions) {
+            finishCompletion(pending, null, new IllegalStateException("Plugin host closed"), true);
         }
         callbacks.shutdownNow();
         commandWorkers.shutdownNow();
@@ -586,7 +696,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         placementHandler = null;
         eventListeners = Map.of();
         eventRegistrations.clear();
-        backendHandlers.clear();
         backendChannelTransport = null;
     }
 
@@ -626,7 +735,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         LoadedPlugin loaded = new LoadedPlugin(plugin, owner, context);
         plugins.add(loaded);
         context.beginEventRegistration();
-        context.beginBackendChannelRegistration();
         try {
             plugin.onLoad(context);
         } catch (Throwable failure) {
@@ -635,7 +743,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             throw new PluginLoadException(id, failure);
         } finally {
             context.endEventRegistration();
-            context.endBackendChannelRegistration();
         }
     }
 
@@ -674,95 +781,6 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
-    private BackendChannelSubscription registerBackendHandler(
-            PluginContextImpl context, String channel, BackendMessageHandler handler) {
-        Objects.requireNonNull(channel, "channel");
-        Objects.requireNonNull(handler, "handler");
-        if (!channel.matches("[a-z0-9][a-z0-9_.-]{0,63}:[a-z0-9][a-z0-9_.-]{0,63}")) {
-            throw new IllegalArgumentException("invalid backend channel: " + channel);
-        }
-        synchronized (this) {
-            synchronized (context) {
-                context.requireBackendChannelRegistrationOpen();
-                BackendHandlerRegistration registration = new BackendHandlerRegistration(context, channel, handler);
-                if (backendHandlers.putIfAbsent(channel, registration) != null) {
-                    throw new IllegalArgumentException("Backend channel already registered: " + channel);
-                }
-                context.backendChannelSubscriptions.add(registration);
-                return registration;
-            }
-        }
-    }
-
-    private CompletionStage<BackendSendResult> sendBackendMessage(
-            PluginContextImpl context, String backendName, String channel, byte[] payload) {
-        Objects.requireNonNull(backendName, "backendName");
-        Objects.requireNonNull(channel, "channel");
-        byte[] copy = Objects.requireNonNull(payload, "payload").clone();
-        BackendChannelTransport transport;
-        synchronized (this) {
-            synchronized (context) {
-                context.requireActive();
-                if (state == State.CLOSED) return CompletableFuture.failedFuture(
-                        new IllegalStateException("Plugin host is closed"));
-                transport = backendChannelTransport;
-            }
-            if (transport == null) return CompletableFuture.failedFuture(
-                    new IllegalStateException("Backend channel transport is not available"));
-            try {
-                return Objects.requireNonNull(transport.send(backendName, channel, copy), "transport send stage");
-            } catch (Throwable failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-    }
-
-    private CompletionStage<byte[]> requestBackendMessage(
-            PluginContextImpl context, String backendName, String channel, byte[] payload) {
-        Objects.requireNonNull(backendName, "backendName");
-        Objects.requireNonNull(channel, "channel");
-        byte[] copy = Objects.requireNonNull(payload, "payload").clone();
-        BackendChannelTransport transport;
-        synchronized (this) {
-            synchronized (context) {
-                context.requireActive();
-                if (state == State.CLOSED) return CompletableFuture.failedFuture(
-                        new IllegalStateException("Plugin host is closed"));
-                transport = backendChannelTransport;
-            }
-            if (transport == null) return CompletableFuture.failedFuture(
-                    new IllegalStateException("Backend channel transport is not available"));
-            try {
-                CompletionStage<byte[]> response = Objects.requireNonNull(
-                        transport.request(backendName, channel, copy), "transport request stage");
-                CompletableFuture<byte[]> result = new CompletableFuture<>();
-                pendingBackendMessages.add(result);
-                ScheduledFuture<?> timeout;
-                try {
-                    timeout = timer.schedule(() -> result.completeExceptionally(
-                                    new TimeoutException("Backend request exceeded five seconds")),
-                            5, TimeUnit.SECONDS);
-                } catch (RuntimeException failure) {
-                    pendingBackendMessages.remove(result);
-                    return CompletableFuture.failedFuture(failure);
-                }
-                result.whenComplete((ignored, failure) -> {
-                    timeout.cancel(false);
-                    pendingBackendMessages.remove(result);
-                });
-                response.whenComplete((reply, failure) -> {
-                    if (failure != null) result.completeExceptionally(failure);
-                    else if (reply == null) result.completeExceptionally(
-                            new IllegalStateException("Backend channel transport returned null"));
-                    else result.complete(reply.clone());
-                });
-                return result;
-            } catch (Throwable failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
-        }
-    }
-
     private void logNotificationDrops() {
         long count = notificationDrops.getAndSet(0);
         if (count != 0) {
@@ -798,23 +816,38 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private record PendingPlacement(CompletableFuture<Optional<PlacementDecision>> result,
                                     AtomicBoolean decided) { }
 
-    private record RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler) { }
-
-    private final class BackendHandlerRegistration implements BackendChannelSubscription {
+    private final class RegisteredCommand {
+        private final String name;
         private final PluginContextImpl context;
-        private final String channel;
-        private final BackendMessageHandler handler;
-        private final AtomicBoolean active = new AtomicBoolean(true);
+        private final CommandHandler handler;
+        private final CommandCompleter completer;
+        private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
 
-        private BackendHandlerRegistration(PluginContextImpl context, String channel, BackendMessageHandler handler) {
+        private RegisteredCommand(String name, PluginContextImpl context, CommandHandler handler,
+                                  CommandCompleter completer) {
+            this.name = name;
             this.context = context;
-            this.channel = channel;
             this.handler = handler;
+            this.completer = completer;
         }
+    }
 
-        private boolean isActive() { return active.get() && context.active; }
-        @Override public void close() {
-            if (active.compareAndSet(true, false)) backendHandlers.remove(channel, this);
+    private final class PendingCompletion {
+        private final RegisteredCommand registered;
+        private final PlayerView player;
+        private final String commandName;
+        private final String arguments;
+        private final CompletableFuture<List<String>> result = new CompletableFuture<>();
+        private final AtomicBoolean finished = new AtomicBoolean();
+        private final AtomicReference<CompletableFuture<List<String>>> pluginStage = new AtomicReference<>();
+        private volatile FutureTask<Void> invocation;
+        private volatile ScheduledFuture<?> timeout;
+
+        private PendingCompletion(RegisteredCommand registered, PlayerView player, String commandName, String arguments) {
+            this.registered = registered;
+            this.player = player;
+            this.commandName = commandName;
+            this.arguments = arguments;
         }
     }
 
@@ -856,26 +889,24 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
     private final class PluginContextImpl implements PluginContext {
         private final BackendOwner owner;
+        private final Messaging pluginMessaging;
         private final Players pluginPlayers;
         private final PluginServers servers;
         private final Commands pluginCommands;
         private final Events pluginEvents;
-        private final BackendChannels pluginBackendChannels;
         private final Logger logger;
         private final Map<String, String> settings;
         private final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
-        private final Set<BackendHandlerRegistration> backendChannelSubscriptions = new HashSet<>();
         private volatile boolean active = true;
         private boolean eventRegistrationOpen;
-        private boolean backendChannelRegistrationOpen;
 
         private PluginContextImpl(BackendOwner owner, Map<String, String> settings) {
             this.owner = owner;
+            this.pluginMessaging = localMessaging.openScope(owner.id());
             this.pluginPlayers = new PluginPlayers(this);
             this.servers = new PluginServers(this);
             this.pluginCommands = new PluginCommands(this);
             this.pluginEvents = new PluginEvents(this);
-            this.pluginBackendChannels = new PluginBackendChannels(this);
             this.logger = LoggerFactory.getLogger("plugin." + owner.id());
             this.settings = Map.copyOf(settings);
         }
@@ -884,16 +915,22 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         @Override public Servers servers() { return servers; }
         @Override public Commands commands() { return pluginCommands; }
         @Override public Events events() { return pluginEvents; }
-        @Override public BackendChannels backendChannels() { return pluginBackendChannels; }
+        @Override public Messaging messaging() { return pluginMessaging; }
         @Override public Logger logger() { return logger; }
         @Override public Map<String, String> settings() { return settings; }
 
         private synchronized void deactivateAndRemove() {
             active = false;
             eventRegistrationOpen = false;
-            backendChannelRegistrationOpen = false;
+            pluginMessaging.close();
             revokeEventSubscriptions();
-            revokeBackendChannelSubscriptions();
+            for (RegisteredCommand command : commands.values()) {
+                if (command.context == this) {
+                    for (PendingCompletion pending : command.pendingCompletions) {
+                        finishCompletion(pending, null, new IllegalStateException("Plugin unloaded"), true);
+                    }
+                }
+            }
             commands.entrySet().removeIf(entry -> entry.getValue().context == this);
             catalog.removeOwner(owner);
         }
@@ -911,30 +948,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private synchronized void endEventRegistration() { eventRegistrationOpen = false; }
 
-        private synchronized void beginBackendChannelRegistration() {
-            if (!active) throw new IllegalStateException("Plugin context is inactive");
-            backendChannelRegistrationOpen = true;
-        }
-
-        private synchronized void endBackendChannelRegistration() { backendChannelRegistrationOpen = false; }
-
-        private synchronized void revokeBackendChannelSubscriptions() {
-            backendChannelRegistrationOpen = false;
-            backendChannelSubscriptions.forEach(BackendHandlerRegistration::close);
-            backendChannelSubscriptions.clear();
-        }
-
         private synchronized void requireEventRegistrationOpen() {
             requireActive();
             if (!eventRegistrationOpen || state != State.LOADING) {
                 throw new IllegalStateException("Event subscriptions are only allowed during onLoad or onEnable");
-            }
-        }
-
-        private synchronized void requireBackendChannelRegistrationOpen() {
-            requireActive();
-            if (!backendChannelRegistrationOpen || state != State.LOADING) {
-                throw new IllegalStateException("Backend channel subscriptions are only allowed during onLoad or onEnable");
             }
         }
 
@@ -954,22 +971,80 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
-    private final class PluginBackendChannels implements BackendChannels {
-        private final PluginContextImpl context;
-
-        private PluginBackendChannels(PluginContextImpl context) { this.context = context; }
-
-        @Override public BackendChannelSubscription subscribe(String channel, BackendMessageHandler handler) {
-            return registerBackendHandler(context, channel, handler);
+    private final class HostMessagingOutbound implements LocalMessaging.Outbound {
+        @Override public CompletionStage<SendResult> send(Message message) {
+            if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.EVENT
+                    || message.target() == null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy message send"));
+            }
+            if (message.target().isProxy()) {
+                return CompletableFuture.completedFuture(localMessaging.receiveEvent(message));
+            }
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.completedFuture(SendResult.NOT_CONNECTED);
+            try {
+                return Objects.requireNonNull(transport.send(message), "transport send stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
         }
 
-        @Override public CompletionStage<BackendSendResult> send(String backendName, String channel, byte[] payload) {
-            return sendBackendMessage(context, backendName, channel, payload);
+        @Override public CompletionStage<Message> request(Message message, Duration timeout) {
+            if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.REQUEST
+                    || message.target() == null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy message request"));
+            }
+            if (message.target().isProxy()) return localMessaging.receiveRequest(message, timeout);
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.failedFuture(new MessagingException(
+                    MessagingException.Code.NOT_CONNECTED, "backend control transport is not available"));
+            try {
+                return Objects.requireNonNull(transport.request(message, timeout), "transport request stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
         }
 
-        @Override public CompletionStage<byte[]> request(String backendName, String channel, byte[] payload) {
-            return requestBackendMessage(context, backendName, channel, payload);
+        @Override public CompletionStage<PublishResult> publish(Message event) {
+            if (!Endpoint.proxy().equals(event.source()) || event.kind() != MessageKind.EVENT
+                    || event.target() != null) {
+                return CompletableFuture.failedFuture(new MessagingException(
+                        MessagingException.Code.REJECTED, "invalid proxy event publication"));
+            }
+            BackendChannelTransport transport = backendChannelTransport;
+            if (transport == null) return CompletableFuture.completedFuture(new PublishResult(
+                    event.id(), Map.of(Endpoint.proxy(), localMessaging.receiveEvent(event))));
+            final CompletionStage<PublishResult> remote;
+            try {
+                remote = Objects.requireNonNull(transport.publish(event), "transport publish stage");
+            } catch (Throwable failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+            CompletableFuture<PublishResult> combinedResult = new CompletableFuture<>();
+            remote.whenComplete((result, failure) -> {
+                if (combinedResult.isCancelled()) return;
+                if (failure != null) {
+                    combinedResult.completeExceptionally(failure);
+                    return;
+                }
+                if (!event.id().equals(result.messageId()) || result.results().containsKey(Endpoint.proxy())) {
+                    combinedResult.completeExceptionally(new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
+                            "transport returned an invalid publish result"));
+                    return;
+                }
+                Map<Endpoint, SendResult> combined = new java.util.LinkedHashMap<>();
+                combined.put(Endpoint.proxy(), localMessaging.receiveEvent(event));
+                combined.putAll(result.results());
+                combinedResult.complete(new PublishResult(event.id(), combined));
+            });
+            combinedResult.whenComplete((ignored, failure) -> {
+                if (combinedResult.isCancelled()) remote.toCompletableFuture().cancel(false);
+            });
+            return combinedResult;
         }
+
     }
 
     private final class PluginCommands implements Commands {
@@ -977,7 +1052,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
         private PluginCommands(PluginContextImpl context) { this.context = context; }
 
-        @Override public CommandRegistration register(String name, CommandHandler handler) {
+        @Override public CommandRegistration register(String name, CommandHandler handler, CommandCompleter completer) {
             Objects.requireNonNull(name, "name");
             Objects.requireNonNull(handler, "handler");
             String normalized = name.toLowerCase(Locale.ROOT);
@@ -986,11 +1061,19 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
             synchronized (context) {
                 context.requireActive();
-                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler);
+                RegisteredCommand registration = new RegisteredCommand(normalized, context, handler, completer);
                 if (commands.putIfAbsent(normalized, registration) != null) {
                     throw new IllegalArgumentException("Command already registered: /" + normalized);
                 }
-                return () -> commands.remove(normalized, registration);
+                return () -> {
+                    synchronized (PluginHost.this) {
+                        if (commands.remove(normalized, registration)) {
+                            for (PendingCompletion pending : registration.pendingCompletions) {
+                                finishCompletion(pending, null, new IllegalStateException("Command unregistered"), true);
+                            }
+                        }
+                    }
+                };
             }
         }
     }
@@ -1026,7 +1109,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
         }
 
-        @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, String message) {
+        @Override public CompletionStage<MessageResult> sendMessage(PlayerIdentity identity, Component message) {
             synchronized (context) {
                 context.requireActive();
                 return players.sendMessage(identity, message)
@@ -1034,7 +1117,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
         }
 
-        @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, String reason) {
+        @Override public CompletionStage<DisconnectResult> disconnect(PlayerIdentity identity, Component reason) {
             synchronized (context) {
                 context.requireActive();
                 return players.disconnect(identity, reason)

@@ -1,13 +1,19 @@
 package dev.strataproxy.core.control;
 
-import dev.strataproxy.api.BackendMessage;
-import dev.strataproxy.api.BackendSendResult;
 import dev.strataproxy.app.ProxyConfiguration;
 import dev.strataproxy.core.backend.BackendCatalog;
 import dev.strataproxy.core.backend.BackendHandle;
 import dev.strataproxy.core.backend.BackendId;
 import dev.strataproxy.core.backend.BackendOwner;
 import dev.strataproxy.core.backend.BackendRegistration;
+import dev.strataproxy.messaging.Endpoint;
+import dev.strataproxy.messaging.Message;
+import dev.strataproxy.messaging.MessageKind;
+import dev.strataproxy.messaging.MessagingException;
+import dev.strataproxy.messaging.PublishResult;
+import dev.strataproxy.messaging.SendResult;
+import dev.strataproxy.messaging.internal.LocalMessaging;
+import dev.strataproxy.messaging.protocol.MessageCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +34,9 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -43,24 +52,27 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 
 /** Independent authenticated backend connection for registration and plugin control messages. */
 public final class BackendControlService implements BackendChannelTransport, AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(BackendControlService.class);
-    private static final int VERSION = 1;
-    private static final int MAX_FRAME = 66 * 1024;
-    private static final int MAX_PAYLOAD = 65_536;
+    private static final int VERSION = 2;
+    private static final int MAX_FRAME = MessageCodec.MAX_FRAME_BYTES;
     private static final long MAX_QUEUED_BYTES = 1_048_576;
+    private static final long MAX_GLOBAL_QUEUED_BYTES = 64L * 1_048_576;
+    private static final int MAX_WRITE_TASKS = 512;
     private static final int MAX_REQUESTS = 128;
     private static final int HELLO = 1, REGISTER = 2, REGISTERED = 3, HEARTBEAT = 4,
-            PONG = 5, GOODBYE = 6, MESSAGE = 7, RESPONSE = 8;
-    private static final int OK = 0, NO_HANDLER = 1, ERROR = 2;
+            PONG = 5, GOODBYE = 6;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
 
     private final ProxyConfiguration.BackendChannel configuration;
     private final BackendCatalog catalog;
-    private final Function<BackendMessage, CompletionStage<byte[]>> inbound;
+    private final LocalMessaging messaging;
     private final Object lock = new Object();
     private final Map<String, Lease> byInstance = new HashMap<>();
     private final Map<String, Lease> byBackend = new HashMap<>();
@@ -69,14 +81,19 @@ public final class BackendControlService implements BackendChannelTransport, Aut
             Thread.ofVirtual().name("strataproxy-control-timer", 0).factory());
     private final SecureRandom random = new SecureRandom();
     private final AtomicLong nextEpoch = new AtomicLong();
+    private final AtomicLong globalQueuedBytes = new AtomicLong();
+    private final Semaphore writeTasks = new Semaphore(MAX_WRITE_TASKS);
+    private final ThreadPoolExecutor routingWorkers = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(512), namedFactory("strataproxy-control-routing"),
+            new ThreadPoolExecutor.AbortPolicy());
     private volatile boolean closed;
     private ServerSocket listener;
 
     public BackendControlService(ProxyConfiguration.BackendChannel configuration, BackendCatalog catalog,
-                                 Function<BackendMessage, CompletionStage<byte[]>> inbound) {
+                                 LocalMessaging messaging) {
         this.configuration = Objects.requireNonNull(configuration, "configuration");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
-        this.inbound = Objects.requireNonNull(inbound, "inbound");
+        this.messaging = Objects.requireNonNull(messaging, "messaging");
         this.connectionSlots = new Semaphore(configuration.maxConnections());
     }
 
@@ -139,15 +156,15 @@ public final class BackendControlService implements BackendChannelTransport, Aut
                     case HEARTBEAT -> {
                         requireEmpty(frame.input);
                         renew(connection);
-                        connection.write(PONG, ignored -> { });
+                        writeAsync(connection, singleByteFrame(PONG));
                     }
                     case GOODBYE -> {
                         requireEmpty(frame.input);
                         unregister(connection);
                         return;
                     }
-                    case MESSAGE -> receiveMessage(connection, frame.input);
-                    case RESPONSE -> receiveResponse(connection, frame.input);
+                    case MessageCodec.MESSAGE -> receiveMessage(connection, frame.bytes);
+                    case MessageCodec.RESPONSE -> receiveResponse(connection, frame.bytes);
                     default -> throw new IOException("unexpected backend control frame " + frame.type);
                 }
             }
@@ -188,7 +205,8 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         mac.init(new SecretKeySpec(client.secret().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         if (!MessageDigest.isEqual(signature, mac.doFinal(canonical.toByteArray())))
             throw new IOException("backend signature rejected");
-        return new Registration(instanceId, name, generation, uri, client.allowedNamespaces());
+        return new Registration(instanceId, name, generation, uri, client.allowedNamespaces(),
+                client.allowedReceiveNamespaces());
     }
 
     private void register(Connection connection, Registration requested) throws IOException {
@@ -212,6 +230,7 @@ public final class BackendControlService implements BackendChannelTransport, Aut
             connection.name = requested.name;
             connection.epoch = epoch;
             connection.allowedNamespaces = requested.allowedNamespaces;
+            connection.allowedReceiveNamespaces = requested.allowedReceiveNamespaces;
             Lease replacement = new Lease(requested.instanceId, requested.name, requested.generation, epoch, handle,
                     System.nanoTime() + TimeUnit.SECONDS.toNanos(configuration.leaseSeconds()), connection);
             byInstance.put(requested.instanceId, replacement);
@@ -267,123 +286,505 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         if (lease.connection != null) lease.connection.close();
     }
 
-    private void receiveMessage(Connection connection, DataInputStream input) throws IOException {
-        String channel = readString(input, 128);
-        validateChannel(channel);
-        if (!connection.allowedNamespaces.contains(channel.substring(0, channel.indexOf(':'))))
-            throw new IOException("backend message namespace rejected");
+    private void receiveMessage(Connection connection, byte[] frame) throws IOException {
+        MessageCodec.IncomingMessage incoming = MessageCodec.decodeMessage(frame);
         if (!connection.allowMessage()) throw new IOException("backend message rate exceeded");
-        long requestId = input.readLong();
-        byte[] payload = readPayload(input);
-        requireEmpty(input);
+        Message received = incoming.message;
+        if (received.kind() == MessageKind.REPLY) throw new IOException("backend cannot send an unsolicited reply message");
+        long deadline = deadlineAfterMillis(incoming.timeoutMillis);
+        String namespace = namespace(received.channel());
+        if (!connection.allowedNamespaces.contains(namespace)) {
+            if (received.kind() == MessageKind.EVENT && received.target() != null) {
+                writeAsync(connection, MessageCodec.sendResult(incoming.operationId, SendResult.REJECTED), deadline);
+            } else {
+                writeAsync(connection, MessageCodec.error(incoming.operationId, MessagingException.Code.REJECTED,
+                        "backend message namespace rejected"), deadline);
+            }
+            return;
+        }
+        Message authenticated = new Message(received.id(), received.kind(), received.channel(),
+                Endpoint.backend(connection.name), received.target(), received.replyTo(), received.payload());
         if (connection.inboundRequests.incrementAndGet() > MAX_REQUESTS) {
             connection.inboundRequests.decrementAndGet();
-            throw new IOException("too many backend requests");
+            writeAsync(connection, MessageCodec.error(incoming.operationId,
+                    MessagingException.Code.BACKPRESSURED, "inbound operation limit reached"), deadline);
+            return;
         }
-        BackendMessage message = new BackendMessage(connection.name, connection.instanceId,
-                connection.epoch, channel, payload);
-        CompletionStage<byte[]> result;
-        try { result = Objects.requireNonNull(inbound.apply(message), "handler result"); }
-        catch (Throwable failure) { result = CompletableFuture.failedFuture(failure); }
-        result.whenComplete((reply, failure) -> {
-            connection.inboundRequests.decrementAndGet();
-            if (requestId == 0 || !isCurrent(connection)) return;
-            Throwable cause = failure instanceof java.util.concurrent.CompletionException && failure.getCause() != null
-                    ? failure.getCause() : failure;
-            int status = failure == null ? OK : cause instanceof BackendNoHandlerException ? NO_HANDLER : ERROR;
-            byte[] response = failure == null && reply != null ? reply.clone() : new byte[0];
-            if (response.length > MAX_PAYLOAD) { status = ERROR; response = new byte[0]; }
-            int finalStatus = status;
-            byte[] finalResponse = response;
-            Thread.ofVirtual().start(() -> {
-                try { connection.write(RESPONSE, out -> {
-                    out.writeLong(requestId);
-                    out.writeByte(finalStatus);
-                    writePayload(out, finalResponse);
-                }); }
-                catch (IOException ignored) { connection.close(); }
+        switch (authenticated.kind()) {
+            case EVENT:
+                if (authenticated.target() == null) {
+                    routePublish(connection, incoming.operationId, authenticated, deadline);
+                } else {
+                    routeSend(connection, incoming.operationId, authenticated, deadline);
+                }
+                break;
+            case REQUEST:
+                routeRequest(connection, incoming.operationId, authenticated, deadline);
+                break;
+            default:
+                connection.inboundRequests.decrementAndGet();
+                throw new IOException("unsupported backend message kind");
+        }
+    }
+
+    private void routeSend(Connection origin, long operationId, Message message, long deadline) {
+        CompletionStage<SendResult> delivery;
+        Endpoint target = message.target();
+        if (target.isProxy()) {
+            delivery = CompletableFuture.completedFuture(messaging.receiveEvent(message));
+        } else {
+            Connection destination = current(target.backendName());
+            if (destination == null) {
+                delivery = CompletableFuture.completedFuture(SendResult.NOT_CONNECTED);
+            } else if (!destination.allowedReceiveNamespaces.contains(namespace(message.channel()))) {
+                delivery = CompletableFuture.completedFuture(SendResult.REJECTED);
+            } else {
+                Message forwarded = retarget(message, target);
+                delivery = sendTo(destination, forwarded, remaining(deadline));
+            }
+        }
+        delivery.whenComplete((result, failure) -> {
+            if (failure != null) respondError(origin, operationId, asMessagingException(failure), deadline);
+            else respondSend(origin, operationId, result, deadline);
+            origin.inboundRequests.decrementAndGet();
+        });
+    }
+
+    private void routePublish(Connection origin, long operationId, Message event, long deadline) {
+        List<Connection> destinations = connectedBackends().stream()
+                .filter(candidate -> candidate.allowedReceiveNamespaces.contains(namespace(event.channel())))
+                .toList();
+        if (destinations.size() + 1 > MessageCodec.MAX_PUBLISH_RESULTS) {
+            respondError(origin, operationId, new MessagingException(MessagingException.Code.REJECTED,
+                    "publish exceeds the maximum of " + MessageCodec.MAX_PUBLISH_RESULTS + " authorized nodes"), deadline);
+            origin.inboundRequests.decrementAndGet();
+            return;
+        }
+        Map<Endpoint, SendResult> results = new LinkedHashMap<>();
+        results.put(Endpoint.proxy(), messaging.receiveEvent(event));
+        List<CompletableFuture<Void>> completions = new ArrayList<>();
+        for (Connection destination : destinations) {
+            Endpoint endpoint = Endpoint.backend(destination.name);
+            Message forwarded = retarget(event, endpoint);
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            completions.add(completion);
+            sendTo(destination, forwarded, remaining(deadline)).whenComplete((status, failure) -> {
+                synchronized (results) {
+                    results.put(endpoint, failure == null ? status : sendFailure(failure));
+                }
+                completion.complete(null);
             });
+        }
+        CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new)).whenComplete((ignored, failure) -> {
+            Map<Endpoint, SendResult> copy;
+            synchronized (results) { copy = new LinkedHashMap<>(results); }
+            try { writeAsync(origin, MessageCodec.published(operationId, new PublishResult(event.id(), copy)), deadline); }
+            catch (IOException invalid) { writeAsync(origin, errorFrame(operationId, invalid), deadline); }
+            finally { origin.inboundRequests.decrementAndGet(); }
         });
     }
 
-    private void receiveResponse(Connection connection, DataInputStream input) throws IOException {
-        long requestId = input.readLong();
-        int status = input.readUnsignedByte();
-        byte[] payload = readPayload(input);
-        requireEmpty(input);
-        CompletableFuture<byte[]> request = connection.pending.remove(requestId);
-        if (request != null) {
-            if (status == OK) request.complete(payload);
-            else request.completeExceptionally(new IOException("backend response status " + status));
+    private void routeRequest(Connection origin, long operationId, Message request, long deadline) {
+        CompletionStage<Message> response;
+        Endpoint target = request.target();
+        if (target.isProxy()) {
+            response = dispatchProxyRequest(origin, request, deadline);
+        } else {
+            Connection destination = current(target.backendName());
+            if (destination == null) {
+                response = failed(new MessagingException(MessagingException.Code.NOT_CONNECTED,
+                        "target backend is not connected"));
+            } else if (!destination.allowedReceiveNamespaces.contains(namespace(request.channel()))) {
+                response = failed(new MessagingException(MessagingException.Code.REJECTED,
+                        "target backend does not allow this message namespace"));
+            } else {
+                response = requestFrom(destination, request, remaining(deadline));
+            }
         }
-    }
-
-    @Override public CompletionStage<BackendSendResult> send(String backendName, String channel, byte[] payload) {
-        validateMessage(channel, payload);
-        Connection connection = current(backendName);
-        if (connection == null) return CompletableFuture.completedFuture(BackendSendResult.NOT_CONNECTED);
-        byte[] copy = payload.clone();
-        if (!connection.reserve(copy.length)) return CompletableFuture.completedFuture(BackendSendResult.BACKPRESSURED);
-        CompletableFuture<BackendSendResult> result = new CompletableFuture<>();
-        Thread.ofVirtual().start(() -> {
-            try {
-                connection.write(MESSAGE, out -> {
-                    writeString(out, channel);
-                    out.writeLong(0);
-                    writePayload(out, copy);
-                });
-                result.complete(BackendSendResult.SENT);
-            } catch (IOException failure) { connection.close(); result.completeExceptionally(failure); }
-            finally { connection.release(copy.length); }
+        response.whenComplete((reply, failure) -> {
+            if (failure != null) respondError(origin, operationId, asMessagingException(failure), deadline);
+            else {
+                try { writeAsync(origin, MessageCodec.reply(operationId, reply), deadline); }
+                catch (IOException invalid) { writeAsync(origin, errorFrame(operationId, invalid), deadline); }
+            }
+            origin.inboundRequests.decrementAndGet();
         });
-        return result;
     }
 
-    @Override public CompletionStage<byte[]> request(String backendName, String channel, byte[] payload) {
-        validateMessage(channel, payload);
-        Connection connection = current(backendName);
-        if (connection == null) return CompletableFuture.failedFuture(new IOException("backend control is disconnected"));
-        byte[] copy = payload.clone();
-        if (!connection.reserve(copy.length))
-            return CompletableFuture.failedFuture(new IOException("backend control is backpressured"));
-        if (!connection.requestSlots.tryAcquire()) {
-            connection.release(copy.length);
-            return CompletableFuture.failedFuture(new IOException("backend control has too many pending requests"));
+    private CompletionStage<Message> dispatchProxyRequest(Connection origin, Message request, long deadline) {
+        Duration timeout = remaining(deadline);
+        if (timeout.isZero()) return failed(new MessagingException(MessagingException.Code.TIMED_OUT,
+                "request expired before proxy dispatch"));
+        return messaging.receiveRequest(retarget(request, Endpoint.proxy()), timeout);
+    }
+
+    @Override public CompletionStage<SendResult> send(Message message) {
+        Objects.requireNonNull(message, "message");
+        if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.EVENT
+                || message.target() == null || message.target().isProxy()) {
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "proxy send must be an event targeted at a backend"));
         }
-        long id = connection.nextRequest.getAndIncrement();
-        if (id <= 0) {
-            connection.release(copy.length);
-            connection.requestSlots.release();
-            return CompletableFuture.failedFuture(new IOException("backend request ID exhausted"));
+        Connection connection = current(message.target().backendName());
+        if (connection == null) return CompletableFuture.completedFuture(SendResult.NOT_CONNECTED);
+        if (!connection.allowedReceiveNamespaces.contains(namespace(message.channel())))
+            return CompletableFuture.completedFuture(SendResult.REJECTED);
+        return sendTo(connection, message, REQUEST_TIMEOUT);
+    }
+
+    @Override public CompletionStage<Message> request(Message message, Duration timeout) {
+        Objects.requireNonNull(message, "message");
+        if (!Endpoint.proxy().equals(message.source()) || message.kind() != MessageKind.REQUEST
+                || message.target() == null || message.target().isProxy()) {
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "proxy request must target a backend"));
         }
-        CompletableFuture<byte[]> result = new CompletableFuture<>();
-        connection.pending.put(id, result);
-        final ScheduledFuture<?> timeout;
-        try {
-            timeout = timer.schedule(() -> result.completeExceptionally(new IOException("backend request timed out")),
-                    REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (RuntimeException failure) {
-            connection.pending.remove(id, result);
-            connection.requestSlots.release();
-            connection.release(copy.length);
-            result.completeExceptionally(failure);
-            return result;
+        Connection connection = current(message.target().backendName());
+        if (connection == null) return failed(new MessagingException(
+                MessagingException.Code.NOT_CONNECTED, "target backend is not connected"));
+        if (!connection.allowedReceiveNamespaces.contains(namespace(message.channel())))
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "target backend does not allow this message namespace"));
+        return requestFrom(connection, message, timeout);
+    }
+
+    @Override public CompletionStage<PublishResult> publish(Message event) {
+        Objects.requireNonNull(event, "event");
+        if (!Endpoint.proxy().equals(event.source()) || event.kind() != MessageKind.EVENT || event.target() != null)
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "proxy publish must be an untargeted event"));
+        List<Connection> destinations = connectedBackends().stream()
+                .filter(candidate -> candidate.allowedReceiveNamespaces.contains(namespace(event.channel())))
+                .toList();
+        if (destinations.size() + 1 > MessageCodec.MAX_PUBLISH_RESULTS) {
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "publish exceeds the maximum of " + MessageCodec.MAX_PUBLISH_RESULTS + " authorized nodes"));
         }
+        Map<Endpoint, SendResult> results = new LinkedHashMap<>();
+        List<CompletableFuture<Void>> completions = new ArrayList<>();
+        List<CompletableFuture<?>> deliveries = new ArrayList<>();
+        for (Connection destination : destinations) {
+            Endpoint endpoint = Endpoint.backend(destination.name);
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            completions.add(completion);
+            CompletionStage<SendResult> delivery = sendTo(destination, retarget(event, endpoint), REQUEST_TIMEOUT);
+            deliveries.add(delivery.toCompletableFuture());
+            delivery.whenComplete((status, failure) -> {
+                synchronized (results) { results.put(endpoint, failure == null ? status : sendFailure(failure)); }
+                completion.complete(null);
+            });
+        }
+        CompletableFuture<PublishResult> result = new CompletableFuture<>();
         result.whenComplete((ignored, failure) -> {
-            connection.pending.remove(id, result);
-            timeout.cancel(false);
-            connection.requestSlots.release();
+            if (result.isCancelled()) deliveries.forEach(delivery -> delivery.cancel(false));
         });
-        Thread.ofVirtual().start(() -> {
-            try { connection.write(MESSAGE, out -> {
-                writeString(out, channel);
-                out.writeLong(id);
-                writePayload(out, copy);
-            }); }
-            catch (IOException failure) { connection.close(); result.completeExceptionally(failure); }
-            finally { connection.release(copy.length); }
+        CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new)).whenComplete((ignored, failure) -> {
+            synchronized (results) { result.complete(new PublishResult(event.id(), results)); }
         });
         return result;
+    }
+
+    private CompletionStage<SendResult> sendTo(Connection connection, Message message, Duration timeout) {
+        return mapCancellable(exchange(connection, message, timeout, MessageCodec.Response.Type.SEND),
+                response -> response.sendResult);
+    }
+
+    private CompletionStage<Message> requestFrom(Connection connection, Message message, Duration timeout) {
+        return mapCancellable(exchange(connection, message, timeout, MessageCodec.Response.Type.REPLY), response -> {
+            Message reply = response.message;
+            if (reply == null || !message.id().equals(reply.replyTo())
+                    || !message.channel().equals(reply.channel())
+                    || !Endpoint.backend(connection.name).equals(reply.source())
+                    || !message.source().equals(reply.target())) {
+                throw new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
+                        "backend returned a reply for a different request or identity");
+            }
+            return reply;
+        });
+    }
+
+    private CompletionStage<MessageCodec.Response> exchange(Connection connection, Message message, Duration timeout,
+                                                              MessageCodec.Response.Type expected) {
+        if (timeout == null || timeout.isNegative() || timeout.isZero())
+            return failed(new MessagingException(MessagingException.Code.TIMED_OUT, "message operation timed out"));
+        long timeoutMillis;
+        try { timeoutMillis = Math.max(1, Math.min(MessageCodec.MAX_TIMEOUT_MILLIS, timeout.toMillis())); }
+        catch (ArithmeticException overflow) { timeoutMillis = MessageCodec.MAX_TIMEOUT_MILLIS; }
+        if (!connection.requestSlots.tryAcquire()) return failed(new MessagingException(
+                MessagingException.Code.BACKPRESSURED, "backend has too many in-flight operations"));
+        long operationId = connection.nextRequest.getAndIncrement();
+        if (operationId <= 0) {
+            connection.requestSlots.release();
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "backend operation ID space exhausted"));
+        }
+        final byte[] frame;
+        try { frame = MessageCodec.message(operationId, timeoutMillis, message); }
+        catch (IOException | RuntimeException invalid) {
+            connection.requestSlots.release();
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "message cannot be encoded", invalid));
+        }
+        final long deadline = deadlineAfterMillis(timeoutMillis);
+        if (!reserveWrite(connection, frame.length)) {
+            connection.requestSlots.release();
+            return failed(new MessagingException(MessagingException.Code.BACKPRESSURED,
+                    "backend outbound queue is full"));
+        }
+        CompletableFuture<MessageCodec.Response> result = new CompletableFuture<>();
+        PendingOperation pending = new PendingOperation(result, expected);
+        if (connection.pending.putIfAbsent(operationId, pending) != null) {
+            releaseWrite(connection, frame.length);
+            connection.requestSlots.release();
+            return failed(new MessagingException(MessagingException.Code.REJECTED,
+                    "backend operation ID collision"));
+        }
+        AtomicBoolean writeStarted = new AtomicBoolean();
+        ScheduledFuture<?> timeoutTask;
+        try {
+            timeoutTask = timer.schedule(() -> {
+                        if (result.isCancelled()) {
+                            if (writeStarted.get()) connection.close();
+                        } else if (result.completeExceptionally(new MessagingException(
+                                MessagingException.Code.TIMED_OUT, "backend message operation timed out"))
+                                && writeStarted.get()) connection.close();
+                    },
+                    timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException closedTimer) {
+            result.completeExceptionally(new MessagingException(MessagingException.Code.CLOSED,
+                    "backend control service is closed", closedTimer));
+            timeoutTask = null;
+        }
+        final ScheduledFuture<?> operationTimeout = timeoutTask;
+        result.whenComplete((value, failure) -> {
+            connection.pending.remove(operationId, pending);
+            if (operationTimeout != null && (!result.isCancelled() || !writeStarted.get()))
+                operationTimeout.cancel(false);
+            connection.requestSlots.release();
+        });
+        Thread.ofVirtual().name("strataproxy-control-write").start(() -> {
+            try {
+                boolean written = connection.writeFrame(() -> {
+                    long remainingNanos = deadline - System.nanoTime();
+                    if (result.isDone() || remainingNanos <= 0) return null;
+                    long remainingMillis = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+                    byte[] currentFrame = MessageCodec.message(operationId, remainingMillis, message);
+                    writeStarted.set(true);
+                    if (result.isDone() || deadline - System.nanoTime() <= 0) {
+                        writeStarted.set(false);
+                        return null;
+                    }
+                    return currentFrame;
+                }, () -> writeStarted.set(false));
+                if (!written && !result.isDone() && deadline - System.nanoTime() <= 0) {
+                    result.completeExceptionally(new MessagingException(MessagingException.Code.TIMED_OUT,
+                            "backend message operation timed out before write"));
+                }
+            } catch (IOException failure) {
+                connection.close();
+                result.completeExceptionally(new MessagingException(MessagingException.Code.NOT_CONNECTED,
+                        "backend connection was lost while writing", failure));
+            } finally { releaseWrite(connection, frame.length); }
+        });
+        return result;
+    }
+
+    private void receiveResponse(Connection connection, byte[] frame) throws IOException {
+        MessageCodec.Response response = MessageCodec.decodeResponse(frame);
+        PendingOperation pending = connection.pending.get(response.operationId);
+        if (pending == null) return; // A timed-out operation may receive one late receipt.
+        try {
+            routingWorkers.execute(() -> {
+                if (response.type == MessageCodec.Response.Type.ERROR) {
+                    pending.result.completeExceptionally(new MessagingException(response.errorCode,
+                            response.detail == null || response.detail.isEmpty()
+                                    ? "remote message operation failed" : response.detail));
+                } else if (response.type != pending.expected) {
+                    pending.result.completeExceptionally(new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
+                            "backend returned the wrong response type"));
+                    connection.close();
+                } else {
+                    pending.result.complete(response);
+                }
+            });
+        } catch (RejectedExecutionException overloaded) {
+            connection.close();
+            throw new IOException("backend response dispatch is overloaded", overloaded);
+        }
+    }
+
+    private void respondSend(Connection connection, long operationId, SendResult result, long deadline) {
+        try { writeAsync(connection, MessageCodec.sendResult(operationId, result), deadline); }
+        catch (IOException invalid) { writeAsync(connection, errorFrame(operationId, invalid), deadline); }
+    }
+
+    private void respondError(Connection connection, long operationId, MessagingException error, long deadline) {
+        try { writeAsync(connection, MessageCodec.error(operationId, error.code(), safeDetail(error)), deadline); }
+        catch (IOException invalid) { writeAsync(connection, errorFrame(operationId, invalid), deadline); }
+    }
+
+    private void writeAsync(Connection connection, byte[] frame) {
+        writeAsync(connection, frame, deadlineAfterMillis(REQUEST_TIMEOUT.toMillis()));
+    }
+
+    private void writeAsync(Connection connection, byte[] frame, long deadline) {
+        if (!reserveWrite(connection, frame.length)) {
+            connection.close();
+            return;
+        }
+        AtomicBoolean writeStarted = new AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<ScheduledFuture<?>> flushTimeout =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread.ofVirtual().name("strataproxy-control-write").start(() -> {
+            try {
+                connection.writeFrame(() -> {
+                    if (deadline - System.nanoTime() <= 0) return null;
+                    writeStarted.set(true);
+                    if (deadline - System.nanoTime() <= 0) {
+                        writeStarted.set(false);
+                        return null;
+                    }
+                    try {
+                        flushTimeout.set(timer.schedule(connection::close,
+                                REQUEST_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS));
+                    } catch (RuntimeException timerClosed) {
+                        writeStarted.set(false);
+                        throw new IOException("backend control service closed before response write", timerClosed);
+                    }
+                    return frame;
+                }, () -> {
+                    writeStarted.set(false);
+                    ScheduledFuture<?> timeout = flushTimeout.getAndSet(null);
+                    if (timeout != null) timeout.cancel(false);
+                });
+            }
+            catch (IOException ignored) { connection.close(); }
+            finally {
+                ScheduledFuture<?> timeout = flushTimeout.getAndSet(null);
+                if (timeout != null) timeout.cancel(false);
+                releaseWrite(connection, frame.length);
+            }
+        });
+    }
+
+    private boolean reserveWrite(Connection connection, int size) {
+        if (!writeTasks.tryAcquire()) return false;
+        if (!connection.reserve(size)) {
+            writeTasks.release();
+            return false;
+        }
+        for (;;) {
+            long used = globalQueuedBytes.get();
+            if (used + size > MAX_GLOBAL_QUEUED_BYTES) {
+                connection.release(size);
+                writeTasks.release();
+                return false;
+            }
+            if (globalQueuedBytes.compareAndSet(used, used + size)) return true;
+        }
+    }
+
+    private void releaseWrite(Connection connection, int size) {
+        connection.release(size);
+        globalQueuedBytes.addAndGet(-size);
+        writeTasks.release();
+    }
+
+    private static byte[] errorFrame(long operationId, Throwable failure) {
+        try { return MessageCodec.error(operationId, MessagingException.Code.PROTOCOL_ERROR, safeDetail(failure)); }
+        catch (IOException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    private static byte[] singleByteFrame(int type) {
+        return new byte[]{(byte) type};
+    }
+
+    private static <T, R> CompletionStage<R> mapCancellable(CompletionStage<T> source,
+                                                             java.util.function.Function<T, R> mapper) {
+        CompletableFuture<T> sourceFuture = source.toCompletableFuture();
+        CompletableFuture<R> mapped = new CompletableFuture<>();
+        source.whenComplete((value, failure) -> {
+            if (failure != null) mapped.completeExceptionally(unwrap(failure));
+            else {
+                try { mapped.complete(mapper.apply(value)); }
+                catch (Throwable mappingFailure) { mapped.completeExceptionally(mappingFailure); }
+            }
+        });
+        mapped.whenComplete((ignored, failure) -> {
+            if (mapped.isCancelled()) sourceFuture.cancel(false);
+        });
+        return mapped;
+    }
+
+    private static Message retarget(Message message, Endpoint target) {
+        return new Message(message.id(), message.kind(), message.channel(), message.source(), target,
+                message.replyTo(), message.payload());
+    }
+
+    private List<Connection> connectedBackends() {
+        synchronized (lock) {
+            return byBackend.values().stream().map(lease -> lease.connection)
+                    .filter(Objects::nonNull).filter(connection -> connection.live.get())
+                    .sorted(java.util.Comparator.comparing(connection -> connection.name)).toList();
+        }
+    }
+
+    private static String namespace(String channel) { return channel.substring(0, channel.indexOf(':')); }
+
+    private static long deadlineAfterMillis(long timeoutMillis) {
+        long now = System.nanoTime();
+        long nanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        return now > Long.MAX_VALUE - nanos ? Long.MAX_VALUE : now + nanos;
+    }
+
+    private static Duration remaining(long deadline) {
+        long nanos = deadline - System.nanoTime();
+        return nanos <= 0 ? Duration.ZERO : Duration.ofNanos(nanos);
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+        Throwable current = failure;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException) && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static MessagingException asMessagingException(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        if (cause instanceof MessagingException messagingFailure) return messagingFailure;
+        return new MessagingException(MessagingException.Code.HANDLER_FAILED,
+                "message delivery failed", cause);
+    }
+
+    private static SendResult sendFailure(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        if (cause instanceof MessagingException messagingFailure) {
+            return switch (messagingFailure.code()) {
+                case BACKPRESSURED -> SendResult.BACKPRESSURED;
+                case NOT_CONNECTED, CLOSED -> SendResult.NOT_CONNECTED;
+                case TIMED_OUT -> SendResult.TIMED_OUT;
+                case NO_HANDLER -> SendResult.NO_SUBSCRIBER;
+                case REJECTED -> SendResult.REJECTED;
+                case HANDLER_FAILED, PROTOCOL_ERROR -> SendResult.FAILED;
+            };
+        }
+        return SendResult.FAILED;
+    }
+
+    private static String safeDetail(Throwable failure) {
+        String detail = failure.getMessage();
+        return detail == null ? failure.getClass().getSimpleName() : detail;
+    }
+
+    private static <T> CompletionStage<T> failed(Throwable failure) {
+        return CompletableFuture.failedFuture(failure);
+    }
+
+    private static ThreadFactory namedFactory(String prefix) {
+        AtomicInteger sequence = new AtomicInteger();
+        return task -> Thread.ofVirtual().name(prefix + "-" + sequence.incrementAndGet()).unstarted(task);
     }
 
     private Connection current(String name) {
@@ -394,24 +795,13 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         }
     }
 
-    private static void validateMessage(String channel, byte[] payload) {
-        validateChannel(channel);
-        Objects.requireNonNull(payload, "payload");
-        if (payload.length > MAX_PAYLOAD) throw new IllegalArgumentException("backend payload exceeds 64 KiB");
-    }
-
-    private static void validateChannel(String channel) {
-        if (channel == null || !channel.matches("[a-z0-9][a-z0-9_.-]{0,63}:[a-z0-9][a-z0-9_.-]{0,63}"))
-            throw new IllegalArgumentException("invalid backend message channel");
-    }
-
     private static Frame readFrame(DataInputStream input) throws IOException {
         int length = input.readInt();
         if (length < 1 || length > MAX_FRAME) throw new IOException("invalid backend control frame length");
         byte[] bytes = input.readNBytes(length);
         if (bytes.length != length) throw new EOFException();
         DataInputStream body = new DataInputStream(new ByteArrayInputStream(bytes));
-        return new Frame(body.readUnsignedByte(), body);
+        return new Frame(body.readUnsignedByte(), body, bytes);
     }
 
     private static String readString(DataInputStream input, int maximum) throws IOException {
@@ -431,19 +821,6 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         output.write(bytes);
     }
 
-    private static byte[] readPayload(DataInputStream input) throws IOException {
-        int length = input.readInt();
-        if (length < 0 || length > MAX_PAYLOAD) throw new IOException("invalid backend payload length");
-        byte[] bytes = input.readNBytes(length);
-        if (bytes.length != length) throw new EOFException();
-        return bytes;
-    }
-
-    private static void writePayload(DataOutputStream output, byte[] bytes) throws IOException {
-        output.writeInt(bytes.length);
-        output.write(bytes);
-    }
-
     private static void requireEmpty(DataInputStream input) throws IOException {
         if (input.available() != 0) throw new IOException("trailing backend control bytes");
     }
@@ -455,15 +832,28 @@ public final class BackendControlService implements BackendChannelTransport, Aut
             try { listener.close(); } catch (IOException ignored) { }
         }
         timer.shutdownNow();
+        routingWorkers.shutdownNow();
         synchronized (lock) {
             for (Lease lease : java.util.List.copyOf(byInstance.values())) removeLease(lease);
         }
     }
 
     private record Registration(String instanceId, String name, String generation, URI address,
-                                java.util.Set<String> allowedNamespaces) { }
-    private record Frame(int type, DataInputStream input) { }
+                                java.util.Set<String> allowedNamespaces,
+                                java.util.Set<String> allowedReceiveNamespaces) { }
+    private record Frame(int type, DataInputStream input, byte[] bytes) { }
     private interface Writer { void write(DataOutputStream output) throws IOException; }
+    private interface FrameSupplier { byte[] get() throws IOException; }
+
+    private static final class PendingOperation {
+        private final CompletableFuture<MessageCodec.Response> result;
+        private final MessageCodec.Response.Type expected;
+        private PendingOperation(CompletableFuture<MessageCodec.Response> result,
+                                 MessageCodec.Response.Type expected) {
+            this.result = result;
+            this.expected = expected;
+        }
+    }
 
     private static final class Lease {
         private final String instanceId, name, generation;
@@ -493,11 +883,12 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         private final AtomicLong queuedBytes = new AtomicLong();
         private final AtomicInteger queuedMessages = new AtomicInteger();
         private final AtomicLong nextRequest = new AtomicLong(1);
-        private final ConcurrentHashMap<Long, CompletableFuture<byte[]>> pending = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<Long, PendingOperation> pending = new ConcurrentHashMap<>();
         private final AtomicInteger inboundRequests = new AtomicInteger();
         private final Semaphore requestSlots = new Semaphore(MAX_REQUESTS);
         private String instanceId, name;
         private java.util.Set<String> allowedNamespaces = java.util.Set.of();
+        private java.util.Set<String> allowedReceiveNamespaces = java.util.Set.of();
         private long epoch;
         private long rateWindowNanos = System.nanoTime();
         private int messagesInWindow;
@@ -547,11 +938,26 @@ public final class BackendControlService implements BackendChannelTransport, Aut
                 output.flush();
             }
         }
+        private boolean writeFrame(FrameSupplier frameSupplier, Runnable afterWrite) throws IOException {
+            synchronized (writeLock) {
+                if (!live.get()) throw new SocketException("backend control disconnected");
+                byte[] frame = frameSupplier.get();
+                if (frame == null) return false;
+                if (frame.length < 1 || frame.length > MAX_FRAME)
+                    throw new IOException("control frame length out of bounds");
+                output.writeInt(frame.length);
+                output.write(frame);
+                output.flush();
+                afterWrite.run();
+                return true;
+            }
+        }
         private void close() {
             if (!live.compareAndSet(true, false)) return;
             try { socket.close(); } catch (IOException ignored) { }
-            for (CompletableFuture<byte[]> result : pending.values())
-                result.completeExceptionally(new IOException("backend control disconnected"));
+            for (PendingOperation operation : pending.values())
+                operation.result.completeExceptionally(new MessagingException(MessagingException.Code.NOT_CONNECTED,
+                        "backend control disconnected"));
             pending.clear();
         }
     }

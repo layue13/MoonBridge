@@ -87,6 +87,9 @@ final class SessionTransferTest {
             register(catalog, "old", oldServer);
             register(catalog, "new", newServer);
             var listener = listener(catalog);
+            listener.setCommandCompletion(prefix -> List.of("/test"),
+                    (player, text) -> Optional.of(CompletableFuture.completedFuture(
+                            List.of(player.currentServer().orElseThrow()))));
             try {
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress()).getPort();
@@ -98,6 +101,7 @@ final class SessionTransferTest {
                     assertEquals(1, packetId(readFrame(input)));
                     assertEquals(8, packetId(readFrame(input)));
                     var player = awaitPlayer(listener);
+                    assertLocalCompletion(client, input, "old");
 
                     var session = listener.allSessions().iterator().next();
                     var frontendField = Session.class.getDeclaredField("frontend");
@@ -127,8 +131,12 @@ final class SessionTransferTest {
 
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
                     openingHeld.get(5, TimeUnit.SECONDS);
-                    frontend.eventLoop().submit(() -> frontend.pipeline().fireChannelRead(
-                            Unpooled.wrappedBuffer(new byte[]{2, 0x01, 0x55}))).get(5, TimeUnit.SECONDS);
+                    frontend.eventLoop().submit(() -> {
+                        frontend.pipeline().fireChannelRead(Unpooled.wrappedBuffer(new byte[]{2, 0x01, 0x55}));
+                        // Match a real socket read cycle: otherwise the decoder's stale fired-read flag
+                        // can suppress the next manual read when a later packet arrives in fragments.
+                        frontend.pipeline().fireChannelReadComplete();
+                    }).get(5, TimeUnit.SECONDS);
                     assertThrows(java.util.concurrent.TimeoutException.class,
                             () -> newReceived.get(250, TimeUnit.MILLISECONDS));
 
@@ -144,6 +152,7 @@ final class SessionTransferTest {
                     assertEquals(8, packetId(readFrame(input)));
                     assertArrayEquals(new byte[]{0x01, 0x55}, newReceived.get(5, TimeUnit.SECONDS));
                     oldClosed.get(5, TimeUnit.SECONDS);
+                    assertLocalCompletion(client, input, "new");
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
@@ -1587,6 +1596,17 @@ final class SessionTransferTest {
         Thread thread = new Thread(task, "transfer-test-backend-" + socket.getLocalPort());
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private static void assertLocalCompletion(Socket client, DataInputStream input, String backend) throws Exception {
+        var body = new ByteArrayOutputStream();
+        var request = new DataOutputStream(body);
+        writeVarInt(request, 0x14); writeString(request, "/test ");
+        writeFrame(new DataOutputStream(client.getOutputStream()), body.toByteArray());
+        var response = new ByteArrayInputStream(readFrame(input));
+        assertEquals(0x3a, readVarInt(response));
+        assertEquals(1, readVarInt(response));
+        assertEquals(backend, new String(response.readNBytes(readVarInt(response)), StandardCharsets.UTF_8));
     }
 
     private static int packetId(byte[] bytes) throws Exception {

@@ -85,7 +85,7 @@ public final class ProxyMain {
         try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout);
              var control = configuration.backendChannel() == null ? null
                      : new BackendControlService(configuration.backendChannel(), catalog,
-                     plugins::dispatchBackendMessage)) {
+                     plugins.localMessaging())) {
             if (control != null) plugins.setBackendChannelTransport(control);
             listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
@@ -95,6 +95,7 @@ public final class ProxyMain {
             listener.setEvents(plugins, eventTimeout);
             listener.setPlacement(plugins::placeInitial);
             listener.setCommandDispatcher(plugins::dispatchCommand);
+            listener.setCommandCompletion(plugins::commandNames, plugins::completeCommand);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
             var shutdown = new Thread(() -> {

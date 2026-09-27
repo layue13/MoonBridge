@@ -767,6 +767,19 @@ final class ProxySessionListenerTest {
                     data.writeFloat(0);
                     data.writeByte(0);
                     writeFrame(output, position.toByteArray());
+                    var rootRequest = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x14, readVarInt(rootRequest));
+                    assertEquals("/w", readString(rootRequest, 32767));
+                    var rootReply = new ByteArrayOutputStream();
+                    writeVarInt(rootReply, 0x3a); writeVarInt(rootReply, 2);
+                    writeString(rootReply, "/weather"); writeString(rootReply, "/where");
+                    writeFrame(output, rootReply.toByteArray());
+                    var unknownRequest = new java.io.ByteArrayInputStream(readFrame(input));
+                    assertEquals(0x14, readVarInt(unknownRequest));
+                    assertEquals("/weather c", readString(unknownRequest, 32767));
+                    var unknownReply = new ByteArrayOutputStream();
+                    writeVarInt(unknownReply, 0x3a); writeVarInt(unknownReply, 1); writeString(unknownReply, "clear");
+                    writeFrame(output, unknownReply.toByteArray());
                     received.complete(List.of(readFrame(input), readFrame(input)));
                 } catch (Throwable failure) {
                     received.completeExceptionally(failure);
@@ -782,8 +795,11 @@ final class ProxySessionListenerTest {
                     @Override public void onLoad(PluginContext context) {
                         context.commands().register("where", invocation -> {
                             handlerThread.complete(Thread.currentThread().getName());
-                            invocation.reply(invocation.player().username() + ":" + invocation.arguments());
-                        });
+                            invocation.reply(net.kyori.adventure.text.Component.text(
+                                    invocation.player().username() + ":" + invocation.arguments(),
+                                    net.kyori.adventure.text.format.NamedTextColor.GREEN)
+                                    .clickEvent(net.kyori.adventure.text.event.ClickEvent.suggestCommand("/where lobby")));
+                        }, completion -> { assertEquals("lo ", completion.arguments()); return CompletableFuture.completedFuture(List.of("lobby")); });
                         context.events().subscribe(ServerConnectedEvent.class, event -> {
                             assertFalse(Thread.currentThread().getName().startsWith("strataproxy-session-io"));
                             notificationCount.incrementAndGet();
@@ -809,6 +825,7 @@ final class ProxySessionListenerTest {
                 listener.setPlacement(plugins::placeInitial);
                 listener.setEvents(plugins, Duration.ofSeconds(5));
                 listener.setCommandDispatcher(plugins::dispatchCommand);
+                listener.setCommandCompletion(plugins::commandNames, plugins::completeCommand);
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress()).getPort();
                 try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
@@ -825,8 +842,17 @@ final class ProxySessionListenerTest {
                     writeFrame(output, chatPacket("/where lobby"));
                     var reply = new java.io.ByteArrayInputStream(readFrame(input));
                     assertEquals(2, readVarInt(reply));
-                    assertEquals("CommandUser:lobby",
-                            new ObjectMapper().readTree(readString(reply, 32767)).path("text").asText());
+                    var replyJson = new ObjectMapper().readTree(readString(reply, 32767));
+                    assertEquals("CommandUser:lobby", replyJson.path("text").asText());
+                    assertEquals("green", replyJson.path("color").asText());
+                    assertEquals("suggest_command", replyJson.path("clickEvent").path("action").asText());
+                    assertEquals("/where lobby", replyJson.path("clickEvent").path("value").asText());
+                    writeFrame(output, completionRequest("/where lo "));
+                    assertEquals(List.of("lobby"), completionResponse(readFrame(input)));
+                    writeFrame(output, completionRequest("/w"));
+                    assertEquals(List.of("/where", "/weather"), completionResponse(readFrame(input)));
+                    writeFrame(output, completionRequest("/weather c"));
+                    assertEquals(List.of("clear"), completionResponse(readFrame(input)));
                     assertTrue(handlerThread.get(5, TimeUnit.SECONDS).startsWith("strataproxy-plugin-command-"));
                     assertEquals(2, accessCalls.get());
                     writeFrame(output, chatPacket("hello"));
@@ -842,6 +868,20 @@ final class ProxySessionListenerTest {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
         }
+    }
+
+    private static byte[] completionRequest(String text) throws Exception {
+        var packet = new ByteArrayOutputStream();
+        writeVarInt(packet, 0x14); writeString(packet, text);
+        return packet.toByteArray();
+    }
+    private static List<String> completionResponse(byte[] frame) throws Exception {
+        var packet = new java.io.ByteArrayInputStream(frame);
+        assertEquals(0x3a, readVarInt(packet));
+        int count = readVarInt(packet);
+        var values = new ArrayList<String>();
+        for (int i = 0; i < count; i++) values.add(readString(packet, 32767));
+        return values;
     }
 
     private static byte[] chatPacket(String text) throws Exception {
@@ -1611,7 +1651,7 @@ final class ProxySessionListenerTest {
             listener.setCommandDispatcher((player, message, reply, admission) -> {
                 if (!message.equals("/ping")) return false;
                 if (!admission.getAsBoolean()) return true;
-                reply.accept("pong");
+                reply.accept(net.kyori.adventure.text.Component.text("pong"));
                 return true;
             });
             try {

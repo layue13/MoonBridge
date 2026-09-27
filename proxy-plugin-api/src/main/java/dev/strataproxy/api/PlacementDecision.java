@@ -1,6 +1,7 @@
 package dev.strataproxy.api;
 
 import java.util.Objects;
+import net.kyori.adventure.text.Component;
 
 /** Decision returned by an initial placement handler. */
 public sealed interface PlacementDecision permits PlacementDecision.Select, PlacementDecision.Reject {
@@ -9,6 +10,11 @@ public sealed interface PlacementDecision permits PlacementDecision.Select, Plac
     }
 
     static PlacementDecision reject(String reason) {
+        PlainTextValidation.validateString(reason, false, "reason");
+        return new Reject(Component.text(reason));
+    }
+
+    static PlacementDecision reject(Component reason) {
         return new Reject(reason);
     }
 
@@ -21,12 +27,9 @@ public sealed interface PlacementDecision permits PlacementDecision.Select, Plac
         }
     }
 
-    record Reject(String reason) implements PlacementDecision {
+    record Reject(Component reason) implements PlacementDecision {
         public Reject {
             Objects.requireNonNull(reason, "reason");
-            if (reason.isBlank() || reason.codePointCount(0, reason.length()) > 1024) {
-                throw new IllegalArgumentException("reason must contain 1 to 1024 characters");
-            }
         }
     }
 }

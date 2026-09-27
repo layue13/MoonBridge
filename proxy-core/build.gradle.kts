@@ -7,6 +7,7 @@ plugins {
 val runtimeJavaHome = System.getProperty("java.home")
 
 dependencies {
+    implementation(project(":messaging-protocol"))
     // The plugin contract is the only stable external boundary. Everything else
     // in this project remains an implementation package of the proxy core.
     api(project(":proxy-plugin-api"))
@@ -17,6 +18,8 @@ dependencies {
     implementation(libs.findLibrary("netty-resolver-dns").get())
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
+    implementation(libs.findLibrary("adventure-gson").get())
+    implementation(libs.findLibrary("adventure-plain").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
     testImplementation(project(":backend-channel-client"))
 }
@@ -89,6 +92,15 @@ distributions {
             }
             from(project(":backend-channel-client").tasks.named("jar")) {
                 into("backend-client")
+            }
+            from(project(":messaging-api").tasks.named("jar")) {
+                into("backend-client")
+            }
+            from(project(":messaging-protocol").tasks.named("jar")) {
+                into("backend-client")
+            }
+            from(project(":backend-bukkit").tasks.named("jar")) {
+                into("backend-host")
             }
         }
     }

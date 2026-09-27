@@ -16,9 +16,11 @@ backendChannel:
       secret: "replace-with-a-random-secret-of-32-bytes-or-more"
       allowedHosts: ["127.0.0.1"]
       allowedNamespaces: ["islands"]
+      allowedReceiveNamespaces: ["islands"]
     island-b:
       backendName: "island-b"
       keyId: "primary"
       secret: "replace-with-another-random-secret-of-32-bytes"
       allowedHosts: ["127.0.0.1"]
       allowedNamespaces: ["islands"]
+      allowedReceiveNamespaces: ["islands"]

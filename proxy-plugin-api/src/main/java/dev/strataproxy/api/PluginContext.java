@@ -1,6 +1,7 @@
 package dev.strataproxy.api;
 
 import dev.strataproxy.api.event.Events;
+import dev.strataproxy.messaging.Messaging;
 import java.util.Map;
 import org.slf4j.Logger;
 
@@ -14,14 +15,8 @@ public interface PluginContext {
 
     Events events();
 
-    /**
-     * Returns the service for messaging with independently connected backend instances.
-     *
-     * @throws UnsupportedOperationException when the hosting proxy does not provide backend channels
-     */
-    default BackendChannels backendChannels() {
-        throw new UnsupportedOperationException("Backend channels are not available");
-    }
+    /** Returns this plugin's lifecycle-owned message channel scope. */
+    Messaging messaging();
 
     Logger logger();
 

@@ -1,0 +1,5 @@
+name: StrataProxyBackend
+main: dev.strataproxy.bukkit.StrataProxyBackendPlugin
+version: 0.1.0
+description: Shared backend host for StrataProxy
+load: STARTUP

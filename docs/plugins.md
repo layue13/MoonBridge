@@ -21,16 +21,16 @@
 
 ### 后端控制消息
 
-`PluginContext.backendChannels()` 让代理插件与已注册的后端实例双向通信。后端侧使用独立的 Java 8 `backend-channel-client` SDK，不依赖玩家在线。代理插件在 `onLoad` 或 `onEnable` 调用 `subscribe("命名空间:操作", handler)`；同一通道只允许一个处理器，停用时自动撤销。处理器收到的 `BackendMessage` 含已认证的实例身份和连接代次，返回 `CompletionStage<byte[]>` 作为请求响应。
+`PluginContext.messaging().channel("命名空间:通道")` 提供与后端相同的消息 API，不依赖玩家在线。`subscribe` 注册通知订阅者，`onRequest` 注册唯一请求处理器；每个插件持有独立 scope，停用时自动撤销。处理器收到不可变 `Message`，其中包含消息 UUID、认证来源、目标和回复关联；请求处理器返回 `CompletionStage<byte[]>`，框架创建完整的回复消息。
 
-`send(backendName, channel, payload)` 返回 `SENT`、`NOT_CONNECTED` 或 `BACKPRESSURED`；`SENT` 只表示消息写入控制连接。`request(...)` 在五秒内等待后端处理结果，断线、无处理器或超时会异常完成。负载在提交时复制，单条最多 64 KiB；回调在有界工作池运行，不应同步等待数据库或网络任务。配置与交付边界见[后端控制通道](backend-channel-design.md)。
+`send(Endpoint.backend(name), payload)` 返回含消息 ID 的投递回执，`ACCEPTED` 表示目标消息服务接受处理任务；`request(...)` 返回完整回复消息，默认期限五秒；`publish` 返回各候选节点的投递结果。负载在提交时复制，单条最多 64 KiB；回调在有界工作池运行，不应同步等待数据库或网络任务。后端插件通过唯一的 Bukkit 宿主服务获取相同 API，不自行创建连接。旧 `backendChannels()` 已移除。完整配置、Java 8 宿主安装与故障语义见[后端 Channel 消息服务](backend-channel-design.md)。
 
 ### 消息与主动断开
 
 `Players.sendMessage(identity, text)` 和 `disconnect(identity, reason)` 均绑定完整的 `PlayerIdentity`，可从任意线程调用；通过插件上下文获取的 stage 在 I/O 线程外完成。参数错误立即报告，插件停用后拒绝继续提交。
 
-- 消息是纯文本，最多 1024 个 Unicode 码点。返回 `MessageResult.SENT` 表示网络写入完成；连接消失或正在关闭返回 `NOT_CONNECTED`；登录、初次 Forge 握手未就绪或转服交接期间返回 `NOT_READY`；不可写或该连接已有 64 条未完成消息返回 `BACKPRESSURED`。网络写失败以异常完成。
-- 主动断开要求非空白原因，最多 1024 个 Unicode 码点。核心按实际 LOGIN/PLAY 阶段发包，最长等待 5 秒后清理连接、未决转服和候选后端。返回 `DisconnectResult.DISCONNECTED` 表示连接清理完成，原因文本仅尽力交付；身份已失效返回 `NOT_CONNECTED`。重复断开合并处理，取消调用方等待不撤销已提交的断开。
+- 消息支持 Adventure Component；String 入口为纯文本，最多 1024 个 Unicode 码点。返回 `MessageResult.SENT` 表示网络写入完成；连接消失或正在关闭返回 `NOT_CONNECTED`；登录、初次 Forge 握手未就绪或转服交接期间返回 `NOT_READY`；不可写或该连接已有 64 条未完成消息返回 `BACKPRESSURED`。网络写失败以异常完成。
+- 主动断开接受非空白的 Component 原因；String 入口最多 1024 个 Unicode 码点。核心按实际 LOGIN/PLAY 阶段发包，最长等待 5 秒后清理连接、未决转服和候选后端。返回 `DisconnectResult.DISCONNECTED` 表示连接清理完成，原因文本仅尽力交付；身份已失效返回 `NOT_CONNECTED`。重复断开合并处理，取消调用方等待不撤销已提交的断开。
 - `disconnect` 也支持准入或初始选服回调中的已识别玩家，此时玩家还未出现在 `online()` 中。
 
 ```java
@@ -134,3 +134,5 @@ context.events().subscribe(PlayerDisconnectedEvent.class, event ->
 统一事件模型让准入决策和会话通知共享同一类型、监听器、订阅表与派发实现，同时保留各类事件所需的运行策略。准入阶段执行有序且失败关闭的结果聚合；生命周期通知异步 FIFO 尽力交付并与会话处理隔离。没有 PLAY 包事件。目前没有事件 API 的专门基准，不能据此宣称性能收益或无开销。
 
 源码入口：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/PluginContext.java)、[`Events`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/event/Events.java)、[`AccessDecision`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/AccessDecision.java)。
+
+富文本构造、MiniMessage 和异步命令补全示例见[消息与命令补全](messages-and-completion.md)。

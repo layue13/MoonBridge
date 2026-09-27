@@ -14,6 +14,10 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         mavenCentral()
+        maven {
+            url = uri("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
+            content { includeGroup("org.spigotmc") }
+        }
     }
 }
 
@@ -23,4 +27,7 @@ include(
     "proxy-core",
     "proxy-plugin-api",
     "backend-channel-client",
+    "messaging-api",
+    "messaging-protocol",
+    "backend-bukkit",
 )

@@ -10,10 +10,12 @@ allprojects {
 
 tasks.register("check") {
     group = "verification"
-    dependsOn(":proxy-plugin-api:check", ":backend-channel-client:check", ":proxy-core:check")
+    dependsOn(":proxy-plugin-api:check", ":messaging-api:check", ":messaging-protocol:check",
+        ":backend-channel-client:check", ":backend-bukkit:check", ":proxy-core:check")
 }
 
 tasks.register("publish") {
     group = "publishing"
-    dependsOn(":proxy-plugin-api:publish", ":backend-channel-client:publish")
+    dependsOn(":proxy-plugin-api:publish", ":messaging-api:publish", ":messaging-protocol:publish",
+        ":backend-channel-client:publish", ":backend-bukkit:publish")
 }

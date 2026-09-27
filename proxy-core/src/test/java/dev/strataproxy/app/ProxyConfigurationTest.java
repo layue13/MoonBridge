@@ -15,6 +15,7 @@ import javax.imageio.ImageIO;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxyConfigurationTest {
     @Test
@@ -253,7 +254,7 @@ final class ProxyConfigurationTest {
     }
 
     @Test
-    void loadsBackendControlCredentialsAndRejectsMissingNamespace() throws Exception {
+    void loadsIndependentBackendSendAndReceiveNamespacesIncludingEmptySets() throws Exception {
         Path config = Files.createTempFile("strataproxy-backend-channel", ".yml");
         try {
             String yaml = """
@@ -275,9 +276,17 @@ final class ProxyConfigurationTest {
             assertEquals(28081, channel.listenAddress().getPort());
             assertEquals("island-a", channel.clients().get("island-a").backendName());
             assertEquals(java.util.Set.of("islands"), channel.clients().get("island-a").allowedNamespaces());
+            assertEquals(java.util.Set.of("islands"), channel.clients().get("island-a").allowedReceiveNamespaces(),
+                    "receiving defaults to the sending namespace set");
             Files.writeString(config, yaml.replace("allowedNamespaces: [islands]", "allowedNamespaces: []"));
-            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
-                    () -> new ProxyConfigurationLoader().load(config));
+            var denyAll = new ProxyConfigurationLoader().load(config).backendChannel().clients().get("island-a");
+            assertTrue(denyAll.allowedNamespaces().isEmpty());
+            assertTrue(denyAll.allowedReceiveNamespaces().isEmpty(), "implicit receive set inherits the empty send set");
+            Files.writeString(config, yaml.replace("allowedNamespaces: [islands]",
+                    "allowedNamespaces: [islands]\n      allowedReceiveNamespaces: []"));
+            var receiveNone = new ProxyConfigurationLoader().load(config).backendChannel().clients().get("island-a");
+            assertEquals(java.util.Set.of("islands"), receiveNone.allowedNamespaces());
+            assertTrue(receiveNone.allowedReceiveNamespaces().isEmpty(), "an explicit empty receive ACL is send-only");
         } finally {
             Files.deleteIfExists(config);
         }

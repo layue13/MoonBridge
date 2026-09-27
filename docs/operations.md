@@ -44,7 +44,7 @@ status:
 
 后端控制通道示例见 [`strataproxy-channel.example.yml`](../proxy-core/src/main/resources/config/strataproxy-channel.example.yml)，使用独立监听端口接收实例注册、心跳和双向消息；使用方法与限制见[后端控制通道](backend-channel-design.md)。
 
-Docker 容器间的监听、服务名和地址配置见[Docker 部署](backend-channel-design.md#docker-部署)；`sh smoke/container-channel.sh` 可运行跨容器烟测。
+Docker 容器间的监听、服务名和地址配置见[配置与部署](backend-channel-design.md#配置与部署)；`sh smoke/container-channel.sh` 可运行跨容器烟测。
 
 控制通道默认关闭。启用后，后端实例通过独立 TCP 连接认证和注册；代理不提供 DNS 发现或 HTTP 注册。代理核心没有内置云实例发现或健康探测。
 
@@ -52,13 +52,13 @@ Docker 容器间的监听、服务名和地址配置见[Docker 部署](backend-c
 
 ## 验证命令和现有证据
 
-源码测试集中在四个模块。项目定义的常规验证入口为：
+项目定义的常规验证入口为：
 
 ```powershell
 .\gradlew.bat check
 ```
 
-该任务包含插件 API、Java 8 后端 SDK 和核心测试，并在核心 `check` 中依赖安装发行包后的帮助、版本及配置校验烟测。详细烟测、性能测量方法与历史记录见[验证方法](testing.md)。
+该任务包含插件 API、消息 API/协议、Java 8 后端 SDK、Bukkit 宿主和核心测试，并检查宿主 JAR 的 Java 8 字节码和依赖边界。核心 `check` 还依赖安装发行包后的帮助、版本及配置校验烟测。详细烟测、性能测量方法与历史记录见[验证方法](testing.md)。
 
 现有测试可用于定位行为范围：
 
