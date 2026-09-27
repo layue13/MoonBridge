@@ -3,9 +3,6 @@ plugins {
     `maven-publish`
 }
 
-group = "uk.potatolab"
-version = "0.1.0-SNAPSHOT"
-
 java {
     withSourcesJar()
     withJavadocJar()

@@ -84,9 +84,23 @@ application {
     applicationName = "moonbridge"
 }
 
+tasks.jar {
+    manifest.attributes("Implementation-Title" to "MoonBridge", "Implementation-Version" to project.version)
+}
+
 distributions {
     main {
         contents {
+            from(rootProject.file("README.md"))
+            from(rootProject.file("docs")) {
+                into("docs")
+            }
+            from(rootProject.file("smoke/results")) {
+                into("smoke/results")
+            }
+            from(rootProject.file("benchmarks/results")) {
+                into("benchmarks/results")
+            }
             from("src/main/resources/config") {
                 into("config")
             }

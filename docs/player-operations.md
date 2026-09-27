@@ -1,6 +1,6 @@
 # 玩家操作与部署完善设计
 
-状态：本文保留首批玩家操作的设计基线。当前消息模型见[富文本与命令补全](messages-and-completion.md)，真实在线认证与当前整合包结果见[验收记录](../benchmarks/results/2026-09-26-prism-pack.md)。
+状态：本文保留首批玩家操作的设计基线。当前消息模型见[富文本与命令补全](messages-and-completion.md)。2026-09-26 Prism 记录是历史提交下的真实在线认证和客户端结果，不代表当前初次路由分支的完整模组包验收；当前路由证据见[专项验收](../smoke/results/2026-09-27-initial-routing.md)。
 
 ## 目标与边界
 
