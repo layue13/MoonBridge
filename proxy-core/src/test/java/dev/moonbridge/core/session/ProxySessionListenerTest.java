@@ -1003,25 +1003,15 @@ final class ProxySessionListenerTest {
             var moved = new BackendRegistration(id, owner,
                     URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()));
             var updated = new AtomicBoolean();
-            BackendCatalog movingCatalog = new BackendCatalog() {
-                @Override public BackendView register(BackendRegistration definition) {
-                    return catalog.register(definition);
-                }
-                @Override public Optional<BackendView> update(BackendHandle handle, BackendRegistration definition) {
-                    return catalog.update(handle, definition);
-                }
-                @Override public boolean remove(BackendHandle handle) { return catalog.remove(handle); }
-                @Override public int removeOwner(BackendOwner value) { return catalog.removeOwner(value); }
-                @Override public Optional<BackendView> find(BackendId value) { return catalog.find(value); }
-                @Override public List<BackendView> snapshot() {
-                    if (updated.compareAndSet(false, true)) catalog.update(original.handle(), moved).orElseThrow();
-                    return catalog.snapshot();
-                }
-            };
             var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
-                    movingCatalog);
-            listener.setPlacement(player -> CompletableFuture.completedFuture(
-                    Optional.of(PlacementDecision.select("lobby"))));
+                    catalog);
+            listener.setPlacement(player -> {
+                // Mutate while the route is being chosen, without coupling the fixture to
+                // whether the session resolves a target via snapshot() or find().
+                catalog.update(original.handle(), moved).orElseThrow();
+                updated.set(true);
+                return CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("lobby")));
+            });
             try {
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress()).getPort();
