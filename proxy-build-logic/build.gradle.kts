@@ -5,12 +5,12 @@ plugins {
 gradlePlugin {
     plugins {
         register("javaLibraryConventions") {
-            id = "strataproxy.java-library-conventions"
-            implementationClass = "StrataProxyJavaLibraryConventionsPlugin"
+            id = "moonbridge.java-library-conventions"
+            implementationClass = "MoonBridgeJavaLibraryConventionsPlugin"
         }
         register("applicationConventions") {
-            id = "strataproxy.application-conventions"
-            implementationClass = "StrataProxyApplicationConventionsPlugin"
+            id = "moonbridge.application-conventions"
+            implementationClass = "MoonBridgeApplicationConventionsPlugin"
         }
     }
 }

@@ -1,12 +1,12 @@
 # 插件开发
 
-插件依赖 `proxy-plugin-api`，不依赖 `proxy-core` 或 Netty。入口实现 `dev.strataproxy.api.Plugin`，提供公开无参构造器，在 JAR 的 `META-INF/services/dev.strataproxy.api.Plugin` 中声明实现类，并由配置中的 `plugins.enabled` 显式启用。
+插件依赖 `proxy-plugin-api`，不依赖 `proxy-core` 或 Netty。入口实现 `dev.moonbridge.api.Plugin`，提供公开无参构造器，在 JAR 的 `META-INF/services/dev.moonbridge.api.Plugin` 中声明实现类，并由配置中的 `plugins.enabled` 显式启用。
 
 ## 生命周期和线程
 
 `onLoad(PluginContext)` 获得 `players()`、`servers()`、`commands()`、`events()`、SLF4J `logger()` 和不可变 `settings()`。宿主在所有插件加载后调用 `onEnable()`；插件全部启用成功后、监听器启动前冻结事件订阅。事件订阅只能在 `onLoad` 或 `onEnable` 注册，运行期间可以随时撤销。初始化失败会终止启动并回收已创建的注册。
 
-事件通过 `PluginContext.events()` 提供的 `dev.strataproxy.api.event.Events` 订阅。所有事件都使用同一 sealed `Event<R>`、`EventListener<E, R>` 和 `Events.subscribe` 方法；监听器返回 `CompletionStage<R>`。无结果事件使用 `Event<Void>`，准入事件返回 `AccessDecision`。数据库客户端、缓存和外部任务的生命周期由插件管理；返回 `CompletionStage` 表达异步结果，避免在回调里 `join()` 等待另一个任务。各连接的准入检查可以并发，插件共享数据必须支持并发访问。
+事件通过 `PluginContext.events()` 提供的 `dev.moonbridge.api.event.Events` 订阅。所有事件都使用同一 sealed `Event<R>`、`EventListener<E, R>` 和 `Events.subscribe` 方法；监听器返回 `CompletionStage<R>`。无结果事件使用 `Event<Void>`，准入事件返回 `AccessDecision`。数据库客户端、缓存和外部任务的生命周期由插件管理；返回 `CompletionStage` 表达异步结果，避免在回调里 `join()` 等待另一个任务。各连接的准入检查可以并发，插件共享数据必须支持并发访问。
 
 关闭或插件失败时，宿主移除该插件的事件订阅、后端与命令注册。关闭时，宿主先终止未决访问请求并停止接收新回调，再逆序调用 `onDisable()`。所有关闭钩子共享 10 秒期限；插件忽略中断时仍可能继续运行，因此插件必须自行停止数据库/调度器等资源。随后关闭类加载器。当前没有插件热卸载或热加载入口。
 
@@ -70,7 +70,7 @@ context.commands().register("where", command -> {
 
 ## 统一类型化事件
 
-`PluginContext.events()` 返回 `dev.strataproxy.api.event.Events`。事件统一使用泛型结果和异步监听器：
+`PluginContext.events()` 返回 `dev.moonbridge.api.event.Events`。事件统一使用泛型结果和异步监听器：
 
 ```java
 sealed interface Event<R> {}
@@ -133,6 +133,6 @@ context.events().subscribe(PlayerDisconnectedEvent.class, event ->
 
 统一事件模型让准入决策和会话通知共享同一类型、监听器、订阅表与派发实现，同时保留各类事件所需的运行策略。准入阶段执行有序且失败关闭的结果聚合；生命周期通知异步 FIFO 尽力交付并与会话处理隔离。没有 PLAY 包事件。目前没有事件 API 的专门基准，不能据此宣称性能收益或无开销。
 
-源码入口：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/PluginContext.java)、[`Events`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/event/Events.java)、[`AccessDecision`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/AccessDecision.java)。
+源码入口：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Events`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/event/Events.java)、[`AccessDecision`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/AccessDecision.java)。
 
 富文本构造、MiniMessage 和异步命令补全示例见[消息与命令补全](messages-and-completion.md)。

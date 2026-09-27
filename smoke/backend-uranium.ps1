@@ -15,8 +15,8 @@ $serverJars = @(Get-ChildItem -LiteralPath $bundle -Filter '*-server.jar')
 if ($serverJars.Count -ne 1) { throw 'Expected exactly one Uranium server JAR.' }
 $serverJar = $serverJars[0]
 $serverHash = (Get-FileHash -LiteralPath $serverJar.FullName -Algorithm SHA256).Hash
-$dist = Join-Path $repo 'proxy-core/build/install/strataproxy'
-$hostJars = @(Get-ChildItem (Join-Path $dist 'backend-host') -Filter 'strataproxy-backend-bukkit-*.jar')
+$dist = Join-Path $repo 'proxy-core/build/install/moonbridge'
+$hostJars = @(Get-ChildItem (Join-Path $dist 'backend-host') -Filter 'moonbridge-backend-bukkit-*.jar')
 if ($hostJars.Count -ne 1) { throw 'Build the renamed host and installDist first.' }
 $run = Join-Path $repo ('build/backend-uranium-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $run | Out-Null
@@ -43,7 +43,9 @@ $probeClasses = Join-Path $run 'probe-classes'
 $proxyClasses = Join-Path $run 'proxy-classes'
 New-Item -ItemType Directory -Force $controlDir, $proxyPlugins, $probeClasses, $proxyClasses | Out-Null
 $proxyClasspath = Join-Path $dist 'lib/*'
-& (Join-Path $Java8Home 'bin/javac.exe') -cp "$($hostJars[0].FullName);$BukkitApiJar" -d $probeClasses `
+# Business plugins compile against public API artifacts only, never the host/transport.
+$backendApiClasspath = Join-Path $dist 'backend-api/*'
+& (Join-Path $Java8Home 'bin/javac.exe') -cp "$backendApiClasspath;$BukkitApiJar" -d $probeClasses `
     (Join-Path $PSScriptRoot 'BackendAcceptancePlugin.java') (Join-Path $PSScriptRoot 'BackendObserverPlugin.java')
 if ($LASTEXITCODE -ne 0) { throw 'Bukkit probe compilation failed.' }
 & (Join-Path $Java25Home 'bin/javac.exe') -cp $proxyClasspath -d $proxyClasses `
@@ -51,14 +53,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Bukkit probe compilation failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Proxy probe compilation failed.' }
 $services = Join-Path $proxyClasses 'META-INF/services'
 New-Item -ItemType Directory -Force $services | Out-Null
-Write-Utf8 (Join-Path $services 'dev.strataproxy.api.Plugin') 'dev.strataproxy.smoke.ProxyBackendAcceptancePlugin'
+Write-Utf8 (Join-Path $services 'dev.moonbridge.api.Plugin') 'dev.moonbridge.smoke.ProxyBackendAcceptancePlugin'
 & (Join-Path $Java25Home 'bin/jar.exe') cf (Join-Path $proxyPlugins 'acceptance.jar') -C $proxyClasses .
 if ($LASTEXITCODE -ne 0) { throw 'Proxy probe packaging failed.' }
 foreach ($role in @('Probe', 'Observer')) {
     $main = if ($role -eq 'Probe') { 'BackendAcceptancePlugin' } else { 'BackendObserverPlugin' }
-    Write-Utf8 (Join-Path $probeClasses 'plugin.yml') "name: Acceptance$role`nmain: dev.strataproxy.smoke.$main`nversion: 1.0`ndepend: [StrataProxyBackend]`n"
+    Write-Utf8 (Join-Path $probeClasses 'plugin.yml') "name: Acceptance$role`nmain: dev.moonbridge.smoke.$main`nversion: 1.0`ndepend: [MoonBridgeBackend]`n"
     & (Join-Path $Java8Home 'bin/jar.exe') cf (Join-Path $run "Acceptance$role.jar") `
-        -C $probeClasses "dev/strataproxy/smoke/$main.class" -C $probeClasses plugin.yml
+        -C $probeClasses "dev/moonbridge/smoke/$main.class" -C $probeClasses plugin.yml
     if ($LASTEXITCODE -ne 0) { throw 'Bukkit probe packaging failed.' }
 }
 # Each run is isolated. Copy runtime libraries, the server and the already accepted
@@ -66,7 +68,7 @@ foreach ($role in @('Probe', 'Observer')) {
 foreach ($node in @('a', 'b')) {
     $directory = Join-Path $run $node
     $pluginDir = Join-Path $directory 'plugins'
-    $hostConfigDir = Join-Path $pluginDir 'StrataProxyBackend'
+    $hostConfigDir = Join-Path $pluginDir 'MoonBridgeBackend'
     New-Item -ItemType Directory -Force $directory, $pluginDir, $hostConfigDir | Out-Null
     Copy-Item -LiteralPath $serverJar.FullName -Destination $directory
     Copy-Item -LiteralPath (Join-Path $bundle 'libraries') -Destination $directory -Recurse
@@ -95,7 +97,7 @@ secret: isolated-acceptance-secret-at-least-32-bytes
 }
 $controlYaml = $controlDir.Replace('\', '/')
 $pluginYaml = $proxyPlugins.Replace('\', '/')
-$config = Join-Path $run 'strataproxy.yml'
+$config = Join-Path $run 'moonbridge.yml'
 Write-Utf8 $config @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
@@ -103,7 +105,7 @@ backends: []
 plugins:
   directory: "$pluginYaml"
   enabled:
-    dev.strataproxy.smoke.ProxyBackendAcceptancePlugin:
+    dev.moonbridge.smoke.ProxyBackendAcceptancePlugin:
       controlDir: "$controlYaml"
       aPort: "$aPort"
       bPort: "$bPort"
@@ -142,7 +144,7 @@ function Start-Owned([string]$Name, [string]$Executable, [string]$Directory, [st
     return $entry
 }
 function Start-Proxy([string]$Name) {
-    return Start-Owned $Name (Join-Path $Java25Home 'bin/java.exe') $run @('-cp', $proxyClasspath, 'dev.strataproxy.app.ProxyMain', '--config', $config)
+    return Start-Owned $Name (Join-Path $Java25Home 'bin/java.exe') $run @('-cp', $proxyClasspath, 'dev.moonbridge.app.ProxyMain', '--config', $config)
 }
 function Start-Backend([string]$Node, [string]$Name) {
     $log = Join-Path $run "$Node/logs/latest.log"

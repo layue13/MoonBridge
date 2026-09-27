@@ -1,4 +1,4 @@
-package dev.strataproxy.smoke;
+package dev.moonbridge.smoke;
 
 import java.io.IOException;
 import java.io.InputStream;

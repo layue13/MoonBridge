@@ -1,5 +1,5 @@
-name: StrataProxyBackend
-main: dev.strataproxy.bukkit.StrataProxyBackendPlugin
+name: MoonBridgeBackend
+main: dev.moonbridge.bukkit.MoonBridgeBackendPlugin
 version: 0.1.0
-description: Shared backend host for StrataProxy
+description: Shared backend host for MoonBridge
 load: STARTUP

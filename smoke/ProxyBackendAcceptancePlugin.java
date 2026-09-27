@@ -1,17 +1,17 @@
-package dev.strataproxy.smoke;
+package dev.moonbridge.smoke;
 
-import dev.strataproxy.api.Plugin;
-import dev.strataproxy.api.PluginContext;
-import dev.strataproxy.api.ServerView;
-import dev.strataproxy.messaging.Endpoint;
-import dev.strataproxy.messaging.Message;
-import dev.strataproxy.messaging.MessageKind;
-import dev.strataproxy.messaging.MessageChannel;
-import dev.strataproxy.messaging.Messaging;
-import dev.strataproxy.messaging.MessagingException;
-import dev.strataproxy.messaging.PublishResult;
-import dev.strataproxy.messaging.SendResult;
-import dev.strataproxy.messaging.Subscription;
+import dev.moonbridge.api.Plugin;
+import dev.moonbridge.api.PluginContext;
+import dev.moonbridge.api.ServerView;
+import dev.moonbridge.messaging.Endpoint;
+import dev.moonbridge.messaging.Message;
+import dev.moonbridge.messaging.MessageKind;
+import dev.moonbridge.messaging.MessageChannel;
+import dev.moonbridge.messaging.Messaging;
+import dev.moonbridge.messaging.MessagingException;
+import dev.moonbridge.messaging.PublishResult;
+import dev.moonbridge.messaging.SendResult;
+import dev.moonbridge.messaging.Subscription;
 
 import java.io.IOException;
 import java.net.URI;

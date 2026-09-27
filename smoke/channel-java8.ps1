@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $fixtureClasses = Join-Path $repo 'build/channel-smoke/router'
 $probeClasses = Join-Path $repo 'build/channel-smoke/probe'
-$proxyClasspath = Join-Path $repo 'proxy-core/build/install/strataproxy/lib/*'
-$backendClasspath = Join-Path $repo 'proxy-core/build/install/strataproxy/backend-client/*'
-if (-not (Test-Path (Join-Path $repo 'proxy-core/build/install/strataproxy/lib'))) {
+$proxyClasspath = Join-Path $repo 'proxy-core/build/install/moonbridge/lib/*'
+$backendClasspath = Join-Path $repo 'proxy-core/build/install/moonbridge/backend-client/*'
+if (-not (Test-Path (Join-Path $repo 'proxy-core/build/install/moonbridge/lib'))) {
     throw 'Run gradlew :proxy-core:installDist first.'
 }
 New-Item -ItemType Directory -Force $fixtureClasses, $probeClasses | Out-Null

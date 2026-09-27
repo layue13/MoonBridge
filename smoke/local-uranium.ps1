@@ -25,9 +25,9 @@ $probeClasses = if ($PrismClient) { $null } else {
     if (-not $ProbeClassesPath) { throw 'ProbeClassesPath is required without -PrismClient' }
     (Resolve-Path -LiteralPath $ProbeClassesPath).Path
 }
-$proxyLib = Join-Path $repoRoot 'proxy-core\build\install\strataproxy\lib'
+$proxyLib = Join-Path $repoRoot 'proxy-core\build\install\moonbridge\lib'
 if (-not (Test-Path -LiteralPath $Java8Path) -or -not (Test-Path -LiteralPath $proxyLib)) {
-    throw 'Java 8 and the installed StrataProxy distribution are required'
+    throw 'Java 8 and the installed MoonBridge distribution are required'
 }
 if ((Get-Content -LiteralPath (Join-Path $bundle 'eula.txt') -Raw).Trim() -ne 'eula=true') {
     throw 'The supplied Uranium bundle must already contain eula=true'
@@ -67,7 +67,7 @@ server-port=$serverPort
 server-ip=127.0.0.1
 online-mode=false
 level-name=world
-motd=StrataProxy local Uranium smoke
+motd=MoonBridge local Uranium smoke
 "@ | Set-Content -LiteralPath (Join-Path $runDir 'server.properties') -Encoding utf8
 
 $serverInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -102,7 +102,7 @@ try {
         throw 'Uranium did not report ready within 120 seconds'
     }
 
-    $config = Join-Path $runDir 'strataproxy.yml'
+    $config = Join-Path $runDir 'moonbridge.yml'
     @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
@@ -116,7 +116,7 @@ backends:
     $java = (Get-Command java.exe -ErrorAction Stop).Source
     $classpath = Join-Path $proxyLib '*'
     $proxy = Start-Process -FilePath $java -ArgumentList @(
-        '-cp', ('"{0}"' -f $classpath), 'dev.strataproxy.app.ProxyMain',
+        '-cp', ('"{0}"' -f $classpath), 'dev.moonbridge.app.ProxyMain',
         '--config', ('"{0}"' -f $config)
     ) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runDir 'proxy.stdout.log') `
       -RedirectStandardError (Join-Path $runDir 'proxy.stderr.log')
@@ -169,7 +169,7 @@ public final class RunThroughProxy {
         & javac -cp $probeClasses -d $probeOutput $source
         if ($LASTEXITCODE -ne 0) { throw 'Could not compile Uranium protocol probe wrapper' }
         & java -cp "$probeOutput;$probeClasses" cc.uraniummc.rfg.smoke.RunThroughProxy $proxyPort
-        if ($LASTEXITCODE -ne 0) { throw "Protocol probe failed through StrataProxy: $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0) { throw "Protocol probe failed through MoonBridge: $LASTEXITCODE" }
         Write-Output "REAL_URANIUM_PROXY_PASS serverPort=$serverPort proxyPort=$proxyPort"
     }
 } finally {

@@ -3,12 +3,12 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$install = Join-Path $repoRoot 'proxy-core/build/install/strataproxy'
+$install = Join-Path $repoRoot 'proxy-core/build/install/moonbridge'
 $work = Join-Path $repoRoot 'build/container-network-smoke'
 $pythonImage = 'docker.gitea.com/runner-images@sha256:fd911d7417bfbf0f454530e447da95b58001e1df41bbc5e1a8dd35d432575aae'
 $javaImage = 'eclipse-temurin@sha256:8da0490fa9a3c26867012019565948eef0ee69438f5c75ac28146967bae984b5'
 $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
-$network = "strataproxy-smoke-$suffix"
+$network = "moonbridge-smoke-$suffix"
 $createdNetwork = $false
 $secret = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 
@@ -83,7 +83,7 @@ listen: "0.0.0.0:25577"
 authentication: OFFLINE
 allowOfflinePublicAccess: true
 plugins:
-  directory: "/opt/strataproxy/plugins"
+  directory: "/opt/moonbridge/plugins"
 $enabled
 $backendConfig
 $controlConfig
@@ -95,11 +95,11 @@ $controlConfig
                 '/work/smoke/container-network.py', 'backend', "$probes") | Out-Null
             WaitBackend $backend
             InvokeDocker @('run', '-d', '--network', $network, '--name', $proxy,
-                '-v', "${install}:/opt/strataproxy:ro", '-v', "${config}:/opt/strataproxy.yml:ro",
-                '--entrypoint', 'java', $javaImage, '-cp', '/opt/strataproxy/lib/*',
-                'dev.strataproxy.app.ProxyMain', '--config', '/opt/strataproxy.yml') | Out-Null
+                '-v', "${install}:/opt/moonbridge:ro", '-v', "${config}:/opt/moonbridge.yml:ro",
+                '--entrypoint', 'java', $javaImage, '-cp', '/opt/moonbridge/lib/*',
+                'dev.moonbridge.app.ProxyMain', '--config', '/opt/moonbridge.yml') | Out-Null
             $clientArgs = @('run', '--rm', '--network', $network, '-v', "${repoRoot}:/work:ro")
-            if ($mode -eq 'control') { $clientArgs += @('-e', "STRATAPROXY_CHANNEL_SECRET=$secret") }
+            if ($mode -eq 'control') { $clientArgs += @('-e', "MOONBRIDGE_CHANNEL_SECRET=$secret") }
             $clientArgs += @('--entrypoint', 'python3', $pythonImage,
                 '/work/smoke/container-network.py', 'client', $mode, $proxy, $backend)
             InvokeDocker $clientArgs | Write-Output

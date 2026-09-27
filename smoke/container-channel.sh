@@ -2,14 +2,14 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-install="$repo_root/proxy-core/build/install/strataproxy"
+install="$repo_root/proxy-core/build/install/moonbridge"
 python_image='docker.gitea.com/runner-images@sha256:fd911d7417bfbf0f454530e447da95b58001e1df41bbc5e1a8dd35d432575aae'
 java_image='eclipse-temurin@sha256:8da0490fa9a3c26867012019565948eef0ee69438f5c75ac28146967bae984b5'
 suffix=$(python3 -c 'import uuid; print(uuid.uuid4().hex[:10])')
-network="strataproxy-channel-$suffix"
+network="moonbridge-channel-$suffix"
 backend="sp-backend-$suffix"
 proxy="sp-proxy-$suffix"
-work=$(mktemp -d "${TMPDIR:-/tmp}/strataproxy-channel.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/moonbridge-channel.XXXXXX")
 secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 
 cleanup() {
@@ -27,7 +27,7 @@ authentication: OFFLINE
 allowOfflinePublicAccess: true
 backends: []
 plugins:
-  directory: "/opt/strataproxy/plugins"
+  directory: "/opt/moonbridge/plugins"
   enabled: {}
 backendChannel:
   listen: "0.0.0.0:28081"
@@ -52,11 +52,11 @@ done
 if [ "$ready" -ne 1 ]; then docker logs "$backend"; exit 1; fi
 
 docker run -d --network "$network" --name "$proxy" \
-    -v "$install:/opt/strataproxy:ro" -v "$work/config.yml:/opt/strataproxy.yml:ro" \
-    --entrypoint java "$java_image" -cp '/opt/strataproxy/lib/*' \
-    dev.strataproxy.app.ProxyMain --config /opt/strataproxy.yml >/dev/null
+    -v "$install:/opt/moonbridge:ro" -v "$work/config.yml:/opt/moonbridge.yml:ro" \
+    --entrypoint java "$java_image" -cp '/opt/moonbridge/lib/*' \
+    dev.moonbridge.app.ProxyMain --config /opt/moonbridge.yml >/dev/null
 if ! docker run --rm --network "$network" -v "$repo_root:/work:ro" \
-    -e "STRATAPROXY_CHANNEL_SECRET=$secret" --entrypoint python3 "$python_image" \
+    -e "MOONBRIDGE_CHANNEL_SECRET=$secret" --entrypoint python3 "$python_image" \
     /work/smoke/container-network.py client control "$proxy" "$backend"; then
     docker logs "$proxy" || true
     docker logs "$backend" || true

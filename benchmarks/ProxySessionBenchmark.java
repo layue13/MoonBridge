@@ -1,12 +1,12 @@
-package dev.strataproxy.core.session;
+package dev.moonbridge.core.session;
 
-import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.PlayerView;
-import dev.strataproxy.api.TransferStatus;
-import dev.strataproxy.core.backend.BackendId;
-import dev.strataproxy.core.backend.BackendOwner;
-import dev.strataproxy.core.backend.BackendRegistration;
-import dev.strataproxy.core.backend.InMemoryBackendCatalog;
+import dev.moonbridge.api.PlacementDecision;
+import dev.moonbridge.api.PlayerView;
+import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.core.backend.BackendId;
+import dev.moonbridge.core.backend.BackendOwner;
+import dev.moonbridge.core.backend.BackendRegistration;
+import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;

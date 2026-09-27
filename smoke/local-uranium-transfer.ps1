@@ -22,9 +22,9 @@ if ($ReturnToOld -and -not $InstalledPlugin) {
 if (-not $PrismInstanceFolder) { $PrismInstanceFolder = $PrismInstance }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
-$proxyLib = Join-Path $repoRoot 'proxy-core\build\install\strataproxy\lib'
+$proxyLib = Join-Path $repoRoot 'proxy-core\build\install\moonbridge\lib'
 if (-not (Test-Path -LiteralPath $Java8Path) -or -not (Test-Path -LiteralPath $proxyLib)) {
-    throw 'Java 8 and the installed StrataProxy distribution are required'
+    throw 'Java 8 and the installed MoonBridge distribution are required'
 }
 if ((Get-Content -LiteralPath (Join-Path $bundle 'eula.txt') -Raw).Trim() -ne 'eula=true') {
     throw 'The supplied Uranium bundle must already contain eula=true'
@@ -101,7 +101,7 @@ server-port=$port
 server-ip=127.0.0.1
 online-mode=false
 level-name=world
-motd=StrataProxy Uranium transfer smoke
+motd=MoonBridge Uranium transfer smoke
 "@ | Set-Content -LiteralPath (Join-Path $directory 'server.properties') -Encoding utf8
     if ($DebugSession) {
         $cauldronConfig = Join-Path $directory 'cauldron.yml'
@@ -180,7 +180,7 @@ try {
             $tapLog = Join-Path $runDir ("tap-$($target.Name).log")
             $tapStdout = Join-Path $runDir ("tap-$($target.Name).stdout.log")
             $tap = Start-Process -FilePath $java -ArgumentList @(
-                '-cp', ('"{0}"' -f $classes), 'dev.strataproxy.smoke.TcpRelayCapture',
+                '-cp', ('"{0}"' -f $classes), 'dev.moonbridge.smoke.TcpRelayCapture',
                 $routePort, $target.Port, ('"{0}"' -f $tapLog)
             ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $tapStdout `
               -RedirectStandardError (Join-Path $runDir ("tap-$($target.Name).stderr.log"))
@@ -195,8 +195,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Could not compile Uranium transfer plugin' }
         $serviceDir = Join-Path $pluginClasses 'META-INF\services'
         New-Item -ItemType Directory -Path $serviceDir -Force | Out-Null
-        'dev.strataproxy.smoke.UraniumTransferPlugin' |
-            Set-Content -LiteralPath (Join-Path $serviceDir 'dev.strataproxy.api.Plugin')
+        'dev.moonbridge.smoke.UraniumTransferPlugin' |
+            Set-Content -LiteralPath (Join-Path $serviceDir 'dev.moonbridge.api.Plugin')
         $pluginDir = Join-Path $runDir 'proxy-plugins'
         New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null
         & jar -cf (Join-Path $pluginDir 'uranium-transfer-smoke.jar') -C $pluginClasses .
@@ -204,7 +204,7 @@ try {
         $proxyPort = FreePort
         while ($proxyPort -eq $oldPort -or $proxyPort -eq $newPort -or
                 $proxyPort -eq $oldRoutePort -or $proxyPort -eq $newRoutePort) { $proxyPort = FreePort }
-        $config = Join-Path $runDir 'strataproxy.yml'
+        $config = Join-Path $runDir 'moonbridge.yml'
         $pluginDirYaml = $pluginDir.Replace('\', '/')
         $returnToOldSetting = if ($ReturnToOld) { 'true' } else { 'false' }
         @"
@@ -213,7 +213,7 @@ authentication: OFFLINE
 plugins:
   directory: "$pluginDirYaml"
   enabled:
-    dev.strataproxy.smoke.UraniumTransferPlugin:
+    dev.moonbridge.smoke.UraniumTransferPlugin:
       newPort: "$newRoutePort"
       returnToOld: "$returnToOldSetting"
 backends:
@@ -230,7 +230,7 @@ backends:
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder><pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern></encoder>
     </appender>
-    <logger name="dev.strataproxy.core.session.Session" level="DEBUG" />
+    <logger name="dev.moonbridge.core.session.Session" level="DEBUG" />
     <root level="INFO"><appender-ref ref="CONSOLE" /></root>
 </configuration>
 '@ | Set-Content -LiteralPath $logbackConfig -Encoding utf8
@@ -238,7 +238,7 @@ backends:
         }
         $proxy = Start-Process -FilePath $java -ArgumentList @(
             $debugJvmArgs
-            '-cp', ('"{0}"' -f $classpath), 'dev.strataproxy.app.ProxyMain',
+            '-cp', ('"{0}"' -f $classpath), 'dev.moonbridge.app.ProxyMain',
             '--config', ('"{0}"' -f $config)
         ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $proxyLog `
           -RedirectStandardError (Join-Path $runDir 'proxy.stderr.log')
@@ -314,7 +314,7 @@ backends:
             }
         } else {
             $probeMode = if ($ReturnToOld) { '--external-roundtrip' } else { '--external' }
-            & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $probeMode $proxyPort
+            & java -cp "$classes;$classpath" dev.moonbridge.smoke.UraniumTransferProbe $probeMode $proxyPort
             if ($LASTEXITCODE -ne 0) { throw "Installed-plugin transfer probe failed: $LASTEXITCODE" }
             if ($ReturnToOld) {
                 Write-Output 'REAL_URANIUM_PLUGIN_ROUNDTRIP_PASS dynamicRegistration=true transfers=2 status=NETWORK_READY'
@@ -326,7 +326,7 @@ backends:
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
         if ($ReturnToOld) { WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY' }
     } else {
-        & java -cp "$classes;$classpath" dev.strataproxy.smoke.UraniumTransferProbe $oldPort $newPort
+        & java -cp "$classes;$classpath" dev.moonbridge.smoke.UraniumTransferProbe $oldPort $newPort
         if ($LASTEXITCODE -ne 0) { throw "Uranium transfer probe failed: $LASTEXITCODE" }
     }
     $playerName = if ($PrismClient) { 'PrismSmoke' } else { 'NettyProbe' }

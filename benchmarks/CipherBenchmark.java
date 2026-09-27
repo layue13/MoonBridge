@@ -1,4 +1,4 @@
-package dev.strataproxy.core.session;
+package dev.moonbridge.core.session;
 
 import com.sun.management.ThreadMXBean;
 import io.netty.buffer.ByteBuf;

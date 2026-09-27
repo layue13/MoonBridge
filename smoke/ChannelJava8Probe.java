@@ -1,9 +1,9 @@
-import dev.strataproxy.backendchannel.BackendChannelClient;
-import dev.strataproxy.messaging.Endpoint;
-import dev.strataproxy.messaging.Message;
-import dev.strataproxy.messaging.MessageChannel;
-import dev.strataproxy.messaging.PublishResult;
-import dev.strataproxy.messaging.SendResult;
+import dev.moonbridge.backendchannel.BackendChannelClient;
+import dev.moonbridge.messaging.Endpoint;
+import dev.moonbridge.messaging.Message;
+import dev.moonbridge.messaging.MessageChannel;
+import dev.moonbridge.messaging.PublishResult;
+import dev.moonbridge.messaging.SendResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;

@@ -5,10 +5,10 @@
 ## 模块
 
 - `proxy-plugin-api` 定义插件外部接口：生命周期、玩家/服务器只读视图、后端注册、类型化事件、初始选服、命令和转服。核心实现位于 `proxy-core`；可选发现器位于 `plugins/`。
-- `ProxyMain` 读取严格 YAML 配置，先注册静态后端，再加载配置启用的插件，连接插件选服回调，最后启动 Netty 监听器。插件以 `META-INF/services/dev.strataproxy.api.Plugin` 声明，通过独立类加载器加载。
+- `ProxyMain` 读取严格 YAML 配置，先注册静态后端，再加载配置启用的插件，连接插件选服回调，最后启动 Netty 监听器。插件以 `META-INF/services/dev.moonbridge.api.Plugin` 声明，通过独立类加载器加载。
 - 核心支持 Minecraft 1.7.10（协议 5）登录和转发。`OFFLINE` 信任客户端提交的名字；`ONLINE_BUNGEE` 在代理执行加密与会话验证，并将身份转发给受信任的旧版 Bungee 后端。
 
-入口可从 [`ProxyMain`](../proxy-core/src/main/java/dev/strataproxy/app/ProxyMain.java)、[`ProxySessionListener`](../proxy-core/src/main/java/dev/strataproxy/core/session/ProxySessionListener.java) 和 [`PluginHost`](../proxy-core/src/main/java/dev/strataproxy/core/plugin/PluginHost.java) 追踪。
+入口可从 [`ProxyMain`](../proxy-core/src/main/java/dev/moonbridge/app/ProxyMain.java)、[`ProxySessionListener`](../proxy-core/src/main/java/dev/moonbridge/core/session/ProxySessionListener.java) 和 [`PluginHost`](../proxy-core/src/main/java/dev/moonbridge/core/plugin/PluginHost.java) 追踪。
 
 ## 会话与连接生命周期
 
@@ -28,7 +28,7 @@ flowchart LR
     F --> G[PLAY / Forge 握手与转发]
 ```
 
-普通转发沿用协议 5 帧边界，不重新编码普通帧。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/strataproxy/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/strataproxy/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/strataproxy/core/session/KeepAliveBridge.java)。
+普通转发沿用协议 5 帧边界，不重新编码普通帧。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/KeepAliveBridge.java)。
 
 ## 后端目录与发现所有权
 
@@ -40,7 +40,7 @@ flowchart LR
 
 ## 转服、并发与错误边界
 
-转服先在旧后端保持服务的同时连接并登录候选后端。普通后端在 Join Game 后可进入切换；Forge 候选后端要等待客户端 Forge 握手链路切换及 Join Game，再进行世界切换。交接期间客户端与旧后端帧分别进入有上限的缓冲区；切换前失败时尽可能恢复旧链路并回放暂存帧，成功时改用候选链路并清理旧链路。候选连接失败不会立即破坏旧链路；Forge 客户端切换包写出后若目标拒绝或超时，旧链路无法安全恢复，代理会关闭会话。`NETWORK_READY` 只表示协议握手和代理发出的世界切换已完成，不表示目标服插件或玩法世界已准备好。接口定义见 [`Players`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/Players.java)、状态见 [`TransferStatus`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/TransferStatus.java)。
+转服先在旧后端保持服务的同时连接并登录候选后端。普通后端在 Join Game 后可进入切换；Forge 候选后端要等待客户端 Forge 握手链路切换及 Join Game，再进行世界切换。交接期间客户端与旧后端帧分别进入有上限的缓冲区；切换前失败时尽可能恢复旧链路并回放暂存帧，成功时改用候选链路并清理旧链路。候选连接失败不会立即破坏旧链路；Forge 客户端切换包写出后若目标拒绝或超时，旧链路无法安全恢复，代理会关闭会话。`NETWORK_READY` 只表示协议握手和代理发出的世界切换已完成，不表示目标服插件或玩法世界已准备好。接口定义见 [`Players`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/Players.java)、状态见 [`TransferStatus`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/TransferStatus.java)。
 
 主要并发和失败界限：
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ## 相关源码
 
-- 插件 API：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/PluginContext.java)、[`Servers`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/Servers.java)、[`Players`](../proxy-plugin-api/src/main/java/dev/strataproxy/api/Players.java)
-- 会话和转服：[`Session`](../proxy-core/src/main/java/dev/strataproxy/core/session/Session.java)、[`TransferCandidate`](../proxy-core/src/main/java/dev/strataproxy/core/session/TransferCandidate.java)、[`TransferFrameBuffer`](../proxy-core/src/main/java/dev/strataproxy/core/session/TransferFrameBuffer.java)
-- 目录：[`BackendCatalog`](../proxy-core/src/main/java/dev/strataproxy/core/backend/BackendCatalog.java)、[`InMemoryBackendCatalog`](../proxy-core/src/main/java/dev/strataproxy/core/backend/InMemoryBackendCatalog.java)
-- 后端控制通道：[`BackendControlService`](../proxy-core/src/main/java/dev/strataproxy/core/control/BackendControlService.java)
+- 插件 API：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Servers`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/Servers.java)、[`Players`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/Players.java)
+- 会话和转服：[`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`TransferCandidate`](../proxy-core/src/main/java/dev/moonbridge/core/session/TransferCandidate.java)、[`TransferFrameBuffer`](../proxy-core/src/main/java/dev/moonbridge/core/session/TransferFrameBuffer.java)
+- 目录：[`BackendCatalog`](../proxy-core/src/main/java/dev/moonbridge/core/backend/BackendCatalog.java)、[`InMemoryBackendCatalog`](../proxy-core/src/main/java/dev/moonbridge/core/backend/InMemoryBackendCatalog.java)
+- 后端控制通道：[`BackendControlService`](../proxy-core/src/main/java/dev/moonbridge/core/control/BackendControlService.java)

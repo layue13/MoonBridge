@@ -18,7 +18,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
-    api(project(":messaging-api"))
+    api(project(":backend-bukkit-api"))
     implementation(project(":backend-channel-client"))
     compileOnly("org.spigotmc:spigot-api:1.8-R0.1-SNAPSHOT") { isTransitive = false }
     testImplementation("org.spigotmc:spigot-api:1.8-R0.1-SNAPSHOT") { isTransitive = false }
@@ -34,7 +34,7 @@ tasks.withType<Test>().configureEach { useJUnitPlatform() }
 // One provider owns the API classes, codec and transport. Consumers use compileOnly
 // and plugin.yml depend, so Bukkit resolves the same service class identity.
 tasks.jar {
-    archiveBaseName.set("strataproxy-backend-bukkit")
+    archiveBaseName.set("moonbridge-backend-bukkit")
     dependsOn(configurations.runtimeClasspath)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from({ configurations.runtimeClasspath.get().filter { it.extension == "jar" }.map { zipTree(it) } })
@@ -51,11 +51,11 @@ val verifyHostJar = tasks.register("verifyHostJar") {
             val entries = archive.entries().asSequence().toList()
             val names = entries.map { it.name }
             listOf("plugin.yml", "config.yml",
-                "dev/strataproxy/bukkit/BukkitMessagingService.class",
-                "dev/strataproxy/messaging/Message.class",
-                "dev/strataproxy/messaging/internal/LocalMessaging.class",
-                "dev/strataproxy/messaging/protocol/MessageCodec.class",
-                "dev/strataproxy/backendchannel/BackendChannelClient.class").forEach {
+                "dev/moonbridge/bukkit/BukkitMessagingService.class",
+                "dev/moonbridge/messaging/Message.class",
+                "dev/moonbridge/messaging/internal/LocalMessaging.class",
+                "dev/moonbridge/messaging/protocol/MessageCodec.class",
+                "dev/moonbridge/backendchannel/BackendChannelClient.class").forEach {
                 check(names.count { name -> name == it } == 1) { "Host jar must contain exactly one $it" }
             }
             check(names.none { it.startsWith("org/bukkit/") }) { "Bukkit API must remain server-provided" }
@@ -78,7 +78,7 @@ publishing {
             from(components["java"])
             artifactId = "backend-bukkit"
             pom {
-                name.set("StrataProxy Backend Host")
+                name.set("MoonBridge Backend Host")
                 description.set("Java 8 shared channel messaging service for Bukkit and Uranium plugins.")
             }
         }

@@ -34,7 +34,7 @@ publishing {
             from(components["java"])
             artifactId = "messaging-protocol"
             pom {
-                name.set("StrataProxy Messaging Protocol")
+                name.set("MoonBridge Messaging Protocol")
                 description.set("Java 8-compatible message wire codec shared by proxy and backend clients.")
             }
         }

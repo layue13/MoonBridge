@@ -1,5 +1,5 @@
 # Install exactly one host plugin per backend. Consumer plugins depend on
-# StrataProxyBackend and obtain BukkitMessagingService from ServicesManager.
+# MoonBridgeBackend and obtain BukkitMessagingService from ServicesManager.
 proxyHost: "127.0.0.1"
 proxyPort: 28081
 instanceId: "island-a"

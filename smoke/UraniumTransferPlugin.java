@@ -1,14 +1,14 @@
-package dev.strataproxy.smoke;
+package dev.moonbridge.smoke;
 
-import dev.strataproxy.api.InitialPlacementHandler;
-import dev.strataproxy.api.PlacementDecision;
-import dev.strataproxy.api.PlayerIdentity;
-import dev.strataproxy.api.PlayerView;
-import dev.strataproxy.api.Plugin;
-import dev.strataproxy.api.PluginContext;
-import dev.strataproxy.api.ServerDefinition;
-import dev.strataproxy.api.ServerRegistration;
-import dev.strataproxy.api.TransferStatus;
+import dev.moonbridge.api.InitialPlacementHandler;
+import dev.moonbridge.api.PlacementDecision;
+import dev.moonbridge.api.PlayerIdentity;
+import dev.moonbridge.api.PlayerView;
+import dev.moonbridge.api.Plugin;
+import dev.moonbridge.api.PluginContext;
+import dev.moonbridge.api.ServerDefinition;
+import dev.moonbridge.api.ServerRegistration;
+import dev.moonbridge.api.TransferStatus;
 
 import java.net.URI;
 import java.util.Map;

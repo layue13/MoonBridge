@@ -1,4 +1,4 @@
-# StrataProxy
+# MoonBridge
 
 面向 Minecraft 1.7.10 Forge 的玩家会话代理：登录认证、协议转发、跨后端转服，以及供插件使用的玩家、服务器目录、富文本、命令补全、类型化事件和 Channel 消息服务。后端插件共享认证连接，通过 channel 与 proxy 或其他 backend 通信。空岛分配、实例唤醒和 Ban 数据存储由插件实现。
 
@@ -17,13 +17,19 @@
 
 ```powershell
 .\gradlew.bat check :proxy-core:installDist
-.\proxy-core\build\install\strataproxy\bin\strataproxy.bat --config .\proxy-core\build\install\strataproxy\config\strataproxy.yml
+.\proxy-core\build\install\moonbridge\bin\moonbridge.bat --config .\proxy-core\build\install\moonbridge\config\moonbridge.yml
 ```
 
 默认配置为 `OFFLINE`，仅监听 `127.0.0.1:25577`，后端为 `127.0.0.1:25565`。公开部署使用 `ONLINE_BUNGEE`，并限制玩家直连后端。详见[运行配置](docs/operations.md)。
 
+## 后端插件开发
+
+服务器安装 `moonbridge-backend-bukkit` JAR（插件名 `MoonBridgeBackend`）。业务插件以 `compileOnly` / `provided` 依赖 `uk.potatolab:backend-bukkit-api:0.1.0-SNAPSHOT`，通过 `BukkitMessagingService` 获取共享消息服务；无需依赖宿主实现或创建网络连接。API 和完整接入示例见[后端插件接入](docs/backend-channel-design.md#后端插件接入)。
+
+本次改名统一使用 `dev.moonbridge` 包名、`moonbridge` 启动命令和 `moonbridge.yml` 配置文件。现有插件需要重新编译，Bukkit 插件依赖声明和宿主配置目录改用 `MoonBridgeBackend`。历史验收记录保留当时的名称与构件路径。
+
 ## 验证状态
 
-`StrataProxyBackend` 后端宿主已通过两个真实 Uranium / Java 8 服务端的注册、通信、主线程回调、插件停用、重连及注销/租约验收，见[后端宿主验收记录](smoke/results/2026-09-27-backend-host.md)。这是无玩家、隔离服务端上的功能验收，不代表生产容量测试。
+`MoonBridgeBackend` 后端宿主与独立 API 已通过两个真实 Uranium / Java 8 服务端的注册、通信、主线程回调、插件停用、重连及注销/租约验收，见[改名与独立 API 验收记录](smoke/results/2026-09-27-moonbridge-api.md)。这是无玩家、隔离服务端上的功能验收，不代表生产容量测试。
 
 已完成当前 Prism 整合包的真实 Mojang 认证、连续 20 次转服、历史 DNS/Agent 发行包烟测及同条件流量对照，见[验收记录](benchmarks/results/2026-09-26-prism-pack.md)。验收覆盖单玩家与本机后端；生产容量需按部署环境测量。已知 Uranium 候选服登录停滞的调查见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。

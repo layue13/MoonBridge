@@ -1,8 +1,8 @@
-import dev.strataproxy.app.ProxyConfiguration;
-import dev.strataproxy.core.backend.InMemoryBackendCatalog;
-import dev.strataproxy.core.control.BackendControlService;
-import dev.strataproxy.messaging.*;
-import dev.strataproxy.messaging.internal.LocalMessaging;
+import dev.moonbridge.app.ProxyConfiguration;
+import dev.moonbridge.core.backend.InMemoryBackendCatalog;
+import dev.moonbridge.core.control.BackendControlService;
+import dev.moonbridge.messaging.*;
+import dev.moonbridge.messaging.internal.LocalMessaging;
 
 import java.net.ServerSocket;
 import java.time.Duration;

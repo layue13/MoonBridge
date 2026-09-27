@@ -21,7 +21,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "strataproxy"
+rootProject.name = "moonbridge"
 
 include(
     "proxy-core",
@@ -30,4 +30,5 @@ include(
     "messaging-api",
     "messaging-protocol",
     "backend-bukkit",
+    "backend-bukkit-api",
 )
