@@ -39,6 +39,7 @@ import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.protocol.MinecraftText;
 import java.util.Objects;
@@ -76,6 +77,8 @@ public final class ProxySessionListener implements Players {
     private final ConcurrentHashMap<UUID, Session> sessionsByPlayerId = new ConcurrentHashMap<>();
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextConnectionId = new AtomicLong();
+    private volatile UUID proxyEpoch = UUID.randomUUID();
+    private volatile Map<String, byte[]> sessionBindingSecrets = Map.of();
     private final AtomicInteger onlineCount = new AtomicInteger();
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
@@ -178,6 +181,33 @@ public final class ProxySessionListener implements Players {
             throw new IllegalStateException("Placement must be configured once before listener start");
         }
         this.placement = Objects.requireNonNull(placement, "placement");
+    }
+
+    /** Configures the host boot epoch and per-backend forwarding keys before accepting clients. */
+    public synchronized void setSessionBinding(UUID proxyEpoch, Map<String, String> secretsByBackend) {
+        if (started || closed || listener != null) {
+            throw new IllegalStateException("Session binding must be configured before listener start");
+        }
+        Objects.requireNonNull(proxyEpoch, "proxyEpoch");
+        Objects.requireNonNull(secretsByBackend, "secretsByBackend");
+        Map<String, byte[]> copied = new java.util.HashMap<>();
+        secretsByBackend.forEach((backend, secret) -> {
+            if (backend == null || backend.isBlank() || secret == null
+                    || secret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 32) {
+                throw new IllegalArgumentException("backend session binding keys require a backend and 32-byte secret");
+            }
+            copied.put(backend, secret.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        });
+        sessionBindingSecrets.values().forEach(key -> java.util.Arrays.fill(key, (byte) 0));
+        this.proxyEpoch = proxyEpoch;
+        this.sessionBindingSecrets = Map.copyOf(copied);
+    }
+
+    UUID proxyEpoch() { return proxyEpoch; }
+
+    byte[] sessionBindingSecret(String backendName) {
+        byte[] secret = sessionBindingSecrets.get(backendName);
+        return secret == null ? null : secret.clone();
     }
 
     /** Configures the explicit, ordered entry route used only when no plugin selects a route. */
@@ -376,6 +406,8 @@ public final class ProxySessionListener implements Players {
     public synchronized CompletionStage<Void> close() {
         if (shutdown != null) return shutdown;
         closed = true;
+        sessionBindingSecrets.values().forEach(key -> java.util.Arrays.fill(key, (byte) 0));
+        sessionBindingSecrets = Map.of();
         Channel current = listener;
         if (current != null) current.close();
         allSessions.forEach(Session::closePair);

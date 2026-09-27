@@ -97,6 +97,27 @@ class BackendControlServiceTest {
         }
     }
 
+    @Test void registrationReturnsCurrentProxyEpochAndBackendEpoch() throws Exception {
+        int port;
+        try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
+        var catalog = new InMemoryBackendCatalog();
+        var config = new ProxyConfiguration.BackendChannel("127.0.0.1:" + port,
+                Map.of("island-a", client("island-a")), 5, 8);
+        var timer = Executors.newSingleThreadScheduledExecutor();
+        var local = localMessaging(timer);
+        UUID proxyEpoch = UUID.randomUUID();
+        try (var control = new BackendControlService(config, catalog, local, proxyEpoch)) {
+            control.start();
+            try (var backend = rawRegistered(port, proxyEpoch)) {
+                var owner = catalog.find(new BackendId("island-a")).orElseThrow().owner();
+                assertTrue(owner.instanceGeneration() > 0);
+            }
+        } finally {
+            local.close();
+            timer.shutdownNow();
+        }
+    }
+
     @Test void replacementFencesOldConnectionAndAbruptLossExpiresLease() throws Exception {
         int port;
         try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
@@ -140,6 +161,10 @@ class BackendControlServiceTest {
     }
 
     private static Socket rawRegistered(int port) throws Exception {
+        return rawRegistered(port, null);
+    }
+
+    private static Socket rawRegistered(int port, UUID expectedProxyEpoch) throws Exception {
         var socket = new Socket("127.0.0.1", port);
         socket.setSoTimeout(2000);
         var input = new DataInputStream(socket.getInputStream());
@@ -155,7 +180,9 @@ class BackendControlServiceTest {
         mac.init(new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         FrameCodec.write(output, Wire.register("island-a", "island-a", address,
                 generation, "primary", mac.doFinal(signed)));
-        assertTrue(Wire.decodeRegistered(FrameCodec.read(input)) > 0);
+        byte[] registered = FrameCodec.read(input);
+        assertTrue(Wire.decodeRegistered(registered) > 0);
+        if (expectedProxyEpoch != null) assertEquals(expectedProxyEpoch, Wire.decodeRegisteredProxyEpoch(registered));
         return socket;
     }
 

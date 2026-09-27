@@ -24,6 +24,12 @@ public final class BungeeLegacyForwarding {
 
     public static ByteBuf encode(ByteBufAllocator allocator, MinecraftHandshake original,
                                  InetSocketAddress clientAddress, VerifiedProfile profile) {
+        return encode(allocator, original, clientAddress, profile, null);
+    }
+
+    /** Adds an optional host-authenticated proxy-session proof to the forwarded profile properties. */
+    public static ByteBuf encode(ByteBufAllocator allocator, MinecraftHandshake original,
+                                 InetSocketAddress clientAddress, VerifiedProfile profile, String sessionProof) {
         Objects.requireNonNull(allocator, "allocator");
         Objects.requireNonNull(original, "original");
         Objects.requireNonNull(clientAddress, "clientAddress");
@@ -44,7 +50,9 @@ public final class BungeeLegacyForwarding {
         StringBuilder host = new StringBuilder(requestedHost)
                 .append('\0').append(clientAddress.getAddress().getHostAddress())
                 .append('\0').append(profile.uuid().toString().replace("-", ""));
-        if (!profile.properties().isEmpty()) host.append('\0').append(propertiesJson(profile));
+        if (!profile.properties().isEmpty() || sessionProof != null) {
+            host.append('\0').append(propertiesJson(profile, sessionProof));
+        }
         if (host.length() > BACKEND_PROFILE.maxHandshakeHostCharacters()) {
             throw new IllegalArgumentException("forwarded handshake host is too long");
         }
@@ -52,13 +60,21 @@ public final class BungeeLegacyForwarding {
                 MinecraftHandshake.NextState.LOGIN).encode(allocator, BACKEND_PROFILE);
     }
 
-    private static String propertiesJson(VerifiedProfile profile) {
+    private static String propertiesJson(VerifiedProfile profile, String sessionProof) {
         ArrayNode properties = JSON.createArrayNode();
         for (ProfileProperty property : profile.properties()) {
             ObjectNode entry = properties.addObject();
             entry.put("name", property.name());
             entry.put("value", property.value());
             if (property.signature() != null) entry.put("signature", property.signature());
+        }
+        if (sessionProof != null) {
+            if (sessionProof.isBlank() || sessionProof.length() > 2048) {
+                throw new IllegalArgumentException("session proof is invalid or too long");
+            }
+            ObjectNode entry = properties.addObject();
+            entry.put("name", dev.moonbridge.messaging.session.ForwardedSessionProof.PROPERTY_NAME);
+            entry.put("value", sessionProof);
         }
         try {
             return JSON.writeValueAsString(properties);

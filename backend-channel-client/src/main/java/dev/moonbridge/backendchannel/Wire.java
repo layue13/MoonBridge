@@ -6,10 +6,11 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /** Authentication and control-frame codecs for the backend connection. Business messages use MessageCodec. */
 public final class Wire {
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
     public static final int HELLO = 1;
     public static final int REGISTER = 2;
     public static final int REGISTERED = 3;
@@ -84,18 +85,41 @@ public final class Wire {
     }
 
     public static byte[] registered(long epoch) throws IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream(9);
+        return registered(epoch, new UUID(0L, 0L));
+    }
+
+    public static byte[] registered(long epoch, UUID proxyEpoch) throws IOException {
+        if (epoch < 0 || proxyEpoch == null) throw new IllegalArgumentException("registered identity is invalid");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(25);
         DataOutputStream out = new DataOutputStream(bytes);
         out.writeByte(REGISTERED);
         out.writeLong(epoch);
+        out.writeLong(proxyEpoch.getMostSignificantBits());
+        out.writeLong(proxyEpoch.getLeastSignificantBits());
         return bytes.toByteArray();
     }
 
     public static long decodeRegistered(byte[] frame) throws IOException {
+        return decodeRegisteredIdentity(frame).epoch;
+    }
+
+    public static UUID decodeRegisteredProxyEpoch(byte[] frame) throws IOException {
+        return decodeRegisteredIdentity(frame).proxyEpoch;
+    }
+
+    public static RegisteredIdentity decodeRegisteredIdentity(byte[] frame) throws IOException {
         DataInputStream in = body(frame, REGISTERED);
         long epoch = in.readLong();
+        UUID proxyEpoch = new UUID(in.readLong(), in.readLong());
         requireEnd(in);
-        return epoch;
+        if (epoch < 0) throw new IOException("invalid backend epoch");
+        return new RegisteredIdentity(epoch, proxyEpoch);
+    }
+
+    public static final class RegisteredIdentity {
+        public final long epoch;
+        public final UUID proxyEpoch;
+        private RegisteredIdentity(long epoch, UUID proxyEpoch) { this.epoch = epoch; this.proxyEpoch = proxyEpoch; }
     }
 
     public static byte[] empty(int type) throws IOException {

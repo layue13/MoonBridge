@@ -1,5 +1,6 @@
 package dev.moonbridge.core.session;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.TransferStatus;
 import dev.moonbridge.api.event.Event;
@@ -13,6 +14,7 @@ import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
+import dev.moonbridge.messaging.session.ForwardedSessionProof;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
@@ -559,6 +561,98 @@ final class SessionTransferTest {
             assertEquals(Optional.of("new"), departed.player().currentServer());
             listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertTrue(notifications.isEmpty(), "failed/no-op transfers and repeated close do not publish events");
+        }
+    }
+
+    @Test
+    void offlineTransferForwardsProofToConfiguredDynamicTarget() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var oldClosed = new CompletableFuture<Void>();
+            var targetHandshake = new CompletableFuture<String>();
+            var newRelayed = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    acceptLogin(new DataInputStream(socket.getInputStream()),
+                            new DataOutputStream(socket.getOutputStream()), 0);
+                    if (socket.getInputStream().read() != -1) throw new AssertionError("old backend remained connected");
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
+            });
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(socket.getInputStream());
+                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                    var handshake = new ByteArrayInputStream(readFrame(input));
+                    assertEquals(0, readVarInt(handshake));
+                    assertEquals(5, readVarInt(handshake));
+                    targetHandshake.complete(readString(handshake, 32767));
+                    assertEquals(0, packetId(readFrame(input)));
+                    sendLoginSuccess(output);
+                    sendJoinGame(output, 0, 200);
+                    writeFrame(output, new byte[]{0x1C, 0, 0, 0, (byte) 200, 0x7F});
+                    assertArrayEquals(new byte[]{0x01, 0x33}, readFrame(input));
+                    writeFrame(output, new byte[]{0x08});
+                    assertArrayEquals(new byte[]{0x0B, 0, 0, 0, (byte) 200, 1}, readFrame(input));
+                    writeFrame(output, new byte[]{0x1A, 0, 0, 0, (byte) 200, 1});
+                    writeFrame(output, new byte[]{0x03, 0x44});
+                    newRelayed.complete(null);
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { targetHandshake.completeExceptionally(failure); newRelayed.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            catalog.register(new BackendRegistration(new BackendId("new"), new BackendOwner("backend-control:new", 23),
+                    URI.create("tcp://127.0.0.1:" + newServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = listener(catalog);
+            UUID proxyEpoch = UUID.randomUUID();
+            byte[] secret = "offline-transfer-binding-secret-987654321".getBytes(StandardCharsets.UTF_8);
+            listener.setSessionBinding(proxyEpoch, Map.of("new", new String(secret, StandardCharsets.UTF_8)));
+            try {
+                InetSocketAddress bound = (InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), bound.getPort())) {
+                    client.setSoTimeout(5000);
+                    DataInputStream input = new DataInputStream(client.getInputStream());
+                    sendLogin(new DataOutputStream(client.getOutputStream()));
+                    assertEquals(2, packetId(readFrame(input)));
+                    assertEquals(1, packetId(readFrame(input)));
+                    assertEquals(8, packetId(readFrame(input)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.NETWORK_READY, transfer.status(), transfer.detail().orElse(""));
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertEquals(7, packetId(readFrame(input)));
+                    assertArrayEquals(new byte[]{0x1C, 0, 0, 0, 100, 0x7F}, readFrame(input));
+                    writeFrame(new DataOutputStream(client.getOutputStream()), new byte[]{0x01, 0x33});
+                    assertEquals(8, packetId(readFrame(input)));
+                    writeFrame(new DataOutputStream(client.getOutputStream()),
+                            new byte[]{0x0B, 0, 0, 0, 100, 1});
+                    assertArrayEquals(new byte[]{0x1A, 0, 0, 0, 100, 1}, readFrame(input));
+                    assertArrayEquals(new byte[]{0x03, 0x44}, readFrame(input));
+
+                    String[] fields = targetHandshake.get(5, TimeUnit.SECONDS).split("\u0000", -1);
+                    assertEquals(4, fields.length);
+                    assertEquals(PLAYER_ID.toString().replace("-", ""), fields[2]);
+                    String proof = null;
+                    for (var property : new ObjectMapper().readTree(fields[3])) {
+                        if (ForwardedSessionProof.PROPERTY_NAME.equals(property.path("name").asText()))
+                            proof = property.path("value").asText();
+                    }
+                    assertTrue(proof != null && !proof.isBlank(), "offline target handshake lacked session proof");
+                    var claims = ForwardedSessionProof.verify(proof, secret, "new", proxyEpoch, 23,
+                            PLAYER_ID, System.currentTimeMillis()).orElseThrow();
+                    assertEquals(player.identity().connectionId(), claims.connectionId());
+                    assertEquals(PLAYER_ID, claims.playerId());
+                    newRelayed.get(5, TimeUnit.SECONDS);
+                    oldClosed.get(5, TimeUnit.SECONDS);
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                java.util.Arrays.fill(secret, (byte) 0);
+            }
         }
     }
 
@@ -1629,6 +1723,14 @@ final class SessionTransferTest {
             if ((next & 0x80) == 0) return value;
         }
         throw new IllegalArgumentException("oversized VarInt");
+    }
+
+    private static String readString(InputStream input, int maximumLength) throws Exception {
+        int length = readVarInt(input);
+        if (length < 0 || length > maximumLength) throw new IllegalArgumentException("invalid string length");
+        byte[] bytes = input.readNBytes(length);
+        if (bytes.length != length) throw new EOFException();
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private static void writeFrame(DataOutputStream output, byte[] bytes) throws Exception {

@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
+import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.Executors;
 
 /** Command line entry point for the new proxy runtime. */
@@ -66,6 +69,7 @@ public final class ProxyMain {
     private static void runProxy(Path configPath) throws Exception {
         var loader = new ProxyConfigurationLoader();
         var configuration = loader.load(configPath);
+        UUID proxyEpoch = UUID.randomUUID();
         var serverListStatus = loader.loadServerListStatus(configuration, configPath);
         var catalog = new InMemoryBackendCatalog();
         StaticBackends.register(configuration, catalog);
@@ -81,12 +85,13 @@ public final class ProxyMain {
                 ? new ProxySessionListener(configuration.listenAddress(), catalog, null, placementTimeout)
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
                         new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
+        listener.setSessionBinding(proxyEpoch, sessionBindingSecrets(configuration));
         listener.setServerListStatus(serverListStatus);
         listener.setInitialServers(configuration.initialRouting().servers());
-        try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout);
+        try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout, proxyEpoch);
              var control = configuration.backendChannel() == null ? null
                      : new BackendControlService(configuration.backendChannel(), catalog,
-                     plugins.localMessaging())) {
+                     plugins.localMessaging(), proxyEpoch)) {
             if (control != null) plugins.setBackendChannelTransport(control);
             listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
@@ -130,6 +135,19 @@ public final class ProxyMain {
             listener.close().toCompletableFuture().join();
             if (verifierWorkers != null) verifierWorkers.shutdownNow();
         }
+    }
+
+    private static Map<String, String> sessionBindingSecrets(ProxyConfiguration configuration) {
+        if (configuration.backendChannel() == null) return Map.of();
+        Map<String, String> secrets = new HashMap<>();
+        configuration.backendChannel().clients().values().forEach(client -> {
+            String previous = secrets.putIfAbsent(client.backendName(), client.secret());
+            if (previous != null && !previous.equals(client.secret())) {
+                throw new IllegalArgumentException("backendChannel has conflicting secrets for backend "
+                        + client.backendName());
+            }
+        });
+        return Map.copyOf(secrets);
     }
 
     static Path pluginDirectory(Path configPath, String configuredDirectory) {

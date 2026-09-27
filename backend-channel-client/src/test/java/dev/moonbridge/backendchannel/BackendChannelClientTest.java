@@ -15,6 +15,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -43,6 +44,7 @@ class BackendChannelClientTest {
         final byte[] secret = new byte[32];
         Arrays.fill(secret, (byte) 0x6a);
         final ServerSocket server = new ServerSocket(0);
+        final UUID proxyEpoch = UUID.randomUUID();
         CompletableFuture<Void> peer = CompletableFuture.runAsync(() -> {
             try (Socket socket = server.accept()) {
                 DataInputStream in = new DataInputStream(socket.getInputStream());
@@ -59,7 +61,7 @@ class BackendChannelClientTest {
                 Mac mac = Mac.getInstance("HmacSHA256");
                 mac.init(new SecretKeySpec(secret, "HmacSHA256"));
                 assertArrayEquals(mac.doFinal(signed), registration.signature);
-                FrameCodec.write(out, Wire.registered(77L));
+                FrameCodec.write(out, Wire.registered(77L, proxyEpoch));
 
                 MessageCodec.IncomingMessage outgoing = MessageCodec.decodeMessage(FrameCodec.read(in));
                 assertEquals(MessageKind.REQUEST, outgoing.message.kind());
@@ -92,6 +94,7 @@ class BackendChannelClientTest {
         try {
             assertTrue(client.awaitRegistered(5, TimeUnit.SECONDS));
             assertEquals(77L, client.getEpoch());
+            assertEquals(proxyEpoch, client.getProxyEpoch());
             Message answer = messaging.channel("proxy:query").request(Endpoint.proxy(), new byte[] { 7 })
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertArrayEquals("answer".getBytes(StandardCharsets.UTF_8), answer.payload());

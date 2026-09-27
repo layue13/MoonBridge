@@ -91,6 +91,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.jar.JarFile;
@@ -111,6 +112,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final Executor PLAYER_COMPLETIONS = task -> PLAYER_COMPLETION_THREADS.newThread(task).start();
     private final BackendCatalog catalog;
     private final Players players;
+    private final UUID proxyEpoch;
     private final Duration placementTimeout;
     private final PermissionService permissionService;
     private final Duration shutdownTimeout;
@@ -146,7 +148,15 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout) {
         this(catalog, players, placementTimeout, eventTimeout,
                 Math.max(2, Runtime.getRuntime().availableProcessors()), 128, Duration.ofSeconds(10),
-                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024);
+                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024, UUID.randomUUID());
+    }
+
+    /** Uses the same process epoch as the proxy session listener. */
+    public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout,
+                      UUID proxyEpoch) {
+        this(catalog, players, placementTimeout, eventTimeout,
+                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, Duration.ofSeconds(10),
+                Math.max(2, Runtime.getRuntime().availableProcessors()), 128, 1024, proxyEpoch);
     }
 
     PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout,
@@ -165,14 +175,22 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                int callbackThreads, int callbackQueueCapacity, int accessThreads, int accessQueueCapacity,
                int maxPendingAccess) {
         this(catalog, players, placementTimeout, eventTimeout, callbackThreads, callbackQueueCapacity,
-                Duration.ofSeconds(10), accessThreads, accessQueueCapacity, maxPendingAccess);
+                Duration.ofSeconds(10), accessThreads, accessQueueCapacity, maxPendingAccess, UUID.randomUUID());
     }
 
     private PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout,
                        int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout,
                        int accessThreads, int accessQueueCapacity, int maxPendingAccess) {
+        this(catalog, players, placementTimeout, eventTimeout, callbackThreads, callbackQueueCapacity,
+                shutdownTimeout, accessThreads, accessQueueCapacity, maxPendingAccess, UUID.randomUUID());
+    }
+
+    private PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout, Duration eventTimeout,
+                       int callbackThreads, int callbackQueueCapacity, Duration shutdownTimeout,
+                       int accessThreads, int accessQueueCapacity, int maxPendingAccess, UUID proxyEpoch) {
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.players = Objects.requireNonNull(players, "players");
+        this.proxyEpoch = Objects.requireNonNull(proxyEpoch, "proxyEpoch");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         Objects.requireNonNull(eventTimeout, "eventTimeout");
         this.permissionService = new PermissionService(eventTimeout);
@@ -1240,6 +1258,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
             this.pluginClassLoader = pluginClassLoader;
         }
+
+        @Override public UUID proxyEpoch() { return PluginHost.this.proxyEpoch; }
 
         @Override public Players players() { return pluginPlayers; }
         @Override public Servers servers() { return servers; }

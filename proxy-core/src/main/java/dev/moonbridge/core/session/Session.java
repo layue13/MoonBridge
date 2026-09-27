@@ -19,6 +19,7 @@ import dev.moonbridge.core.auth.VerifiedProfile;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.forwarding.BungeeLegacyForwarding;
+import dev.moonbridge.messaging.session.ForwardedSessionProof;
 import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.Minecraft1710EntityIds;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
@@ -490,10 +491,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         ByteBuf handshakeBody = null;
         ByteBuf loginBody;
         try {
-            handshakeBody = owner.onlineMode()
-                    ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                            (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
-                    : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+            handshakeBody = encodeBackendHandshake(
+                    selected.handle().id().value(), selected.owner().instanceGeneration());
             loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         } catch (RuntimeException failure) {
             ReferenceCountUtil.release(handshakeBody);
@@ -1114,10 +1113,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void writeBackendLogin(Channel channel) {
-        ByteBuf handshakeBody = owner.onlineMode()
-                ? BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                        (InetSocketAddress) frontend.remoteAddress(), verifiedProfile)
-                : handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+        ByteBuf handshakeBody = encodeBackendHandshake(
+                transfer.target.handle().id().value(), transfer.target.owner().instanceGeneration());
         ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         channel.write(handshakeBody);
         channel.writeAndFlush(loginBody).addListener(write -> {
@@ -1132,6 +1129,41 @@ final class Session extends ChannelInboundHandlerAdapter {
                 failTransfer(transfer, "could not write replacement backend login");
             }
         });
+    }
+
+    private ByteBuf encodeForwardedHandshake(String backendName, long backendEpoch) {
+        byte[] secret = owner.sessionBindingSecret(backendName);
+        try {
+            return encodeForwardedHandshake(backendName, backendEpoch, verifiedProfile, secret);
+        } finally {
+            if (secret != null) java.util.Arrays.fill(secret, (byte) 0);
+        }
+    }
+
+    private ByteBuf encodeBackendHandshake(String backendName, long backendEpoch) {
+        if (owner.onlineMode()) return encodeForwardedHandshake(backendName, backendEpoch);
+        byte[] secret = owner.sessionBindingSecret(backendName);
+        if (secret == null) return handshake.encode(frontend.alloc(), ProtocolProfile.minecraft1710());
+        try {
+            // OFFLINE identity is derived by this proxy and is not a Mojang-authenticated profile.
+            // Only forward it when this backend has explicitly configured session binding.
+            VerifiedProfile offlineProfile = new VerifiedProfile(identity.playerId(), view.username(), List.of());
+            return encodeForwardedHandshake(backendName, backendEpoch, offlineProfile, secret);
+        } finally {
+            java.util.Arrays.fill(secret, (byte) 0);
+        }
+    }
+
+    private ByteBuf encodeForwardedHandshake(String backendName, long backendEpoch,
+                                             VerifiedProfile profile, byte[] secret) {
+        String proof = null;
+        if (secret != null && backendEpoch > 0) {
+            long expiresAt = Math.addExact(System.currentTimeMillis(), ForwardedSessionProof.MAX_LIFETIME_MILLIS);
+            proof = ForwardedSessionProof.create(owner.proxyEpoch(), identity.playerId(), identity.connectionId(),
+                    backendName, backendEpoch, UUID.randomUUID(), expiresAt, secret);
+        }
+        return BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
+                (InetSocketAddress) frontend.remoteAddress(), profile, proof);
     }
 
     private static InetSocketAddress backendSocketAddress(URI address) {

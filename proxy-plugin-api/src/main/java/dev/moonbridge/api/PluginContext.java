@@ -3,13 +3,17 @@ package dev.moonbridge.api;
 import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.permission.Permissions;
 import dev.moonbridge.messaging.Messaging;
-import java.util.Map;
-import java.nio.file.Path;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 
 /** Services available to a loaded proxy plugin. Retained player and server handles expire after disable. */
 public interface PluginContext {
+    /** Random identifier for this proxy process incarnation, shared with forwarded backend sessions. */
+    UUID proxyEpoch();
+
     Players players();
 
     Servers servers();

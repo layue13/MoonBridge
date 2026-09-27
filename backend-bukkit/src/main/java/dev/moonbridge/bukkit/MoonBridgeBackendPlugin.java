@@ -19,6 +19,7 @@ public final class MoonBridgeBackendPlugin extends JavaPlugin implements Listene
     private volatile boolean stopping;
     private BackendChannelClient client;
     private OwnedMessagingService service;
+    private OwnedBukkitSessionService sessions;
 
     @Override public void onEnable() {
         stopping = false;
@@ -35,8 +36,13 @@ public final class MoonBridgeBackendPlugin extends JavaPlugin implements Listene
                     required("instanceId"), required("backendName"), required("gameAddress"),
                     UUID.randomUUID().toString(), required("keyId"), secret);
             service = new OwnedMessagingService(client::messaging, this::mainThreadExecutor);
+            sessions = new OwnedBukkitSessionService(required("backendName"), secret,
+                    () -> client.isRegistered() ? client.getEpoch() : 0L,
+                    () -> client.isRegistered() ? client.getProxyEpoch() : new UUID(0L, 0L));
             getServer().getServicesManager().register(BukkitMessagingService.class, service, this, ServicePriority.Normal);
+            getServer().getServicesManager().register(BukkitSessionService.class, sessions, this, ServicePriority.Normal);
             getServer().getPluginManager().registerEvents(this, this);
+            getServer().getPluginManager().registerEvents(sessions, this);
             getLogger().info("Shared MoonBridge messaging service started; registration runs asynchronously");
         } catch (RuntimeException failure) {
             // Do not include configuration values or authentication peer data.
@@ -76,6 +82,7 @@ public final class MoonBridgeBackendPlugin extends JavaPlugin implements Listene
     @Override public void onDisable() {
         stopping = true;
         getServer().getServicesManager().unregisterAll(this);
+        if (sessions != null) { sessions.close(); sessions = null; }
         if (service != null) { service.close(); service = null; }
         if (client != null) { client.close(); client = null; }
     }

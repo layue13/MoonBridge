@@ -18,6 +18,7 @@ import dev.moonbridge.core.auth.MinecraftEncryptionRequest;
 import dev.moonbridge.core.auth.MinecraftEncryptionResponse;
 import dev.moonbridge.core.auth.ProfileProperty;
 import dev.moonbridge.core.auth.VerifiedProfile;
+import dev.moonbridge.messaging.session.ForwardedSessionProof;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendHandle;
@@ -986,6 +987,62 @@ final class ProxySessionListenerTest {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }
         }
+    }
+
+    @Test
+    void offlineInitialLoginForwardsProofOnlyForConfiguredDynamicBackend() throws Exception {
+        String username = "BoundOffline";
+        UUID playerId = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        UUID proxyEpoch = UUID.randomUUID();
+        byte[] secret = "offline-session-binding-secret-0123456789".getBytes(StandardCharsets.UTF_8);
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+            var forwardedHost = new CompletableFuture<String>();
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var handshake = new java.io.ByteArrayInputStream(
+                            readFrame(new DataInputStream(socket.getInputStream())));
+                    assertEquals(0, readVarInt(handshake));
+                    assertEquals(5, readVarInt(handshake));
+                    forwardedHost.complete(readString(handshake, 32767));
+                } catch (Throwable failure) { forwardedHost.completeExceptionally(failure); }
+            }, "fake-offline-bound-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("lobby"),
+                    new BackendOwner("backend-control:lobby", 17),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(
+                    new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setSessionBinding(proxyEpoch, Map.of("lobby", new String(secret, StandardCharsets.UTF_8)));
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username, "localhost\0spoofed-ip\0spoofed-uuid\0[]");
+                    String[] fields = forwardedHost.get(5, TimeUnit.SECONDS).split("\u0000", -1);
+                    assertEquals(4, fields.length);
+                    assertEquals("localhost", fields[0]);
+                    assertEquals("127.0.0.1", fields[1]);
+                    assertEquals(playerId.toString().replace("-", ""), fields[2]);
+                    var properties = new ObjectMapper().readTree(fields[3]);
+                    String proof = null;
+                    for (var property : properties) {
+                        if (ForwardedSessionProof.PROPERTY_NAME.equals(property.path("name").asText()))
+                            proof = property.path("value").asText();
+                    }
+                    assertTrue(proof != null && !proof.isBlank(), "configured offline backend lacked a session proof");
+                    var claims = ForwardedSessionProof.verify(proof, secret, "lobby", proxyEpoch, 17,
+                            playerId, System.currentTimeMillis()).orElseThrow();
+                    assertEquals(playerId, claims.playerId());
+                    assertTrue(claims.connectionId() >= 0, "forwarded proof lacked a concrete proxy connection id");
+                }
+            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        } finally { java.util.Arrays.fill(secret, (byte) 0); }
     }
 
     @Test
