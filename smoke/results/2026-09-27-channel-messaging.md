@@ -58,3 +58,11 @@ OLD_MESSAGING_CLASSES_ABSENT
 ## 未覆盖
 
 未运行真实 Bukkit/Uranium 服务端装载与游戏主线程验收，未进行真实玩家的富文本视觉/点击测试，未验证跨物理机器部署或生产并发容量。此次没有重新运行 Docker Minecraft 登录烟测；其注册协议版本检查已同步为版本 2。消息服务不提供离线保存、自动重放或 exactly-once 保证。
+
+## CI 转服测试修复（同日）
+
+[CI run 10040](https://git.nest.potatolab.uk:8443/layue13/StrataProxy/actions/runs/10040) 中，新消息模块全部通过，唯一失败为 `SessionTransferTest.clientFrameWaitsForWorldTransitionDuringCutover`。Linux 容器（Temurin 25.0.4、Netty 4.2.2.Final）复现栈显示，失败发生在转服后的 `assertLocalCompletion`，世界切换和双向转发断言已经通过。
+
+测试手动向 pipeline 注入 `channelRead` 后漏发 `channelReadComplete`，留下解码器的 fired-read 标志。后续补全请求被 TCP 分段时，长度前缀不足以组成完整帧，但旧标志使解码器跳过下一次手动读取。修复只补齐测试的完整读事件周期，不改生产代码、不延长超时、不弱化断言。
+
+对照结果：Windows 原测试连续 20 次通过；Linux 原测试已完成的 13 次全部失败（终止第 14 次以继续诊断）；Linux 仅补齐 read-complete 后连续 20 次全部通过。临时重复测试标注和诊断日志均不进入源码；正式回归仍由常规 `check` 执行。

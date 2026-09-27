@@ -131,8 +131,12 @@ final class SessionTransferTest {
 
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
                     openingHeld.get(5, TimeUnit.SECONDS);
-                    frontend.eventLoop().submit(() -> frontend.pipeline().fireChannelRead(
-                            Unpooled.wrappedBuffer(new byte[]{2, 0x01, 0x55}))).get(5, TimeUnit.SECONDS);
+                    frontend.eventLoop().submit(() -> {
+                        frontend.pipeline().fireChannelRead(Unpooled.wrappedBuffer(new byte[]{2, 0x01, 0x55}));
+                        // Match a real socket read cycle: otherwise the decoder's stale fired-read flag
+                        // can suppress the next manual read when a later packet arrives in fragments.
+                        frontend.pipeline().fireChannelReadComplete();
+                    }).get(5, TimeUnit.SECONDS);
                     assertThrows(java.util.concurrent.TimeoutException.class,
                             () -> newReceived.get(250, TimeUnit.MILLISECONDS));
 
