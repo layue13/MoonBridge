@@ -3,9 +3,11 @@ plugins {
     id("moonbridge.application-conventions") apply false
 }
 
+val releaseVersion = providers.gradleProperty("releaseVersion").orElse("0.1.0-SNAPSHOT").get()
+
 allprojects {
     group = "uk.potatolab"
-    version = "0.1.0-SNAPSHOT"
+    version = releaseVersion
 }
 
 tasks.register("check") {

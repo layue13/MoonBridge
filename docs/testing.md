@@ -9,13 +9,13 @@
 sh smoke/container-channel.sh
 ```
 
-定向测试覆盖控制通道认证与代次、目录租约、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。当前 Prism 整合包的正版登录、连续转服和配对流量测量已完成，见[当前整合包验收](../benchmarks/results/2026-09-26-prism-pack.md)。下面各节的历史结果保留其当时的验证范围。
+定向测试覆盖控制通道认证与代次、目录租约、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。初次路由最新专项验收包括自动化覆盖和实际 Java 8 Uranium 后端协议探针，见[2026-09-27 路由验收](../smoke/results/2026-09-27-initial-routing.md)；它不是完整模组包视觉验收。2026-09-26 Prism 记录保留为其提交和环境下的历史真实客户端/配对测量，见[历史 Prism 记录](../benchmarks/results/2026-09-26-prism-pack.md)。下面其他历史结果也只支持其记录注明的范围。
 
 `smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
 
-PR 的 `.gitea/workflows/verify.yml` 独立运行 `gradlew check`，不使用 Maven 发布凭据。`.gitea/workflows/ci.yml` 保留默认分支的构建发布入口；发布工作流所需的跨仓库可复用工作流权限和 Maven 凭据由 Gitea 仓库配置提供，不能用本地 `check` 的结果代替远端发布验收。
+`.gitea/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew check :proxy-core:distZip`，再上传 CI 工件并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、六个坐标和发行 ZIP 见[发布与依赖版本](publishing.md)。
 
-如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](../smoke/results/2026-09-25-local-uranium.md)。这项测试使用协议探针；后续真实客户端与当前整合包转服结果见上述验收记录。
+如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](../smoke/results/2026-09-25-local-uranium.md)。初次路由的当前 `ProxyMain` 协议探针结果另见[路由验收](../smoke/results/2026-09-27-initial-routing.md)。真实客户端记录见下段和其单独的历史验收档案；它们不应与当前路由分支的完整模组包验收混为一谈。
 
 `smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](../smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
