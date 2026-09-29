@@ -14,6 +14,7 @@ import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.api.TransferGuard;
 import dev.moonbridge.core.auth.MinecraftEncryptionRequest;
 import dev.moonbridge.core.auth.SessionVerifier;
 import dev.moonbridge.core.backend.BackendCatalog;
@@ -89,6 +90,7 @@ public final class ProxySessionListener implements Players {
     private java.util.function.BiFunction<PlayerView, String, List<String>> playerCommandNames;
     private java.util.function.BiPredicate<PlayerView, String> commandVisibility = (player, suggestion) -> true;
     private PermissionService permissions;
+    private volatile TransferGuard transferGuard;
     private java.util.function.BiFunction<PlayerView, String, Optional<CompletionStage<List<String>>>> completions;
 
     private EventDispatcher events;
@@ -182,6 +184,16 @@ public final class ProxySessionListener implements Players {
         }
         this.placement = Objects.requireNonNull(placement, "placement");
     }
+
+    /** Installs the single plugin-registered state guard before accepting players. */
+    public synchronized void setTransferGuard(TransferGuard transferGuard) {
+        if (started || closed || this.transferGuard != null) {
+            throw new IllegalStateException("Transfer guard must be configured once before listener start");
+        }
+        this.transferGuard = transferGuard;
+    }
+
+    TransferGuard transferGuard() { return transferGuard; }
 
     /** Configures the host boot epoch and per-backend forwarding keys before accepting clients. */
     public synchronized void setSessionBinding(UUID proxyEpoch, Map<String, String> secretsByBackend) {

@@ -69,6 +69,17 @@ class PluginHostTest {
             new PlayerIdentity(UUID.randomUUID(), 1), "TestPlayer", Optional.empty());
 
     @Test
+    void configuredRequiredTransferGuardMustRegisterBeforeEnable() {
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.requireTransferGuard("example.RequiredTransferGuard", Duration.ofSeconds(1));
+            host.load(List.of(new Plugin() {
+                @Override public void onLoad(PluginContext context) { }
+            }));
+            assertThrows(IllegalStateException.class, host::enable);
+        }
+    }
+
+    @Test
     void accessChecksRunInLoadOrderOffCallerAndStopAtFirstDenial() throws Exception {
         var calls = new java.util.concurrent.CopyOnWriteArrayList<String>();
         var worker = new java.util.concurrent.atomic.AtomicReference<Thread>();
