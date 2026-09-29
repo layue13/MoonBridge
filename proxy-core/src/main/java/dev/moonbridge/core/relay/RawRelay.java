@@ -87,6 +87,16 @@ public final class RawRelay {
             return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.pause(), fromBackend.pause()));
         }
 
+        /** Stops client-to-backend reads and waits for writes already accepted in that direction. */
+        public CompletionStage<Void> pauseClientInput() {
+            return ready.thenCompose(ignored -> fromClient.pause());
+        }
+
+        /** Resumes client-to-backend reads after a safe profile-transfer rollback. */
+        public CompletionStage<Void> resumeClientInput() {
+            return ready.thenCompose(ignored -> fromClient.resume());
+        }
+
         /** Resumes the same pair after a replacement attempt fails. */
         public CompletionStage<Void> resume() {
             return ready.thenCompose(ignored -> CompletableFuture.allOf(fromClient.resume(), fromBackend.resume()));

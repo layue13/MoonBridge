@@ -3,6 +3,12 @@ package dev.moonbridge.core.session;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.api.profile.PreparedProfile;
+import dev.moonbridge.api.profile.ProfileHandoffCoordinator;
+import dev.moonbridge.api.profile.ProfileHandoffRequest;
+import dev.moonbridge.api.profile.ProfileSession;
+import dev.moonbridge.api.profile.ProfileState;
+import dev.moonbridge.api.profile.SourceInputBarrier;
 import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
@@ -157,6 +163,106 @@ final class SessionTransferTest {
                     assertLocalCompletion(client, input, "new");
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
+        }
+    }
+
+    @Test
+    void profileTransferWaitsForInputBarrierAndSafelyAbortsBeforeSourceResumes() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
+            var sourceFrame = new CompletableFuture<byte[]>();
+            var sourceAccepted = new CompletableFuture<Void>();
+            backendThread(oldServer, () -> {
+                try (Socket socket = oldServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    acceptLogin(input, new DataOutputStream(socket.getOutputStream()), 0);
+                    sourceAccepted.complete(null);
+                    sourceFrame.complete(readFrame(input));
+                    while (input.read() != -1) { }
+                } catch (Throwable failure) { sourceFrame.completeExceptionally(failure); }
+            });
+            var candidateConnected = new CompletableFuture<Void>();
+            backendThread(newServer, () -> {
+                try (Socket socket = newServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    assertEquals(0, packetId(readFrame(input)));
+                    assertEquals(0, packetId(readFrame(input)));
+                    candidateConnected.complete(null);
+                    // Closing before Login Success forces the transfer candidate through rollback.
+                } catch (Throwable failure) { candidateConnected.completeExceptionally(failure); }
+            });
+            register(catalog, "old", oldServer);
+            register(catalog, "new", newServer);
+            var listener = listener(catalog);
+            var preparation = new CompletableFuture<PreparedProfile>();
+            var request = new CompletableFuture<ProfileHandoffRequest>();
+            var aborts = new java.util.concurrent.atomic.AtomicInteger();
+            var barrierWasHeld = new CompletableFuture<Boolean>();
+            var barrierReady = new CompletableFuture<Void>();
+            listener.setProfileHandoffs(true, new ProfileHandoffCoordinator() {
+                @Override public CompletableFuture<PreparedProfile> prepareAdmission(ProfileHandoffRequest value) {
+                    return CompletableFuture.completedFuture(noopPreparedProfile());
+                }
+
+                @Override public CompletionStage<PreparedProfile> prepareTransfer(
+                        ProfileHandoffRequest value, SourceInputBarrier barrier) {
+                    request.complete(value);
+                    barrierWasHeld.complete(barrier.isHeld());
+                    barrier.proxyIngressStopped().whenComplete((ignored, failure) -> {
+                        if (failure != null) barrierReady.completeExceptionally(failure);
+                        else barrierReady.complete(null);
+                    });
+                    return preparation;
+                }
+
+                @Override public CompletionStage<ProfileState> queryActive(ProfileSession session) {
+                    return CompletableFuture.completedFuture(ProfileState.ACTIVE);
+                }
+            });
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    var clientInput = new DataInputStream(client.getInputStream());
+                    var clientOutput = new DataOutputStream(client.getOutputStream());
+                    sendLogin(clientOutput);
+                    sourceAccepted.get(5, TimeUnit.SECONDS);
+                    assertEquals(2, packetId(readFrame(clientInput)));
+                    assertEquals(1, packetId(readFrame(clientInput)));
+                    assertEquals(8, packetId(readFrame(clientInput)));
+                    var player = awaitPlayer(listener);
+                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
+                    ProfileHandoffRequest transferRequest = request.get(5, TimeUnit.SECONDS);
+                    assertEquals(player.identity(), transferRequest.player());
+                    assertTrue(barrierWasHeld.get(5, TimeUnit.SECONDS));
+                    barrierReady.get(5, TimeUnit.SECONDS);
+                    assertTrue(transferRequest.source() != null);
+                    assertTrue(transferRequest.target() != null);
+                    assertThrows(TimeoutException.class, () -> candidateConnected.get(250, TimeUnit.MILLISECONDS),
+                            "target dial must wait for source profile preparation");
+                    writeFrame(clientOutput, new byte[]{0x01, 0x44});
+                    assertThrows(TimeoutException.class, () -> sourceFrame.get(250, TimeUnit.MILLISECONDS),
+                            "client gameplay input must stay behind the proxy barrier");
+                    preparation.complete(new PreparedProfile() {
+                        @Override public CompletableFuture<Void> routed() {
+                            return CompletableFuture.failedFuture(new AssertionError("candidate never routed"));
+                        }
+                        @Override public CompletableFuture<Void> abort() {
+                            aborts.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    });
+                    candidateConnected.get(5, TimeUnit.SECONDS);
+                    assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
+                    assertEquals(1, aborts.get());
+                    assertArrayEquals(new byte[]{0x01, 0x44}, sourceFrame.get(5, TimeUnit.SECONDS));
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -1511,6 +1617,13 @@ final class SessionTransferTest {
         assertEquals(1, listener.online().size());
         Thread.sleep(20); // Let PLAY frames observed by the proxy relay complete on its event loop.
         return listener.online().get(0);
+    }
+
+    private static PreparedProfile noopPreparedProfile() {
+        return new PreparedProfile() {
+            @Override public CompletableFuture<Void> routed() { return CompletableFuture.completedFuture(null); }
+            @Override public CompletableFuture<Void> abort() { return CompletableFuture.completedFuture(null); }
+        };
     }
 
     private static BackendHandle register(InMemoryBackendCatalog catalog,

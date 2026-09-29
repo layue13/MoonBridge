@@ -1,6 +1,12 @@
 package dev.moonbridge.core.session;
 
 import dev.moonbridge.api.PlacementDecision;
+import dev.moonbridge.api.profile.PreparedProfile;
+import dev.moonbridge.api.profile.ProfileHandoffCoordinator;
+import dev.moonbridge.api.profile.ProfileHandoffRequest;
+import dev.moonbridge.api.profile.ProfileSession;
+import dev.moonbridge.api.profile.ProfileState;
+import dev.moonbridge.api.profile.SourceInputBarrier;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
@@ -25,10 +31,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class InitialRoutingTest {
     private static final String USERNAME = "RouteProbe";
@@ -84,6 +92,91 @@ final class InitialRoutingTest {
                     assertLoginDisconnect(client, "No entry servers are configured.");
                     assertNoConnection(registered);
                 }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void profileAdmissionDenialPreventsAnyBackendDial() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (var backend = serverSocket()) {
+            register(catalog, "lobby", backend.getLocalPort());
+            var listener = listener(catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+            listener.setInitialServers(List.of("lobby"));
+            listener.setProfileHandoffs(true, new ProfileHandoffCoordinator() {
+                @Override public CompletableFuture<PreparedProfile> prepareAdmission(ProfileHandoffRequest request) {
+                    return CompletableFuture.failedFuture(new IllegalStateException("profile store unavailable"));
+                }
+                @Override public CompletableFuture<PreparedProfile> prepareTransfer(
+                        ProfileHandoffRequest request, SourceInputBarrier barrier) {
+                    return CompletableFuture.failedFuture(new AssertionError("not a transfer"));
+                }
+                @Override public CompletableFuture<ProfileState> queryActive(ProfileSession session) {
+                    return CompletableFuture.completedFuture(ProfileState.UNKNOWN);
+                }
+            });
+            try {
+                int proxyPort = start(listener);
+                try (Socket client = client(proxyPort)) {
+                    sendLogin(client);
+                    assertLoginDisconnect(client, "Player profile is not ready.");
+                    assertNoConnection(backend);
+                }
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void staleAdmissionCompletionIsAbortedWithoutDialingItsBackend() throws Exception {
+        var catalog = new InMemoryBackendCatalog();
+        try (var backend = serverSocket()) {
+            register(catalog, "lobby", backend.getLocalPort());
+            var ready = new CompletableFuture<PreparedProfile>();
+            var requested = new CompletableFuture<ProfileHandoffRequest>();
+            var aborted = new AtomicInteger();
+            var listener = listener(catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+            listener.setInitialServers(List.of("lobby"));
+            listener.setProfileHandoffs(true, new ProfileHandoffCoordinator() {
+                @Override public CompletableFuture<PreparedProfile> prepareAdmission(ProfileHandoffRequest request) {
+                    requested.complete(request);
+                    return ready;
+                }
+                @Override public CompletableFuture<PreparedProfile> prepareTransfer(
+                        ProfileHandoffRequest request, SourceInputBarrier barrier) {
+                    return CompletableFuture.failedFuture(new AssertionError("not a transfer"));
+                }
+                @Override public CompletableFuture<ProfileState> queryActive(ProfileSession session) {
+                    return CompletableFuture.completedFuture(ProfileState.UNKNOWN);
+                }
+            });
+            try {
+                int proxyPort = start(listener);
+                Socket client = client(proxyPort);
+                sendLogin(client);
+                var request = requested.get(5, TimeUnit.SECONDS);
+                assertEquals(PLAYER_ID, request.player().playerId());
+                assertTrue(!request.operationId().equals(request.attemptId()));
+                client.close();
+                awaitSessionsReleased(listener);
+                ready.complete(new PreparedProfile() {
+                    @Override public CompletableFuture<Void> routed() {
+                        return CompletableFuture.failedFuture(new AssertionError("stale route"));
+                    }
+                    @Override public CompletableFuture<Void> abort() {
+                        aborted.incrementAndGet();
+                        return CompletableFuture.completedFuture(null);
+                    }
+                });
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (aborted.get() == 0 && System.nanoTime() < deadline) Thread.sleep(5);
+                assertEquals(1, aborted.get());
+                assertNoConnection(backend);
             } finally {
                 listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
             }

@@ -50,6 +50,93 @@ class OwnedBukkitSessionServiceTest {
         service.close();
     }
 
+    @Test void preflightConsumesProofOnceAndJoinBindsTheSameVerifiedSession() {
+        UUID playerId = UUID.randomUUID();
+        String proof = proof(playerId, UUID.randomUUID(), System.currentTimeMillis() + 20_000L);
+        OwnedBukkitSessionService service = service();
+
+        BackendPlayerSession verified = service.preflight(proof, playerId).orElseThrow(AssertionError::new);
+
+        assertEquals(playerId, verified.getPlayerId());
+        assertEquals(PROXY_EPOCH, verified.getProxyEpoch());
+        assertEquals(BACKEND_EPOCH, verified.getBackendEpoch());
+        assertEquals(23L, verified.getConnectionId());
+        assertFalse(service.preflight(proof, playerId).isPresent(), "a preflight proof is one-use");
+        TestProfile profile = new TestProfile(playerId, "preflight");
+        profile.getProperties().put(ForwardedSessionProof.PROPERTY_NAME,
+                new TestProperty(ForwardedSessionProof.PROPERTY_NAME, proof, null));
+        TestPlayer fixture = player(playerId, profile);
+
+        service.onPlayerJoin(new PlayerJoinEvent(fixture.player, "joined"));
+
+        assertSame(verified, service.find(fixture.player).orElseThrow(AssertionError::new));
+        assertTrue(profile.getProperties().get(ForwardedSessionProof.PROPERTY_NAME).isEmpty());
+        assertFalse(fixture.kicked.get());
+        service.close();
+    }
+
+    @Test void redactedPreflightBindsOnlyTheExactPlayerBeforeJoin() {
+        UUID playerId = UUID.randomUUID();
+        String proof = proof(playerId, UUID.randomUUID(), System.currentTimeMillis() + 20_000L);
+        OwnedBukkitSessionService service = service();
+        BackendPlayerSession verified = service.preflight(proof, playerId).orElseThrow(AssertionError::new);
+        TestPlayer admitted = player(playerId, new TestProfile(playerId, "admitted"));
+        TestPlayer other = player(playerId, new TestProfile(playerId, "other instance"));
+
+        assertTrue(service.bindPreverified(admitted.player, verified));
+        assertFalse(service.bindPreverified(other.player, verified), "preflight is one-use");
+        assertSame(verified, service.find(admitted.player).orElseThrow(AssertionError::new));
+        assertFalse(service.find(other.player).isPresent());
+        service.onPlayerJoin(new PlayerJoinEvent(admitted.player, "joined"));
+        assertSame(verified, service.find(admitted.player).orElseThrow(AssertionError::new));
+        service.onPlayerJoin(new PlayerJoinEvent(other.player, "stale same-UUID join"));
+        assertSame(verified, service.find(admitted.player).orElseThrow(AssertionError::new));
+        assertFalse(service.find(other.player).isPresent());
+        service.unbindPreverified(other.player, verified);
+        assertSame(verified, service.find(admitted.player).orElseThrow(AssertionError::new));
+        service.close();
+    }
+
+    @Test void preflightBindingRejectsWrongPlayerAndStaleProxyEpoch() {
+        UUID playerId = UUID.randomUUID();
+        java.util.concurrent.atomic.AtomicReference<UUID> epoch =
+                new java.util.concurrent.atomic.AtomicReference<>(PROXY_EPOCH);
+        OwnedBukkitSessionService service = new OwnedBukkitSessionService(
+                BACKEND, SECRET, () -> BACKEND_EPOCH, epoch::get);
+        BackendPlayerSession verified = service.preflight(
+                proof(playerId, UUID.randomUUID(), System.currentTimeMillis() + 20_000L), playerId)
+                .orElseThrow(AssertionError::new);
+        assertFalse(service.bindPreverified(player(UUID.randomUUID(), new TestProfile(UUID.randomUUID(), "wrong")).player,
+                verified));
+        epoch.set(UUID.randomUUID());
+        TestPlayer admitted = player(playerId, new TestProfile(playerId, "stale"));
+        assertFalse(service.bindPreverified(admitted.player, verified));
+        assertFalse(service.find(admitted.player).isPresent());
+        service.close();
+    }
+
+    @Test void preflightCacheIsRejectedAfterTheProxyEpochChanges() {
+        UUID playerId = UUID.randomUUID();
+        String proof = proof(playerId, UUID.randomUUID(), System.currentTimeMillis() + 20_000L);
+        java.util.concurrent.atomic.AtomicReference<UUID> epoch =
+                new java.util.concurrent.atomic.AtomicReference<>(PROXY_EPOCH);
+        OwnedBukkitSessionService service = new OwnedBukkitSessionService(
+                BACKEND, SECRET, () -> BACKEND_EPOCH, epoch::get);
+        assertTrue(service.preflight(proof, playerId).isPresent());
+        epoch.set(UUID.randomUUID());
+        TestProfile profile = new TestProfile(playerId, "stale-preflight");
+        profile.getProperties().put(ForwardedSessionProof.PROPERTY_NAME,
+                new TestProperty(ForwardedSessionProof.PROPERTY_NAME, proof, null));
+        TestPlayer fixture = player(playerId, profile);
+
+        service.onPlayerJoin(new PlayerJoinEvent(fixture.player, "joined"));
+
+        assertFalse(service.find(fixture.player).isPresent());
+        assertTrue(profile.getProperties().get(ForwardedSessionProof.PROPERTY_NAME).isEmpty());
+        assertFalse(fixture.kicked.get());
+        service.close();
+    }
+
     @Test void invalidAndDuplicateProofsAreRemovedButNeverBindASession() {
         UUID playerId = UUID.randomUUID();
         TestProfile invalidProfile = new TestProfile(playerId, "invalid");

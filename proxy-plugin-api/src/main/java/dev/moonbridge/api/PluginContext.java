@@ -2,6 +2,7 @@ package dev.moonbridge.api;
 
 import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.permission.Permissions;
+import dev.moonbridge.api.profile.ProfileHandoffs;
 import dev.moonbridge.messaging.Messaging;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -29,6 +30,9 @@ public interface PluginContext {
 
     /** Player permission queries backed by the proxy's configured provider. */
     Permissions permissions();
+
+    /** Registers the proxy's fail-closed player-profile admission/transfer coordinator. */
+    ProfileHandoffs profileHandoffs();
 
     /** Dedicated persistent data directory owned by this plugin. */
     Path dataDirectory();

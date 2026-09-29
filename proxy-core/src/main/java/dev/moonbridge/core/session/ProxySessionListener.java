@@ -14,6 +14,7 @@ import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.api.profile.ProfileHandoffCoordinator;
 import dev.moonbridge.core.auth.MinecraftEncryptionRequest;
 import dev.moonbridge.core.auth.SessionVerifier;
 import dev.moonbridge.core.backend.BackendCatalog;
@@ -82,6 +83,8 @@ public final class ProxySessionListener implements Players {
     private final AtomicInteger onlineCount = new AtomicInteger();
     private final AtomicInteger connectionCount = new AtomicInteger();
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
+    private volatile boolean profileHandoffRequired;
+    private volatile ProfileHandoffCoordinator profileHandoffCoordinator;
     private List<String> initialServers = List.of();
     private boolean initialServersConfigured;
     private volatile CommandDispatcher commandDispatcher;
@@ -218,6 +221,15 @@ public final class ProxySessionListener implements Players {
         Objects.requireNonNull(servers, "servers");
         initialServers = servers.isEmpty() ? List.of() : new PlacementDecision.Select(servers).backendNames();
         initialServersConfigured = true;
+    }
+
+    /** Enables fail-closed profile routing. A required but unavailable coordinator denies all routes. */
+    public synchronized void setProfileHandoffs(boolean required, ProfileHandoffCoordinator coordinator) {
+        if (started || closed) throw new IllegalStateException("Profile handoffs must be configured before listener start");
+        if (required && coordinator == null)
+            throw new IllegalArgumentException("required profile handoff needs a coordinator");
+        this.profileHandoffRequired = required;
+        this.profileHandoffCoordinator = coordinator;
     }
 
     /** Configures optional plugin command dispatch before the listener starts. */
@@ -447,6 +459,8 @@ public final class ProxySessionListener implements Players {
     List<String> initialServers() { return initialServers; }
     Duration transferCutoverTimeout() { return transferCutoverTimeout; }
     Duration initialPlayTimeout() { return initialPlayTimeout; }
+    boolean profileHandoffRequired() { return profileHandoffRequired; }
+    ProfileHandoffCoordinator profileHandoffCoordinator() { return profileHandoffCoordinator; }
     KeyPair encryptionKeys() { return encryptionKeys; }
     MinecraftEncryptionRequest newEncryptionRequest() {
         return MinecraftEncryptionRequest.create("", encryptionKeys.getPublic(), random);

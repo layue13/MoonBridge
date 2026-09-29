@@ -42,6 +42,10 @@ import dev.moonbridge.api.Servers;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.permission.PermissionProvider;
 import dev.moonbridge.api.permission.PermissionResult;
+import dev.moonbridge.api.profile.ProfileHandoffCoordinator;
+import dev.moonbridge.api.profile.ProfileHandoffs;
+import dev.moonbridge.api.profile.ProfileSession;
+import dev.moonbridge.api.profile.ProfileState;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendId;
@@ -135,6 +139,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
     private final Set<PendingPlacement> pendingPlacements = ConcurrentHashMap.newKeySet();
+    private final AtomicReference<ProfileHandoffCoordinator> profileHandoffCoordinator = new AtomicReference<>();
+    private final AtomicBoolean profileHandoffConfigured = new AtomicBoolean();
     private volatile State state = State.LOADING;
     private volatile BackendChannelTransport backendChannelTransport;
     private ScheduledFuture<?> notificationDropReporter;
@@ -912,6 +918,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return;
         }
         state = State.CLOSED;
+        profileHandoffCoordinator.set(null);
         permissionService.close();
         for (CommandExecution execution : pendingCommandExecutions) {
             execution.finish(new IllegalStateException("Plugin host closed"), null, null);
@@ -956,6 +963,12 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         eventRegistrations.clear();
         backendChannelTransport = null;
     }
+
+    /** True once profile handoff was enabled by a provider; provider loss keeps routing fail-closed. */
+    public boolean profileHandoffRequired() { return profileHandoffConfigured.get(); }
+
+    /** Returns null when no provider is available. A required-but-null provider denies routing. */
+    public ProfileHandoffCoordinator profileHandoffCoordinator() { return profileHandoffCoordinator.get(); }
 
     private void disableWithinDeadline(LoadedPlugin loaded, long deadline) {
         long remaining = deadline - System.nanoTime();
@@ -1222,6 +1235,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private final Commands pluginCommands;
         private final Events pluginEvents;
         private final dev.moonbridge.api.permission.Permissions pluginPermissions;
+        private final ProfileHandoffs pluginProfileHandoffs;
         private final Logger logger;
         private final Map<String, String> settings;
         private final Path dataDirectory;
@@ -1229,6 +1243,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
         private volatile boolean active = true;
         private boolean eventRegistrationOpen;
+        private ProfileHandoffCoordinator registeredProfileHandoff;
 
         private PluginContextImpl(BackendOwner owner, Map<String, String> settings, Path dataDirectory,
                                   HostPluginClassLoader pluginClassLoader) {
@@ -1238,6 +1253,17 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             this.servers = new PluginServers(this);
             this.pluginCommands = new PluginCommands(this);
             this.pluginEvents = new PluginEvents(this);
+            this.pluginProfileHandoffs = new ProfileHandoffs() {
+                @Override public void register(ProfileHandoffCoordinator coordinator) {
+                    registerProfileHandoff(PluginContextImpl.this, coordinator);
+                }
+                @Override public CompletionStage<ProfileState> queryActive(PlayerIdentity identity) {
+                    synchronized (PluginContextImpl.this) {
+                        PluginContextImpl.this.requireActive();
+                    }
+                    return queryActiveProfile(identity);
+                }
+            };
             this.pluginPermissions = new dev.moonbridge.api.permission.Permissions() {
                 @Override public PermissionResult check(PlayerIdentity identity, String node) {
                     synchronized (PluginContextImpl.this) {
@@ -1268,6 +1294,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         @Override public Messaging messaging() { return pluginMessaging; }
         @Override public Logger logger() { return logger; }
         @Override public dev.moonbridge.api.permission.Permissions permissions() { return pluginPermissions; }
+        @Override public ProfileHandoffs profileHandoffs() {
+            synchronized (this) { requireActive(); return pluginProfileHandoffs; }
+        }
         @Override public Path dataDirectory() {
             synchronized (this) { requireActive(); return dataDirectory; }
         }
@@ -1285,6 +1314,10 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private synchronized void deactivateAndRemove() {
             active = false;
             eventRegistrationOpen = false;
+            if (registeredProfileHandoff != null) {
+                profileHandoffCoordinator.compareAndSet(registeredProfileHandoff, null);
+                registeredProfileHandoff = null;
+            }
             pluginMessaging.close();
             revokeEventSubscriptions();
             for (RegisteredCommand command : commands.values()) {
@@ -1321,6 +1354,54 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private void requireActive() {
             if (!active) throw new IllegalStateException("Plugin context is inactive");
         }
+    }
+
+    private void registerProfileHandoff(PluginContextImpl context, ProfileHandoffCoordinator coordinator) {
+        Objects.requireNonNull(coordinator, "coordinator");
+        synchronized (context) {
+            context.requireActive();
+            if (state != State.LOADING && state != State.ENABLED)
+                throw new IllegalStateException("Profile handoff coordinator can only be registered while loading or enabled");
+            if (!profileHandoffConfigured.compareAndSet(false, true))
+                throw new IllegalStateException("A profile handoff coordinator is already configured");
+            context.registeredProfileHandoff = coordinator;
+            profileHandoffCoordinator.set(coordinator);
+        }
+    }
+
+    private CompletionStage<ProfileState> queryActiveProfile(PlayerIdentity identity) {
+        Objects.requireNonNull(identity, "identity");
+        PlayerView current = players.find(identity).orElse(null);
+        if (current == null || current.currentServer().isEmpty())
+            return CompletableFuture.completedFuture(ProfileState.UNKNOWN);
+        ProfileHandoffCoordinator coordinator = profileHandoffCoordinator.get();
+        if (!profileHandoffConfigured.get() || coordinator == null)
+            return CompletableFuture.completedFuture(ProfileState.UNKNOWN);
+        BackendView backend;
+        try {
+            backend = catalog.find(new BackendId(current.currentServer().orElseThrow())).orElse(null);
+        } catch (IllegalArgumentException invalid) {
+            backend = null;
+        }
+        if (backend == null) return CompletableFuture.completedFuture(ProfileState.UNKNOWN);
+        BackendView selectedBackend = backend;
+        ProfileSession session = new ProfileSession(identity, proxyEpoch, new dev.moonbridge.api.profile.ProfileBackend(
+                selectedBackend.handle().id().value(), selectedBackend.handle().generation(), selectedBackend.owner().id(),
+                selectedBackend.owner().instanceGeneration()));
+        CompletionStage<ProfileState> query;
+        try {
+            query = Objects.requireNonNull(coordinator.queryActive(session), "profile state stage");
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        return query.thenApply(state -> {
+            if (state == null || players.find(identity).filter(view -> view.identity().equals(identity)
+                    && view.currentServer().filter(current.currentServer().orElseThrow()::equals).isPresent()).isEmpty())
+                return ProfileState.UNKNOWN;
+            BackendView stillCurrent = catalog.find(selectedBackend.handle().id()).orElse(null);
+            return stillCurrent != null && stillCurrent.handle().equals(selectedBackend.handle())
+                    && stillCurrent.owner().equals(selectedBackend.owner()) ? state : ProfileState.UNKNOWN;
+        });
     }
 
     private final class PluginEvents implements Events {

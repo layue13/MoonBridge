@@ -97,6 +97,7 @@ public final class ProxyMain {
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
+            listener.setProfileHandoffs(plugins.profileHandoffRequired(), plugins.profileHandoffCoordinator());
             if (control != null) control.start();
             listener.setEvents(plugins, eventTimeout);
             listener.setPermissions(plugins.permissionService());

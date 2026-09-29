@@ -26,6 +26,7 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
     private final Supplier<UUID> proxyEpoch;
     private final Map<UUID, BoundSession> sessions = new ConcurrentHashMap<>();
     private final Map<UUID, Long> consumedNonces = new HashMap<>();
+    private final Map<String, PreverifiedSession> preverified = new HashMap<>();
     private volatile boolean closed;
 
     OwnedBukkitSessionService(String backendName, byte[] secret, LongSupplier backendEpoch,
@@ -48,7 +49,6 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         // Remove the private property before any normal-priority join handler
         // or the playerLoggedIn spawn broadcast can observe the profile.
         BoundSession previous = sessions.get(player.getUniqueId());
-        if (previous != null && previous.player == player) sessions.remove(player.getUniqueId(), previous);
         if (closed) return;
         ProofProperty stripped = stripForwardedProof(player);
         if (!stripped.removed) {
@@ -57,14 +57,23 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
             if (stripped.foundProperty) player.kickPlayer("Unable to validate forwarded session");
             return;
         }
+        // Uranium redacts the transport proof before constructing the player.
+        // Admission bound the exact preflight result to this player instance.
+        if (previous != null && previous.player == player && stripped.proof == null) return;
+        if (previous != null && previous.player == player) sessions.remove(player.getUniqueId(), previous);
         long now = System.currentTimeMillis();
-        ForwardedSessionProof.Claims claims = ForwardedSessionProof.verify(
-                stripped.proof, secret, backendName, proxyEpoch.get(), backendEpoch.getAsLong(),
-                player.getUniqueId(), now).orElse(null);
-        if (claims == null || !consumeNonce(claims.nonce(), claims.expiresAtEpochMillis(), now)) return;
-
-        BackendPlayerSession session = new BackendPlayerSession(claims.playerId(), claims.proxyEpoch(),
-                claims.connectionId(), claims.backendName(), claims.backendEpoch(), UUID.randomUUID());
+        UUID expectedProxyEpoch = proxyEpoch.get();
+        long expectedBackendEpoch = backendEpoch.getAsLong();
+        BackendPlayerSession session = takePreverified(stripped.proof, player.getUniqueId(),
+                expectedProxyEpoch, expectedBackendEpoch, now);
+        if (session == null) {
+            ForwardedSessionProof.Claims claims = ForwardedSessionProof.verify(
+                    stripped.proof, secret, backendName, expectedProxyEpoch, expectedBackendEpoch,
+                    player.getUniqueId(), now).orElse(null);
+            if (claims == null || !consumeNonce(claims.nonce(), claims.expiresAtEpochMillis(), now)) return;
+            session = new BackendPlayerSession(claims.playerId(), claims.proxyEpoch(),
+                    claims.connectionId(), claims.backendName(), claims.backendEpoch(), UUID.randomUUID());
+        }
         sessions.put(player.getUniqueId(), new BoundSession(player, session));
     }
 
@@ -83,9 +92,82 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         return Optional.of(current.session);
     }
 
+    @Override
+    public Optional<BackendPlayerSession> preflight(String forwardedProofToken, UUID expectedPlayerId) {
+        if (closed || forwardedProofToken == null || expectedPlayerId == null) return Optional.empty();
+        long now = System.currentTimeMillis();
+        UUID expectedProxyEpoch = proxyEpoch.get();
+        long expectedBackendEpoch = backendEpoch.getAsLong();
+        ForwardedSessionProof.Claims claims = ForwardedSessionProof.verify(forwardedProofToken, secret,
+                backendName, expectedProxyEpoch, expectedBackendEpoch, expectedPlayerId, now).orElse(null);
+        if (claims == null) return Optional.empty();
+        synchronized (this) {
+            if (closed || !expectedProxyEpoch.equals(proxyEpoch.get())
+                    || expectedBackendEpoch != backendEpoch.getAsLong()) return Optional.empty();
+            pruneExpired(now);
+            if (consumedNonces.containsKey(claims.nonce()) || consumedNonces.size() >= MAX_NONCES
+                    || preverified.size() >= MAX_NONCES) return Optional.empty();
+            consumedNonces.put(claims.nonce(), claims.expiresAtEpochMillis());
+            BackendPlayerSession session = new BackendPlayerSession(claims.playerId(), claims.proxyEpoch(),
+                    claims.connectionId(), claims.backendName(), claims.backendEpoch(), UUID.randomUUID());
+            preverified.put(forwardedProofToken, new PreverifiedSession(session, claims.expiresAtEpochMillis()));
+            return Optional.of(session);
+        }
+    }
+
+    @Override
+    public synchronized boolean bindPreverified(Player player, BackendPlayerSession session) {
+        if (closed || player == null || session == null || !player.getUniqueId().equals(session.getPlayerId())) return false;
+        ProofProperty redacted = stripForwardedProof(player);
+        if (!redacted.removed || redacted.proof != null) return false;
+        long now = System.currentTimeMillis();
+        pruneExpired(now);
+        if (!session.getProxyEpoch().equals(proxyEpoch.get()) || session.getBackendEpoch() != backendEpoch.getAsLong()
+                || !session.getBackendName().equals(backendName)) return false;
+        String matched = null;
+        for (Map.Entry<String, PreverifiedSession> entry : preverified.entrySet()) {
+            if (entry.getValue().session == session && entry.getValue().expiresAt > now) {
+                matched = entry.getKey();
+                break;
+            }
+        }
+        if (matched == null) return false;
+        preverified.remove(matched);
+        BoundSession prior = sessions.putIfAbsent(player.getUniqueId(), new BoundSession(player, session));
+        return prior == null;
+    }
+
+    @Override
+    public void unbindPreverified(Player player, BackendPlayerSession session) {
+        if (player == null || session == null) return;
+        BoundSession current = sessions.get(player.getUniqueId());
+        if (current != null && current.player == player && current.session == session)
+            sessions.remove(player.getUniqueId(), current);
+    }
+
+    private synchronized BackendPlayerSession takePreverified(String token, UUID expectedPlayerId,
+                                                               UUID expectedProxyEpoch, long expectedBackendEpoch,
+                                                               long now) {
+        pruneExpired(now);
+        PreverifiedSession result = preverified.remove(token);
+        if (result == null || result.expiresAt <= now) return null;
+        BackendPlayerSession session = result.session;
+        if (!expectedProxyEpoch.equals(proxyEpoch.get()) || expectedBackendEpoch != backendEpoch.getAsLong()
+                || !session.getPlayerId().equals(expectedPlayerId)
+                || !session.getProxyEpoch().equals(expectedProxyEpoch)
+                || session.getBackendEpoch() != expectedBackendEpoch
+                || !session.getBackendName().equals(backendName)) return null;
+        return session;
+    }
+
+    private void pruneExpired(long now) {
+        consumedNonces.entrySet().removeIf(entry -> entry.getValue() <= now);
+        preverified.entrySet().removeIf(entry -> entry.getValue().expiresAt <= now);
+    }
+
     private synchronized boolean consumeNonce(UUID nonce, long expiresAt, long now) {
         if (closed) return false;
-        consumedNonces.entrySet().removeIf(entry -> entry.getValue() <= now);
+        pruneExpired(now);
         if (consumedNonces.containsKey(nonce) || consumedNonces.size() >= MAX_NONCES) return false;
         consumedNonces.put(nonce, expiresAt);
         return true;
@@ -162,7 +244,7 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
     public void close() {
         closed = true;
         sessions.clear();
-        synchronized (this) { consumedNonces.clear(); }
+        synchronized (this) { consumedNonces.clear(); preverified.clear(); }
         java.util.Arrays.fill(secret, (byte) 0);
     }
 
@@ -173,6 +255,16 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         private BoundSession(Player player, BackendPlayerSession session) {
             this.player = player;
             this.session = session;
+        }
+    }
+
+    private static final class PreverifiedSession {
+        private final BackendPlayerSession session;
+        private final long expiresAt;
+
+        private PreverifiedSession(BackendPlayerSession session, long expiresAt) {
+            this.session = session;
+            this.expiresAt = expiresAt;
         }
     }
 }

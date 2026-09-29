@@ -9,6 +9,10 @@ import dev.moonbridge.api.MessageResult;
 import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.api.profile.PreparedProfile;
+import dev.moonbridge.api.profile.ProfileBackend;
+import dev.moonbridge.api.profile.ProfileHandoffRequest;
+import dev.moonbridge.api.profile.SourceInputBarrier;
 import dev.moonbridge.core.auth.AuthenticatedEncryption;
 import dev.moonbridge.core.auth.MinecraftCipherDecoder;
 import dev.moonbridge.core.auth.MinecraftCipherEncoder;
@@ -50,6 +54,7 @@ import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -123,6 +128,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private TransferFrameHandler.State frameState;
     private PendingTransfer pendingTransfer;
     private TransferAttempt transfer;
+    private final UUID admissionId = UUID.randomUUID();
+    private UUID admissionAttemptId;
+    private PreparedProfile initialPreparedProfile;
 
     Session(ProxySessionListener owner, Channel frontend) {
         this.owner = owner;
@@ -414,10 +422,68 @@ final class Session extends ChannelInboundHandlerAdapter {
             URI address = target.address();
             if (!"tcp".equalsIgnoreCase(address.getScheme()) || address.getHost() == null
                     || address.getPort() < 1 || address.getPort() > 65535) continue;
-            connectInitialBackend(target, remaining);
+            prepareInitialTarget(target, remaining);
             return;
         }
         disconnectLogin("No entry server could be reached.");
+    }
+
+    private void prepareInitialTarget(BackendView target, long remainingNanos) {
+        if (!owner.profileHandoffRequired()) {
+            connectInitialBackend(target, remainingNanos);
+            return;
+        }
+        var coordinator = owner.profileHandoffCoordinator();
+        if (coordinator == null) {
+            disconnectLogin("Player profile service is unavailable.");
+            return;
+        }
+        UUID attemptId = UUID.randomUUID();
+        admissionAttemptId = attemptId;
+        ProfileHandoffRequest request = new ProfileHandoffRequest(identity, view.username(), owner.proxyEpoch(),
+                admissionId, attemptId, null, profileBackend(target));
+        CompletionStage<PreparedProfile> preparation;
+        try {
+            preparation = Objects.requireNonNull(coordinator.prepareAdmission(request), "admission stage");
+        } catch (RuntimeException failure) {
+            disconnectLogin("Player profile is not ready.");
+            return;
+        }
+        preparation.whenComplete((prepared, failure) -> {
+            try {
+                frontend.eventLoop().execute(() -> {
+                    if (!attemptId.equals(admissionAttemptId) || closed.get() || disconnecting) {
+                        abortQuietly(prepared);
+                        return;
+                    }
+                    if (failure != null || prepared == null) {
+                        LOGGER.debug("Player profile admission denied for {}", view.username(), failure);
+                        disconnectLogin("Player profile is not ready.");
+                        return;
+                    }
+                    BackendView current = owner.catalog().find(target.handle().id()).orElse(null);
+                    if (current == null || !sameBackend(current, target)) {
+                        prepared.abort().whenComplete((ignored, abortFailure) -> frontend.eventLoop().execute(() -> {
+                            if (abortFailure != null) closePair();
+                            else disconnectLogin("Selected server changed during profile admission.");
+                        }));
+                        return;
+                    }
+                    initialPreparedProfile = prepared;
+                    long remaining = initialRoutingDeadlineNanos - System.nanoTime();
+                    if (remaining <= 0) {
+                        initialPreparedProfile = null;
+                        prepared.abort().whenComplete((ignored, abortFailure) -> frontend.eventLoop().execute(() -> {
+                            if (abortFailure != null) closePair();
+                            else disconnectLogin("Initial server routing timed out.");
+                        }));
+                    } else connectInitialBackend(target, Math.min(remainingNanos, remaining));
+                });
+            } catch (RejectedExecutionException shutdown) {
+                abortQuietly(prepared);
+                closePair();
+            }
+        });
     }
 
     private void connectInitialBackend(BackendView target, long remainingNanos) {
@@ -440,11 +506,37 @@ final class Session extends ChannelInboundHandlerAdapter {
             connect = bootstrap.connect(backendSocketAddress(target.address()));
         } catch (RuntimeException failure) {
             LOGGER.debug("Initial backend dial could not start for {} to {}", view.username(), target.address(), failure);
-            connectNextInitialBackend();
+            retryInitialAfterPreparedAbort();
             return;
         }
         backend = connect.channel();
         connect.addListener(ignored -> finishInitialConnection(connect, target));
+    }
+
+    private void retryInitialAfterPreparedAbort() {
+        PreparedProfile prepared = initialPreparedProfile;
+        initialPreparedProfile = null;
+        if (prepared == null) {
+            connectNextInitialBackend();
+            return;
+        }
+        try {
+            prepared.abort().whenComplete((ignored, failure) -> {
+                try {
+                    frontend.eventLoop().execute(() -> {
+                        if (closed.get() || disconnecting) return;
+                        if (failure != null) {
+                            LOGGER.debug("Could not abort initial profile reservation for {}", view.username(), failure);
+                            disconnectLogin("Player profile admission could not be recovered.");
+                        } else connectNextInitialBackend();
+                    });
+                } catch (RejectedExecutionException shutdown) {
+                    closePair();
+                }
+            });
+        } catch (RuntimeException failure) {
+            closePair();
+        }
     }
 
     private void finishInitialConnection(ChannelFuture connect, BackendView target) {
@@ -465,7 +557,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     connect.cause());
             backend = null;
             connect.channel().close();
-            connectNextInitialBackend();
+            retryInitialAfterPreparedAbort();
             return;
         }
         BackendView current = owner.catalog().find(target.handle().id()).orElse(null);
@@ -473,7 +565,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 || !current.address().equals(target.address())) {
             backend = null;
             connect.channel().close();
-            connectNextInitialBackend();
+            retryInitialAfterPreparedAbort();
             return;
         }
         if (initialRoutingDeadlineNanos - System.nanoTime() <= 0) {
@@ -583,6 +675,44 @@ final class Session extends ChannelInboundHandlerAdapter {
             closePair();
             return;
         }
+        ByteBuf acceptedLoginSuccess = packet.copy();
+        backend.config().setAutoRead(false);
+        PreparedProfile prepared = initialPreparedProfile;
+        if (prepared != null) {
+            // A routed callback may complete asynchronously. Mark the login/play boundary
+            // before yielding so already-decoded backend PLAY frames are transition-buffered.
+            relayStarting = true;
+            try {
+                prepared.routed().whenComplete((ignored, failure) -> {
+                    try {
+                        frontend.eventLoop().execute(() -> {
+                            initialPreparedProfile = null;
+                            if (failure != null || closed.get() || disconnecting) {
+                                acceptedLoginSuccess.release();
+                                if (failure != null) LOGGER.debug("Initial profile route confirmation failed for {}",
+                                        view.username(), failure);
+                                closePair();
+                            } else completeInitialLogin(acceptedLoginSuccess);
+                        });
+                    } catch (RejectedExecutionException shutdown) {
+                        acceptedLoginSuccess.release();
+                        closePair();
+                    }
+                });
+            } catch (RuntimeException failure) {
+                acceptedLoginSuccess.release();
+                closePair();
+            }
+            return;
+        }
+        completeInitialLogin(acceptedLoginSuccess);
+    }
+
+    private void completeInitialLogin(ByteBuf loginSuccessPacket) {
+        if (closed.get() || disconnecting) {
+            loginSuccessPacket.release();
+            return;
+        }
         allowFrontendPlayFrames();
         playObservation = new PlayObservation();
         keepAlives = new KeepAliveBridge.State();
@@ -611,7 +741,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         // Outbound order is the protocol boundary: anything submitted after Login Success
         // must use PLAY packet identifiers, even while its write promise is still pending.
         frontendPlayPhase = true;
-        frontend.writeAndFlush(packet.copy()).addListener(write -> {
+        frontend.writeAndFlush(loginSuccessPacket).addListener(write -> {
             if (!write.isSuccess()) { closePair(); return; }
             frontend.eventLoop().execute(this::startRelay);
         });
@@ -1064,8 +1194,17 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         TransferAttempt attempt = new TransferAttempt(target, result, relay);
         transfer = attempt;
+        if (owner.profileHandoffRequired()) {
+            prepareTransferProfile(attempt);
+            return;
+        }
+        startTransferCandidate(attempt);
+    }
+
+    private void startTransferCandidate(TransferAttempt attempt) {
+        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         LOGGER.debug("Starting replacement backend connection for player {} to {}",
-                view.username(), target.address());
+                view.username(), attempt.target.address());
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
@@ -1102,6 +1241,81 @@ final class Session extends ChannelInboundHandlerAdapter {
         } catch (RuntimeException failure) {
             failTransfer(attempt, "could not start replacement backend connection");
         }
+    }
+
+    private void prepareTransferProfile(TransferAttempt attempt) {
+        var coordinator = owner.profileHandoffCoordinator();
+        if (coordinator == null) {
+            attempt.failureReason = "player profile service is unavailable";
+            attempt.result.complete(TransferResult.failed(attempt.failureReason));
+            closePair();
+            return;
+        }
+        attempt.profilePreparationStarted = true;
+        attempt.profileDeadline = frontend.eventLoop().schedule(() -> {
+            if (transfer != attempt || attempt.finished) return;
+            attempt.failureReason = "player profile preparation timed out";
+            attempt.result.complete(TransferResult.failed(attempt.failureReason));
+            closePair();
+        }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
+        SourceInputBarrier barrier = new SourceInputBarrier() {
+            @Override public CompletionStage<Void> proxyIngressStopped() {
+                return attempt.proxyIngressStopped == null ? CompletableFuture.failedFuture(
+                        new IllegalStateException("proxy input barrier is not held")) : attempt.proxyIngressStopped;
+            }
+            @Override public boolean isHeld() { return attempt.inputPaused && !attempt.inputReleased; }
+        };
+        attempt.sourceInputBarrier = barrier;
+        attempt.oldRelay.pauseClientInput().whenComplete((ignored, pauseFailure) -> frontend.eventLoop().execute(() -> {
+            if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
+            if (pauseFailure != null) {
+                attempt.profileDeadline.cancel(false);
+                attempt.failureReason = "could not establish proxy input barrier";
+                attempt.result.complete(TransferResult.failed(attempt.failureReason));
+                closePair();
+                return;
+            }
+            attempt.inputPaused = true;
+            attempt.proxyIngressStopped = CompletableFuture.completedFuture(null);
+            ProfileHandoffRequest request = new ProfileHandoffRequest(identity, view.username(), owner.proxyEpoch(),
+                    attempt.transferId, UUID.randomUUID(), profileBackend(selected), profileBackend(attempt.target));
+            CompletionStage<PreparedProfile> preparation;
+            try {
+                preparation = Objects.requireNonNull(coordinator.prepareTransfer(request, barrier), "transfer profile stage");
+            } catch (RuntimeException failure) {
+                if (attempt.profileDeadline != null) attempt.profileDeadline.cancel(false);
+                attempt.failureReason = "player profile transfer was not ready";
+                attempt.result.complete(TransferResult.failed(attempt.failureReason));
+                closePair();
+                return;
+            }
+            preparation.whenComplete((prepared, failure) -> frontend.eventLoop().execute(() -> {
+                if (attempt.profileDeadline != null) attempt.profileDeadline.cancel(false);
+                if (transfer != attempt || attempt.finished || closed.get() || disconnecting) {
+                    abortQuietly(prepared);
+                    return;
+                }
+                if (failure != null || prepared == null) {
+                    LOGGER.debug("Player profile transfer denied for {}", view.username(), failure);
+                    attempt.failureReason = "player profile transfer was not ready";
+                    attempt.result.complete(TransferResult.failed(attempt.failureReason));
+                    // Preparation outcome is unknown, so keep ingress stopped and retire this connection.
+                    closePair();
+                    return;
+                }
+                BackendView currentTarget = owner.catalog().find(attempt.target.handle().id()).orElse(null);
+                BackendView currentSource = selected == null ? null
+                        : owner.catalog().find(selected.handle().id()).orElse(null);
+                if (currentTarget == null || !sameBackend(currentTarget, attempt.target)
+                        || currentSource == null || !sameBackend(currentSource, selected)) {
+                    attempt.preparedProfile = prepared;
+                    failTransfer(attempt, "backend registration changed during profile preparation");
+                    return;
+                }
+                attempt.preparedProfile = prepared;
+                startTransferCandidate(attempt);
+            }));
+        }));
     }
 
     private void tryStartPendingTransfer() {
@@ -1178,6 +1392,21 @@ final class Session extends ChannelInboundHandlerAdapter {
         return InetSocketAddress.createUnresolved(host, address.getPort());
     }
 
+    private static ProfileBackend profileBackend(BackendView backend) {
+        return new ProfileBackend(backend.handle().id().value(), backend.handle().generation(),
+                backend.owner().id(), backend.owner().instanceGeneration());
+    }
+
+    private static boolean sameBackend(BackendView left, BackendView right) {
+        return left != null && right != null && left.handle().equals(right.handle())
+                && left.owner().equals(right.owner()) && left.address().equals(right.address());
+    }
+
+    private static void abortQuietly(PreparedProfile prepared) {
+        if (prepared == null) return;
+        try { prepared.abort(); } catch (RuntimeException ignored) { }
+    }
+
     private void requireSessionEventLoop(Channel channel) {
         if (channel.eventLoop() != frontend.eventLoop()) {
             throw new IllegalStateException("backend channel must share the player session event loop");
@@ -1188,8 +1417,13 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
             if (transfer != attempt || attempt.result.isDone()) return;
-            attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
-            closePair();
+            if (attempt.preparedProfile != null) {
+                failTransfer(attempt, "replacement backend cutover timed out");
+                if (attempt.detached) closePair();
+            } else {
+                attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
+                closePair();
+            }
         }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
         try {
             attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
@@ -1213,6 +1447,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             attempt.paused = true;
             if (attempt.finished || closed.get() || disconnecting) {
                 if (disconnecting) return;
+                if (attempt.preparedProfile != null && attempt.abortStarted && !attempt.abortConfirmed) return;
                 resumeAfterFailedTransfer(attempt);
                 return;
             }
@@ -1373,6 +1608,28 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void finishTransfer(TransferAttempt attempt) {
         if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
+        if (attempt.preparedProfile != null && !attempt.routeNotified) {
+            attempt.routeNotified = true;
+            try {
+                attempt.preparedProfile.routed().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+                    if (transfer != attempt || closed.get() || disconnecting) return;
+                    if (failure != null) {
+                        LOGGER.debug("Profile transfer route notification failed for {}", view.username(), failure);
+                        attempt.result.complete(TransferResult.failed("profile route confirmation failed"));
+                        closePair();
+                    } else completeTransfer(attempt);
+                }));
+            } catch (RuntimeException failure) {
+                attempt.result.complete(TransferResult.failed("profile route confirmation failed"));
+                closePair();
+            }
+            return;
+        }
+        completeTransfer(attempt);
+    }
+
+    private void completeTransfer(TransferAttempt attempt) {
+        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         transfer = null;
         attempt.finished = true;
         attempt.cutoverDeadline.cancel(false);
@@ -1444,10 +1701,33 @@ final class Session extends ChannelInboundHandlerAdapter {
                 attempt.channel != null && attempt.channel.isActive());
         attempt.finished = true;
         attempt.failureReason = reason;
+        if (attempt.profileDeadline != null) attempt.profileDeadline.cancel(false);
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
         if (attempt.frameState != null) attempt.frameState.close();
         if (disconnecting) return;
+        if (attempt.preparedProfile != null && !attempt.abortStarted) {
+            attempt.abortStarted = true;
+            try {
+                attempt.preparedProfile.abort().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+                    if (failure != null) {
+                        LOGGER.debug("Profile transfer rollback was not confirmed for {}", view.username(), failure);
+                        closePair();
+                    } else {
+                        attempt.abortConfirmed = true;
+                        if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
+                    }
+                }));
+            } catch (RuntimeException failure) {
+                closePair();
+            }
+            return;
+        }
+        if (attempt.profilePreparationStarted && attempt.preparedProfile == null) {
+            // A failed readiness result does not prove the backend thawed its source.
+            closePair();
+            return;
+        }
         if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
     }
 
@@ -1456,6 +1736,14 @@ final class Session extends ChannelInboundHandlerAdapter {
             attempt.oldRelay.resume().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
                 if (failure != null) closePair();
                 completeFailedTransfer(attempt);
+            }));
+        } else if (attempt.inputPaused && !attempt.inputReleased && !closed.get() && !disconnecting) {
+            attempt.oldRelay.resumeClientInput().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+                if (failure != null) closePair();
+                else {
+                    attempt.inputReleased = true;
+                    completeFailedTransfer(attempt);
+                }
             }));
         } else {
             completeFailedTransfer(attempt);
@@ -1472,6 +1760,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
         }
         if (attempt.cutoverDeadline != null) attempt.cutoverDeadline.cancel(false);
+        if (attempt.profileDeadline != null) attempt.profileDeadline.cancel(false);
         if (transfer == attempt) transfer = null;
         attempt.result.complete(TransferResult.failed(attempt.failureReason));
     }
@@ -1492,6 +1781,10 @@ final class Session extends ChannelInboundHandlerAdapter {
                 placementRequest.cancel(false);
                 placementRequest = null;
             }
+            if (initialPreparedProfile != null) {
+                abortQuietly(initialPreparedProfile);
+                initialPreparedProfile = null;
+            }
             frontend.close();
             Channel upstream = backend;
             if (upstream != null) upstream.close();
@@ -1507,7 +1800,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (activeTransfer != null) {
                 transfer = null;
                 activeTransfer.finished = true;
+                if (activeTransfer.preparedProfile != null && !activeTransfer.routeNotified)
+                    abortQuietly(activeTransfer.preparedProfile);
                 if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
+                if (activeTransfer.profileDeadline != null) activeTransfer.profileDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
                 if (activeTransfer.frameState != null) activeTransfer.frameState.close();
@@ -1576,6 +1872,10 @@ final class Session extends ChannelInboundHandlerAdapter {
         private final BackendView target;
         private final CompletableFuture<TransferResult> result;
         private final RawRelay.Link oldRelay;
+        private final UUID transferId = UUID.randomUUID();
+        private CompletionStage<Void> proxyIngressStopped;
+        private SourceInputBarrier sourceInputBarrier;
+        private PreparedProfile preparedProfile;
         private TransferCandidate candidate;
         private TransferFrameHandler.State frameState;
         private TransferFrameBuffer clientBuffer;
@@ -1583,10 +1883,17 @@ final class Session extends ChannelInboundHandlerAdapter {
         private Channel channel;
         private boolean pauseInProgress;
         private boolean paused;
+        private boolean inputPaused;
+        private boolean inputReleased;
         private boolean detached;
         private boolean finished;
+        private boolean profilePreparationStarted;
+        private boolean abortStarted;
+        private boolean abortConfirmed;
+        private boolean routeNotified;
         private String failureReason;
         private ScheduledFuture<?> cutoverDeadline;
+        private ScheduledFuture<?> profileDeadline;
 
         private TransferAttempt(BackendView target,
                                 CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {
