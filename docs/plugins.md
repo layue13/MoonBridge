@@ -143,12 +143,6 @@ context.events().subscribe(PlayerDisconnectedEvent.class, event ->
 
 `InitialPlacementHandler` 仍是单提供者选服策略。命令、服务器目录和转服 API 保持原有职责，不通过事件替代。
 
-## 转服状态保护
-
-插件可以在 `onLoad` 或 `onEnable` 中调用 `PluginContext.registerTransferGuard(TransferGuard)` 注册唯一的转服保护器。所有 `Players.transfer(...)` 调用都会经过它，包括第三方插件发起的转服。MoonBridge 在打开目标后端连接、发送登录包之前异步调用 `prepare(TransferContext)`；只有 `ALLOW` 才继续。上下文包含本次尝试 UUID、精确的玩家连接身份、源后端和目标后端。
-
-每次 prepare 已被调用、但转服未成功时，核心都会调用 `failed(context, reason)`，包括明确拒绝、异常和超时；插件可能已经改动了源端状态，所以必须按 transfer UUID 幂等处理迟到的 prepare 结果。核心只在回调返回 `SOURCE_RESTORED` 时恢复旧转发；拒绝、超时、异常或 `DISCONNECT` 都会断开连接。成功切换后调用 `completed(context)` 清理插件状态。所有回调都在 I/O 线程之外运行，每个阶段受 `plugins.eventTimeoutSeconds` 限制。注册保护器但没有配置要求时仍会启用它；`plugins.requiredTransferGuard` 可指定必须注册保护器的插件 provider class，适用于必须 fail closed 的部署。配置了该项但 provider 未加载或未注册时，代理会在开始监听前失败启动。未配置且没有注册保护器时，保持通用 MoonBridge 原有转服行为。
-
 统一事件模型让准入决策和会话通知共享同一类型、监听器、订阅表与派发实现，同时保留各类事件所需的运行策略。准入阶段执行有序且失败关闭的结果聚合；生命周期通知异步 FIFO 尽力交付并与会话处理隔离。没有 PLAY 包事件。目前没有事件 API 的专门基准，不能据此宣称性能收益或无开销。
 
 源码入口：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Events`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/event/Events.java)、[`AccessDecision`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/AccessDecision.java)。

@@ -16,9 +16,6 @@ public interface PluginContext {
 
     Players players();
 
-    /** Registers this plugin as the proxy's transfer state guard. Registration is unique. */
-    void registerTransferGuard(TransferGuard guard);
-
     Servers servers();
 
     Commands commands();

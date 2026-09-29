@@ -3,10 +3,6 @@ package dev.moonbridge.core.session;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.TransferStatus;
-import dev.moonbridge.api.TransferGuard;
-import dev.moonbridge.api.TransferContext;
-import dev.moonbridge.api.TransferGuardDecision;
-import dev.moonbridge.api.TransferFailureDisposition;
 import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
@@ -61,135 +57,6 @@ final class SessionTransferTest {
     private static final String USERNAME = "IslandPlayer";
     private static final UUID PLAYER_ID = UUID.nameUUIDFromBytes(
             ("OfflinePlayer:" + USERNAME).getBytes(StandardCharsets.UTF_8));
-
-    @Test
-    void guardAbortMustRestoreSourceBeforeThirdPartyTransferResumesRelay() throws Exception {
-        var catalog = new InMemoryBackendCatalog();
-        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
-            var oldReceived = new CompletableFuture<byte[]>();
-            var abortEntered = new CompletableFuture<TransferContext>();
-            var abort = new CompletableFuture<TransferFailureDisposition>();
-            backendThread(oldServer, () -> {
-                try (Socket socket = oldServer.accept()) {
-                    socket.setSoTimeout(5000);
-                    var input = new DataInputStream(socket.getInputStream());
-                    var output = new DataOutputStream(socket.getOutputStream());
-                    acceptLogin(input, output, 0);
-                    byte[] request = readFrame(input);
-                    oldReceived.complete(request);
-                    writeFrame(output, new byte[]{0x03, 0x66});
-                    while (input.read() != -1) { }
-                } catch (Throwable failure) { oldReceived.completeExceptionally(failure); }
-            });
-            register(catalog, "old", oldServer);
-            register(catalog, "new", newServer);
-            var listener = listener(catalog);
-            listener.setTransferGuard(new TransferGuard() {
-                @Override public CompletionStage<TransferGuardDecision> prepare(TransferContext transfer) {
-                    return CompletableFuture.completedFuture(TransferGuardDecision.REJECT);
-                }
-
-                @Override public CompletionStage<TransferFailureDisposition> failed(
-                        TransferContext transfer, String reason) {
-                    abortEntered.complete(transfer);
-                    return abort;
-                }
-            });
-            try {
-                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
-                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
-                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
-                    client.setSoTimeout(5000);
-                    var input = new DataInputStream(client.getInputStream());
-                    var output = new DataOutputStream(client.getOutputStream());
-                    sendLogin(output);
-                    readFrame(input); readFrame(input); readFrame(input);
-                    var player = awaitPlayer(listener);
-
-                    // Calling the public Players API directly represents any plugin caller.
-                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
-                    TransferContext context = abortEntered.get(5, TimeUnit.SECONDS);
-                    assertEquals(player.identity(), context.player());
-                    assertEquals("old", context.sourceBackend());
-                    assertEquals("new", context.targetBackend());
-                    assertTrue(!transfer.isDone(), "transfer must wait for the recovery callback");
-                    newServer.setSoTimeout(150);
-                    assertThrows(java.net.SocketTimeoutException.class, newServer::accept,
-                            "target login must not start after guard rejection");
-
-                    abort.complete(TransferFailureDisposition.SOURCE_RESTORED);
-                    assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
-                    writeFrame(output, new byte[]{0x01, 0x55});
-                    assertArrayEquals(new byte[]{0x01, 0x55}, oldReceived.get(5, TimeUnit.SECONDS));
-                    assertArrayEquals(new byte[]{0x03, 0x66}, readFrame(input));
-                }
-            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
-        }
-    }
-
-    @Test
-    void prepareTimeoutStillWaitsForGuardRecoveryBeforeResumingSource() throws Exception {
-        var catalog = new InMemoryBackendCatalog();
-        try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
-            var oldReceived = new CompletableFuture<byte[]>();
-            var abortEntered = new CompletableFuture<Void>();
-            var abort = new CompletableFuture<TransferFailureDisposition>();
-            backendThread(oldServer, () -> {
-                try (Socket socket = oldServer.accept()) {
-                    socket.setSoTimeout(5000);
-                    var input = new DataInputStream(socket.getInputStream());
-                    var output = new DataOutputStream(socket.getOutputStream());
-                    acceptLogin(input, output, 0);
-                    byte[] request = readFrame(input);
-                    oldReceived.complete(request);
-                    writeFrame(output, new byte[]{0x03, 0x66});
-                    while (input.read() != -1) { }
-                } catch (Throwable failure) { oldReceived.completeExceptionally(failure); }
-            });
-            register(catalog, "old", oldServer);
-            register(catalog, "new", newServer);
-            var listener = listener(catalog);
-            listener.setEvents(new EventDispatcher() {
-                @Override public boolean hasSubscribers(Class<?> eventType) { return false; }
-                @Override public <R> CompletionStage<R> dispatch(Event<R> event) {
-                    return CompletableFuture.failedFuture(new AssertionError("no events expected"));
-                }
-            }, Duration.ofMillis(500));
-            listener.setTransferGuard(new TransferGuard() {
-                @Override public CompletionStage<TransferGuardDecision> prepare(TransferContext transfer) {
-                    return new CompletableFuture<>(); // Simulate a handoff that may have committed without its ACK.
-                }
-                @Override public CompletionStage<TransferFailureDisposition> failed(
-                        TransferContext transfer, String reason) {
-                    abortEntered.complete(null);
-                    return abort;
-                }
-            });
-            try {
-                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
-                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
-                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
-                    client.setSoTimeout(5000);
-                    var input = new DataInputStream(client.getInputStream());
-                    var output = new DataOutputStream(client.getOutputStream());
-                    sendLogin(output);
-                    readFrame(input); readFrame(input); readFrame(input);
-                    var player = awaitPlayer(listener);
-                    var transfer = listener.transfer(player.identity(), "new").toCompletableFuture();
-                    abortEntered.get(5, TimeUnit.SECONDS);
-                    assertTrue(!transfer.isDone(), "timed out prepare must await recovery");
-                    newServer.setSoTimeout(100);
-                    assertThrows(java.net.SocketTimeoutException.class, newServer::accept,
-                            "target login must not start after prepare timeout");
-                    abort.complete(TransferFailureDisposition.SOURCE_RESTORED);
-                    assertEquals(TransferStatus.FAILED, transfer.get(5, TimeUnit.SECONDS).status());
-                    writeFrame(output, new byte[]{0x01, 0x55});
-                    assertArrayEquals(new byte[]{0x01, 0x55}, oldReceived.get(5, TimeUnit.SECONDS));
-                    assertArrayEquals(new byte[]{0x03, 0x66}, readFrame(input));
-                }
-            } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
-        }
-    }
 
     @Test
     void clientFrameWaitsForWorldTransitionDuringCutover() throws Exception {
@@ -592,8 +459,7 @@ final class SessionTransferTest {
                     var transfer = listener.transfer(player.identity(), "new").toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                     assertEquals(TransferStatus.FAILED, transfer.status());
-                    String detail = transfer.detail().orElse("");
-                    assertTrue(detail.contains("cutover timed out") || detail.contains("old backend stopped"), detail);
+                    assertTrue(transfer.detail().orElse("").contains("cutover timed out"));
                     assertEquals(-1, input.read());
                     oldClosed.get(5, TimeUnit.SECONDS);
                     newClosed.get(5, TimeUnit.SECONDS);
