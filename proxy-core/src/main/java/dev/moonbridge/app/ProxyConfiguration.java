@@ -218,7 +218,11 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public record Plugins(String directory, Map<String, Map<String, String>> enabled,
-                          Integer eventTimeoutSeconds) {
+                          Integer eventTimeoutSeconds, String requiredTransferGuard) {
+        public Plugins(String directory, Map<String, Map<String, String>> enabled, Integer eventTimeoutSeconds) {
+            this(directory, enabled, eventTimeoutSeconds, null);
+        }
+
         public Plugins {
             if (directory == null || directory.isBlank()) {
                 throw new IllegalArgumentException("plugin directory is required");
@@ -226,6 +230,9 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             eventTimeoutSeconds = eventTimeoutSeconds == null ? 5 : eventTimeoutSeconds;
             if (eventTimeoutSeconds < 1 || eventTimeoutSeconds > 30) {
                 throw new IllegalArgumentException("eventTimeoutSeconds must be between 1 and 30");
+            }
+            if (requiredTransferGuard != null && requiredTransferGuard.isBlank()) {
+                throw new IllegalArgumentException("requiredTransferGuard must be a plugin provider class name");
             }
             enabled = enabled == null ? Map.of() : enabled.entrySet().stream().collect(
                     java.util.stream.Collectors.toUnmodifiableMap(

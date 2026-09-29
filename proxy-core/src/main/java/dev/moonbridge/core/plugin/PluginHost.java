@@ -40,6 +40,10 @@ import dev.moonbridge.api.ServerRegistration;
 import dev.moonbridge.api.ServerView;
 import dev.moonbridge.api.Servers;
 import dev.moonbridge.api.TransferResult;
+import dev.moonbridge.api.TransferGuard;
+import dev.moonbridge.api.TransferContext;
+import dev.moonbridge.api.TransferGuardDecision;
+import dev.moonbridge.api.TransferFailureDisposition;
 import dev.moonbridge.api.permission.PermissionProvider;
 import dev.moonbridge.api.permission.PermissionResult;
 import net.kyori.adventure.text.Component;
@@ -139,6 +143,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private volatile BackendChannelTransport backendChannelTransport;
     private ScheduledFuture<?> notificationDropReporter;
     private InitialPlacementHandler placementHandler;
+    private String requiredTransferGuardProvider;
+    private RegisteredTransferGuard registeredTransferGuard;
+    private Duration transferGuardTimeout = Duration.ofSeconds(5);
     private volatile Map<Class<?>, List<EventRegistration<?, ?>>> eventListeners = Map.of();
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
@@ -290,6 +297,86 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
+    /** Requires the named plugin provider to register the transfer guard before startup proceeds. */
+    public synchronized void requireTransferGuard(String providerClassName, Duration timeout) {
+        requireState(State.LOADING);
+        if (providerClassName == null || providerClassName.isBlank()) {
+            throw new IllegalArgumentException("providerClassName must be a plugin provider class name");
+        }
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofSeconds(30)) > 0) {
+            throw new IllegalArgumentException("transfer guard timeout must be between 1 and 30 seconds");
+        }
+        this.requiredTransferGuardProvider = providerClassName;
+        this.transferGuardTimeout = timeout;
+    }
+
+    /** Async dispatch facade used by player sessions; every callback runs off Netty I/O loops. */
+    public synchronized Optional<TransferGuard> transferGuard() {
+        if (registeredTransferGuard == null) return Optional.empty();
+        TransferGuard provider = registeredTransferGuard.guard;
+        return Optional.of(new TransferGuard() {
+            @Override public CompletionStage<TransferGuardDecision> prepare(TransferContext transfer) {
+                return invokeTransferGuard(() -> provider.prepare(transfer), "prepare");
+            }
+            @Override public CompletionStage<TransferFailureDisposition> failed(TransferContext transfer,
+                                                                                 String reason) {
+                return invokeTransferGuard(() -> provider.failed(transfer, reason), "failed");
+            }
+            @Override public CompletionStage<Void> completed(TransferContext transfer) {
+                return invokeTransferGuard(() -> provider.completed(transfer), "completed");
+            }
+        });
+    }
+
+    private <T> CompletionStage<T> invokeTransferGuard(
+            java.util.function.Supplier<CompletionStage<T>> callback, String phase) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        ScheduledFuture<?> deadline;
+        try {
+            deadline = timer.schedule(() -> result.completeExceptionally(
+                    new java.util.concurrent.TimeoutException("transfer guard " + phase + " timed out")),
+                    transferGuardTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            callbacks.execute(() -> {
+                if (result.isDone()) return;
+                try {
+                    CompletionStage<T> stage = Objects.requireNonNull(callback.get(),
+                            "transfer guard " + phase + " stage");
+                    stage.whenComplete((value, failure) -> {
+                        if (failure == null) result.complete(value);
+                        else result.completeExceptionally(failure);
+                    });
+                } catch (Throwable failure) {
+                    result.completeExceptionally(failure);
+                }
+            });
+        } catch (Throwable failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        result.whenComplete((ignored, failure) -> deadline.cancel(false));
+        return result;
+    }
+
+    private synchronized void registerTransferGuard(PluginContextImpl context, TransferGuard guard) {
+        Objects.requireNonNull(guard, "guard");
+        synchronized (context) {
+            context.requireActive();
+            if (!context.eventRegistrationOpen) {
+                throw new IllegalStateException("Transfer guard registration is only allowed during onLoad or onEnable");
+            }
+            String provider = plugins.stream().filter(loaded -> loaded.context == context)
+                    .map(loaded -> loaded.plugin.getClass().getName()).findFirst().orElseThrow();
+            if (requiredTransferGuardProvider != null && !requiredTransferGuardProvider.equals(provider)) {
+                throw new IllegalStateException("Only configured transfer guard provider may register: "
+                        + requiredTransferGuardProvider);
+            }
+            if (registeredTransferGuard != null) {
+                throw new IllegalStateException("Only one plugin may register a transfer guard; conflict at " + provider);
+            }
+            registeredTransferGuard = new RegisteredTransferGuard(provider, guard);
+        }
+    }
+
     private static List<String> declaredProviders(Path jar) throws IOException {
         try (JarFile archive = new JarFile(jar.toFile())) {
             var service = archive.getJarEntry("META-INF/services/" + Plugin.class.getName());
@@ -346,6 +433,11 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 } finally {
                     loaded.context.endEventRegistration();
                 }
+            }
+            if (requiredTransferGuardProvider != null && (registeredTransferGuard == null
+                    || !requiredTransferGuardProvider.equals(registeredTransferGuard.providerClassName))) {
+                throw new IllegalStateException("Required transfer guard provider did not register: "
+                        + requiredTransferGuardProvider);
             }
             PermissionProvider selectedPermissions = null;
             String permissionProviderOwner = null;
@@ -1183,6 +1275,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         }
     }
 
+    private record RegisteredTransferGuard(String providerClassName, TransferGuard guard) { }
+
     /** URLClassLoader with a supported, narrowly-scoped hook for plugin-owned extension libraries. */
     private static final class HostPluginClassLoader extends URLClassLoader {
         private final Set<Path> libraries = new HashSet<>();
@@ -1262,6 +1356,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         @Override public UUID proxyEpoch() { return PluginHost.this.proxyEpoch; }
 
         @Override public Players players() { return pluginPlayers; }
+        @Override public void registerTransferGuard(TransferGuard guard) {
+            PluginHost.this.registerTransferGuard(this, guard);
+        }
         @Override public Servers servers() { return servers; }
         @Override public Commands commands() { return pluginCommands; }
         @Override public Events events() { return pluginEvents; }
@@ -1285,6 +1382,12 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         private synchronized void deactivateAndRemove() {
             active = false;
             eventRegistrationOpen = false;
+            if (registeredTransferGuard != null && plugins.stream()
+                    .filter(loaded -> loaded.context == this)
+                    .anyMatch(loaded -> registeredTransferGuard.providerClassName.equals(
+                            loaded.plugin.getClass().getName()))) {
+                registeredTransferGuard = null;
+            }
             pluginMessaging.close();
             revokeEventSubscriptions();
             for (RegisteredCommand command : commands.values()) {
