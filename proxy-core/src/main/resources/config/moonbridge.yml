@@ -12,8 +12,6 @@ plugins:
   directory: "../plugins"
   eventTimeoutSeconds: 5
   enabled: {}
-  # Optional fail-closed deployment requirement; omit for generic MoonBridge installs.
-  # requiredTransferGuard: "example.plugin.TransferGuardPlugin"
   # To enable the bundled native LuckPerms platform, replace the empty map above:
   # enabled:
   #   dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin:

@@ -93,14 +93,10 @@ public final class ProxyMain {
                      : new BackendControlService(configuration.backendChannel(), catalog,
                      plugins.localMessaging(), proxyEpoch)) {
             if (control != null) plugins.setBackendChannelTransport(control);
-            if (configuration.plugins().requiredTransferGuard() != null) {
-                plugins.requireTransferGuard(configuration.plugins().requiredTransferGuard(), eventTimeout);
-            }
             listener.setMaxConnections(configuration.maxConnections());
             plugins.loadPlugins(pluginDirectory(configPath, configuration.plugins().directory()),
                     configuration.plugins().enabled());
             plugins.enable();
-            listener.setTransferGuard(plugins.transferGuard().orElse(null));
             if (control != null) control.start();
             listener.setEvents(plugins, eventTimeout);
             listener.setPermissions(plugins.permissionService());

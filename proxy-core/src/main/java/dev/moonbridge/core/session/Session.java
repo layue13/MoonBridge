@@ -9,10 +9,6 @@ import dev.moonbridge.api.MessageResult;
 import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.TransferStatus;
-import dev.moonbridge.api.TransferContext;
-import dev.moonbridge.api.TransferGuard;
-import dev.moonbridge.api.TransferGuardDecision;
-import dev.moonbridge.api.TransferFailureDisposition;
 import dev.moonbridge.core.auth.AuthenticatedEncryption;
 import dev.moonbridge.core.auth.MinecraftCipherDecoder;
 import dev.moonbridge.core.auth.MinecraftCipherEncoder;
@@ -54,7 +50,6 @@ import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1067,37 +1062,10 @@ final class Session extends ChannelInboundHandlerAdapter {
             result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
             return;
         }
-        TransferContext guardContext = owner.transferGuard() == null ? null : new TransferContext(
-                UUID.randomUUID(), identity, selected.handle().id().value(), target.handle().id().value());
-        TransferAttempt attempt = new TransferAttempt(target, result, relay, guardContext);
+        TransferAttempt attempt = new TransferAttempt(target, result, relay);
         transfer = attempt;
-        if (guardContext != null) {
-            CompletionStage<TransferGuardDecision> prepared;
-            try {
-                prepared = Objects.requireNonNull(owner.transferGuard().prepare(guardContext),
-                        "transfer guard prepare stage");
-            } catch (Throwable failure) {
-                failTransfer(attempt, "transfer guard preparation failed");
-                return;
-            }
-            withGuardDeadline(prepared, "prepare").whenComplete((decision, failure) -> frontend.eventLoop().execute(() -> {
-                if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
-                if (failure != null || decision != TransferGuardDecision.ALLOW) {
-                    failTransfer(attempt, failure == null ? "transfer guard rejected transfer"
-                            : "transfer guard preparation failed");
-                    return;
-                }
-                openReplacementBackend(attempt);
-            }));
-        } else {
-            openReplacementBackend(attempt);
-        }
-    }
-
-    private void openReplacementBackend(TransferAttempt attempt) {
-        if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         LOGGER.debug("Starting replacement backend connection for player {} to {}",
-                view.username(), attempt.target.address());
+                view.username(), target.address());
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
@@ -1134,19 +1102,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         } catch (RuntimeException failure) {
             failTransfer(attempt, "could not start replacement backend connection");
         }
-    }
-
-    private <T> CompletionStage<T> withGuardDeadline(CompletionStage<T> source, String phase) {
-        CompletableFuture<T> bounded = new CompletableFuture<>();
-        ScheduledFuture<?> deadline = frontend.eventLoop().schedule(() -> bounded.completeExceptionally(
-                new java.util.concurrent.TimeoutException("transfer guard " + phase + " timed out")),
-                owner.eventTimeout().toNanos(), TimeUnit.NANOSECONDS);
-        source.whenComplete((value, failure) -> {
-            if (failure == null) bounded.complete(value);
-            else bounded.completeExceptionally(failure);
-        });
-        bounded.whenComplete((ignored, failure) -> deadline.cancel(false));
-        return bounded;
     }
 
     private void tryStartPendingTransfer() {
@@ -1233,14 +1188,15 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
         attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
             if (transfer != attempt || attempt.result.isDone()) return;
-            attempt.forceDisconnect = true;
-            failTransfer(attempt, "replacement backend cutover timed out");
+            attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
+            closePair();
         }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
         try {
             attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
             attempt.oldBackendBuffer = installTransferBuffer(backend, "transfer-old-backend-buffer");
         } catch (RuntimeException failure) {
             failTransfer(attempt, "could not buffer frames for transfer");
+            closePair();
             return;
         }
         attempt.pauseInProgress = true;
@@ -1250,9 +1206,8 @@ final class Session extends ChannelInboundHandlerAdapter {
         pause.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
             attempt.pauseInProgress = false;
             if (failure != null) {
-                attempt.forceDisconnect = true;
                 if (!attempt.finished) failTransfer(attempt, "old backend stopped during transfer");
-                else resumeAfterFailedTransfer(attempt);
+                closePair();
                 return;
             }
             attempt.paused = true;
@@ -1274,14 +1229,14 @@ final class Session extends ChannelInboundHandlerAdapter {
                         if (detachFailure != null) {
                             boolean oldRelayStillAttached = frontend.pipeline().get("raw-relay") != null
                                     && backend.pipeline().get("raw-relay") != null;
-                            if (!oldRelayStillAttached) attempt.forceDisconnect = true;
                             failTransfer(attempt, "could not detach old backend relay");
+                            if (!oldRelayStillAttached) closePair();
                             return;
                         }
                         if (closed.get() || disconnecting || !attempt.channel.isActive()) {
                             if (disconnecting) return;
-                            attempt.forceDisconnect = true;
                             failTransfer(attempt, "replacement backend closed during transfer");
+                            closePair();
                             return;
                         }
                         attempt.detached = true;
@@ -1313,16 +1268,16 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             attempt.candidate.handOff();
         } catch (RuntimeException invalid) {
-            attempt.forceDisconnect = true;
             failTransfer(attempt, "replacement backend was not ready");
+            closePair();
             return;
         }
         removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(() -> {
                     if (failure != null || closed.get() || disconnecting || !attempt.channel.isActive()) {
                         if (disconnecting) return;
-                        attempt.forceDisconnect = true;
                         failTransfer(attempt, "replacement backend pipeline failed");
+                        closePair();
                         return;
                     }
                     installCandidateRelay(attempt);
@@ -1346,15 +1301,15 @@ final class Session extends ChannelInboundHandlerAdapter {
             RawRelay.Link observedLink = next;
             nextObservation.ready().whenComplete((ignored, failure) -> observedLink.stopObserving());
         } catch (RuntimeException failure) {
-            attempt.forceDisconnect = true;
             failTransfer(attempt, "could not attach replacement relay");
+            closePair();
             return;
         }
         next.ready().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
             if (failure != null || closed.get() || disconnecting) {
                 if (disconnecting) return;
-                attempt.forceDisconnect = true;
                 failTransfer(attempt, "replacement relay was not ready");
+                closePair();
                 return;
             }
             ByteBuf opening;
@@ -1362,15 +1317,15 @@ final class Session extends ChannelInboundHandlerAdapter {
                 keepAlives.switchBackend();
                 opening = transferOpening(attempt);
             } catch (RuntimeException malformed) {
-                attempt.forceDisconnect = true;
                 failTransfer(attempt, "could not prepare replacement world transition");
+                closePair();
                 return;
             }
             frontend.writeAndFlush(opening).addListener(write -> frontend.eventLoop().execute(() -> {
                 if (!write.isSuccess() || closed.get() || disconnecting || !attempt.channel.isActive()) {
                     if (disconnecting) return;
-                    attempt.forceDisconnect = true;
                     failTransfer(attempt, "could not send replacement world transition");
+                    closePair();
                     return;
                 }
                 Channel oldBackend = backend;
@@ -1390,8 +1345,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 try {
                     attempt.clientBuffer.drainAndRemove();
                 } catch (RuntimeException replayFailure) {
-                    attempt.forceDisconnect = true;
-                    failTransfer(attempt, "could not replay buffered client frames");
+                    closePair();
                     return;
                 }
                 if (closed.get()) return;
@@ -1401,15 +1355,15 @@ final class Session extends ChannelInboundHandlerAdapter {
                     attempt.cutoverDeadline.cancel(false);
                     attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
                         if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
-                        attempt.forceDisconnect = true;
                         failTransfer(attempt, "replacement Forge handshake timed out");
+                        closePair();
                     }, FORGE_TRANSFER_HANDSHAKE_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
                     CompletableFuture.allOf(nextObservation.ready(), attempt.frameState.worldReady())
                             .whenComplete((negotiated, negotiationFailure) -> frontend.eventLoop().execute(() -> {
                                 if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
                                 if (negotiationFailure != null || !attempt.channel.isActive()) {
-                                    attempt.forceDisconnect = true;
                                     failTransfer(attempt, "replacement Forge handshake failed");
+                                    closePair();
                                 } else finishTransfer(attempt);
                             }));
                 } else finishTransfer(attempt);
@@ -1422,20 +1376,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         transfer = null;
         attempt.finished = true;
         attempt.cutoverDeadline.cancel(false);
-        if (attempt.guardContext != null) {
-            TransferGuard guard = owner.transferGuard();
-            if (guard != null) {
-                try {
-                    guard.completed(attempt.guardContext).whenComplete((ignored, failure) -> {
-                        if (failure != null) LOGGER.warn("Transfer guard completion callback failed for transfer {}",
-                                attempt.guardContext.transferId(), failure);
-                    });
-                } catch (Throwable failure) {
-                    LOGGER.warn("Transfer guard completion callback failed for transfer {}",
-                            attempt.guardContext.transferId(), failure);
-                }
-            }
-        }
         attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
     }
 
@@ -1504,49 +1444,14 @@ final class Session extends ChannelInboundHandlerAdapter {
                 attempt.channel != null && attempt.channel.isActive());
         attempt.finished = true;
         attempt.failureReason = reason;
-        if (attempt.detached) attempt.forceDisconnect = true;
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
         if (attempt.frameState != null) attempt.frameState.close();
-        TransferGuard guard = owner.transferGuard();
-        if (attempt.guardContext == null || guard == null) {
-            attempt.guardResolved = true;
-            if (attempt.forceDisconnect) closePair();
-            else if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
-            return;
-        }
-        attempt.abortStarted = true;
-        CompletionStage<TransferFailureDisposition> aborted;
-        try {
-            aborted = Objects.requireNonNull(guard.failed(attempt.guardContext, reason),
-                    "transfer guard failed stage");
-        } catch (Throwable failure) {
-            attempt.guardResolved = true;
-            attempt.forceDisconnect = true;
-            if (!attempt.pauseInProgress) closePair();
-            return;
-        }
-        withGuardDeadline(aborted, "failed").whenComplete((disposition, failure) -> {
-            Runnable resume = () -> {
-                if (transfer != attempt || closed.get()) return;
-                attempt.guardResolved = true;
-                if (failure != null || disposition != TransferFailureDisposition.SOURCE_RESTORED) {
-                    attempt.forceDisconnect = true;
-                }
-                if (attempt.forceDisconnect || disconnecting) closePair();
-                else if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
-            };
-            try { frontend.eventLoop().execute(resume); }
-            catch (RejectedExecutionException ignored) { closePair(); }
-        });
+        if (disconnecting) return;
+        if (!attempt.pauseInProgress) resumeAfterFailedTransfer(attempt);
     }
 
     private void resumeAfterFailedTransfer(TransferAttempt attempt) {
-        if (!attempt.guardResolved || closed.get()) return;
-        if (attempt.forceDisconnect || attempt.detached) {
-            closePair();
-            return;
-        }
         if (attempt.paused && !attempt.detached && !closed.get() && !disconnecting) {
             attempt.oldRelay.resume().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
                 if (failure != null) closePair();
@@ -1572,18 +1477,6 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     void closePair() {
-        if (!frontend.eventLoop().inEventLoop() && !frontend.eventLoop().isTerminated()) {
-            try {
-                frontend.eventLoop().execute(this::closePair);
-                return;
-            } catch (RejectedExecutionException ignored) { }
-        }
-        TransferAttempt active = transfer;
-        if (!closed.get() && active != null && active.guardContext != null && !active.abortStarted) {
-            active.forceDisconnect = true;
-            failTransfer(active, "player session closed during transfer");
-            return;
-        }
         if (!closed.compareAndSet(false, true)) return;
         Runnable cleanup = () -> {
             if (tabCompletion != null) tabCompletion.close();
@@ -1612,22 +1505,13 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
             TransferAttempt activeTransfer = transfer;
             if (activeTransfer != null) {
-                TransferGuard guard = owner.transferGuard();
-                if (activeTransfer.guardContext != null && !activeTransfer.abortStarted && guard != null) {
-                    activeTransfer.abortStarted = true;
-                    try {
-                        guard.failed(activeTransfer.guardContext, "player session closed during transfer");
-                    } catch (Throwable ignored) { }
-                }
                 transfer = null;
                 activeTransfer.finished = true;
                 if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
                 if (activeTransfer.frameState != null) activeTransfer.frameState.close();
-                String transferFailure = activeTransfer.failureReason == null
-                        ? "player session closed during transfer" : activeTransfer.failureReason;
-                activeTransfer.result.complete(TransferResult.failed(transferFailure));
+                activeTransfer.result.complete(TransferResult.failed("player session closed during transfer"));
             }
             if (identityClaimed) {
                 owner.releasePermissions(identity);
@@ -1692,7 +1576,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         private final BackendView target;
         private final CompletableFuture<TransferResult> result;
         private final RawRelay.Link oldRelay;
-        private final TransferContext guardContext;
         private TransferCandidate candidate;
         private TransferFrameHandler.State frameState;
         private TransferFrameBuffer clientBuffer;
@@ -1702,18 +1585,14 @@ final class Session extends ChannelInboundHandlerAdapter {
         private boolean paused;
         private boolean detached;
         private boolean finished;
-        private boolean guardResolved;
-        private boolean abortStarted;
-        private boolean forceDisconnect;
         private String failureReason;
         private ScheduledFuture<?> cutoverDeadline;
 
-        private TransferAttempt(BackendView target, CompletableFuture<TransferResult> result,
-                                RawRelay.Link oldRelay, TransferContext guardContext) {
+        private TransferAttempt(BackendView target,
+                                CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {
             this.target = target;
             this.result = result;
             this.oldRelay = oldRelay;
-            this.guardContext = guardContext;
         }
     }
 
