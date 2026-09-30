@@ -9,4 +9,12 @@ public interface EventDispatcher {
     boolean hasSubscribers(Class<?> eventType);
 
     <R> CompletionStage<R> dispatch(Event<R> event);
+
+    /**
+     * Pins the currently enabled transfer-preparation listener cohort. Returns {@code null} when
+     * no transfer-preparation listener was registered at enable time.
+     */
+    default TransferPreparation selectTransferPreparation() {
+        return null;
+    }
 }

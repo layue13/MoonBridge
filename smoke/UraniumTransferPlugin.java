@@ -9,6 +9,8 @@ import dev.moonbridge.api.PluginContext;
 import dev.moonbridge.api.ServerDefinition;
 import dev.moonbridge.api.ServerRegistration;
 import dev.moonbridge.api.TransferStatus;
+import dev.moonbridge.api.event.TransferDecision;
+import dev.moonbridge.api.event.TransferPreparingEvent;
 
 import java.net.URI;
 import java.util.Map;
@@ -31,6 +33,29 @@ public final class UraniumTransferPlugin implements Plugin {
             throw new IllegalArgumentException("returnToOld must be true or false");
         }
         returnToOld = Boolean.parseBoolean(returnSetting);
+        String releaseSetting = context.settings().getOrDefault("releaseSource", "false");
+        if (!releaseSetting.equals("true") && !releaseSetting.equals("false")) {
+            throw new IllegalArgumentException("releaseSource must be true or false");
+        }
+        if (Boolean.parseBoolean(releaseSetting)) {
+            context.events().subscribe(TransferPreparingEvent.class, preparing -> {
+                var transferContext = preparing.context();
+                context.logger().info("SMOKE_PREPARATION_PASS source={} target={} transfer={}",
+                        transferContext.source().name(), transferContext.target().name(),
+                        transferContext.transferId());
+                return CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
+                    PlayerView waiting = context.players().find(transferContext.player()).orElseThrow();
+                    if (waiting.currentServer().isPresent()) {
+                        return CompletableFuture.failedFuture(new AssertionError("released source still current"));
+                    }
+                    context.logger().info("SMOKE_SOURCE_RELEASED_PASS transfer={}", transferContext.transferId());
+                    // Exercise a genuinely asynchronous barrier; this smoke does not certify a database save.
+                    return CompletableFuture.runAsync(() -> context.logger().info(
+                            "SMOKE_SOURCE_CONFIRMATION_PASS transfer={}", transferContext.transferId()),
+                            CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS));
+                }));
+            });
+        }
         targetRegistration = context.servers().register(new ServerDefinition("new",
                 URI.create("tcp://127.0.0.1:" + port), Map.of(),
                 Map.of("source", "uranium-smoke-plugin")));

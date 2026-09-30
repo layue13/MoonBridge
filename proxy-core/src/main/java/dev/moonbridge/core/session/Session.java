@@ -2,6 +2,11 @@ package dev.moonbridge.core.session;
 
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.AccessDecision;
+import dev.moonbridge.api.ServerView;
+import dev.moonbridge.api.event.TransferContext;
+import dev.moonbridge.api.event.TransferPreparingEvent;
+import dev.moonbridge.core.event.TransferPreparation;
+import dev.moonbridge.core.event.PreparedTransfer;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.api.PlayerView;
@@ -49,6 +54,7 @@ import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayDeque;
@@ -969,9 +975,14 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private CompletableFuture<Void> removeHandshakeCodecs(Channel channel) {
+        return removeHandshakeCodecs(channel, () -> { });
+    }
+
+    private CompletableFuture<Void> removeHandshakeCodecs(Channel channel, Runnable beforeRemoval) {
         CompletableFuture<Void> removed = new CompletableFuture<>();
         channel.eventLoop().execute(() -> {
             try {
+                beforeRemoval.run();
                 ChannelPipeline pipeline = channel.pipeline();
                 if (pipeline.get("initial-session") != null) pipeline.remove("initial-session");
                 if (pipeline.get("transfer-candidate") != null) pipeline.remove("transfer-candidate");
@@ -1063,13 +1074,25 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         TransferAttempt attempt = new TransferAttempt(target, result, relay);
+        attempt.preparation = owner.selectTransferPreparation();
+        if (attempt.preparation != null) {
+            Duration totalBudget = owner.eventTimeout().multipliedBy(2).plusSeconds(20)
+                    .plus(owner.transferCutoverTimeout()).plus(FORGE_TRANSFER_HANDSHAKE_TIMEOUT);
+            attempt.context = new TransferContext(UUID.randomUUID(), identity, serverView(selected), serverView(target),
+                    selected.handle().generation(), target.handle().generation(),
+                    selected.owner().instanceGeneration(), target.owner().instanceGeneration(),
+                    Instant.now().plus(totalBudget));
+            attempt.totalDeadline = frontend.eventLoop().schedule(() -> {
+                if (currentAttempt(attempt)) failTransfer(attempt, "coordinated transfer timed out");
+            }, totalBudget.toNanos(), TimeUnit.NANOSECONDS);
+        }
         transfer = attempt;
         LOGGER.debug("Starting replacement backend connection for player {} to {}",
                 view.username(), target.address());
         attempt.candidate = new TransferCandidate(identity.playerId(), view.username(), new TransferCandidate.Listener() {
             @Override public void ready(TransferCandidate candidate) { candidateReady(attempt); }
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
-        });
+        }, attempt.preparation != null);
         try {
             Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
                     .resolver(owner.backendResolver())
@@ -1097,10 +1120,140 @@ final class Session extends ChannelInboundHandlerAdapter {
                 }
                 LOGGER.debug("Replacement backend TCP connection established for player {} to {}",
                         view.username(), attempt.target.address());
-                writeBackendLogin(connect.channel());
+                if (attempt.preparation == null) writeBackendLogin(connect.channel());
+                else prepareTransfer(attempt);
             });
         } catch (RuntimeException failure) {
             failTransfer(attempt, "could not start replacement backend connection");
+        }
+    }
+
+    private static ServerView serverView(BackendView backend) {
+        return new ServerView(backend.handle().id().value(), backend.address(), backend.tags(), backend.metadata());
+    }
+
+    private boolean currentAttempt(TransferAttempt attempt) {
+        return transfer == attempt && !attempt.finished && !closed.get() && !disconnecting;
+    }
+
+    private boolean targetStillCurrent(TransferAttempt attempt) {
+        BackendView current = owner.catalog().find(attempt.target.handle().id()).orElse(null);
+        return current != null && current.handle().equals(attempt.target.handle())
+                && current.owner().equals(attempt.target.owner()) && current.address().equals(attempt.target.address())
+                && attempt.channel != null && attempt.channel.isActive();
+    }
+
+    private void prepareTransfer(TransferAttempt attempt) {
+        try {
+            CompletionStage<PreparedTransfer> preparation = attempt.preparation.prepare(
+                    new TransferPreparingEvent(attempt.context));
+            attempt.coordination = preparation.toCompletableFuture();
+            preparation.whenComplete((prepared, failure) -> frontend.eventLoop().execute(() -> {
+                if (!currentAttempt(attempt)) return;
+                attempt.coordination = null;
+                if (failure != null || prepared == null) {
+                    LOGGER.debug("Transfer preparation failed for {}", view.username(), failure);
+                    failTransfer(attempt, "transfer preparation failed");
+                } else if (!targetStillCurrent(attempt)) {
+                    failTransfer(attempt, "replacement backend registration changed");
+                } else if (prepared.requiresSourceRelease()) {
+                    releaseTransferSource(attempt, prepared);
+                } else {
+                    writeBackendLogin(attempt.channel);
+                }
+            }));
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, "could not prepare backend transfer");
+        }
+    }
+
+    private void releaseTransferSource(TransferAttempt attempt, PreparedTransfer prepared) {
+        Channel source = backend;
+        try {
+            attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
+            attempt.oldBackendBuffer = installTransferBuffer(source, "transfer-old-backend-buffer");
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, "could not stop source gameplay for transfer");
+            closePair();
+            return;
+        }
+        attempt.pauseInProgress = true;
+        CompletionStage<Void> pause = attempt.oldRelay.pause();
+        frontend.eventLoop().execute(attempt.clientBuffer::readUntilRemoved);
+        source.eventLoop().execute(attempt.oldBackendBuffer::readUntilRemoved);
+        pause.whenComplete((ignored, pauseFailure) -> frontend.eventLoop().execute(() -> {
+            attempt.pauseInProgress = false;
+            if (pauseFailure != null) {
+                failTransfer(attempt, "could not drain source relay");
+                closePair();
+                return;
+            }
+            attempt.paused = true;
+            if (!currentAttempt(attempt)) {
+                if (!closed.get() && !disconnecting) resumeAfterFailedTransfer(attempt);
+                return;
+            }
+            if (clientHasPartialFrame()) {
+                failTransfer(attempt, "client packet was incomplete at the transfer boundary");
+                return;
+            }
+            if (!targetStillCurrent(attempt)) {
+                failTransfer(attempt, "replacement backend became unavailable");
+                return;
+            }
+            attempt.oldRelay.detach().whenComplete((removed, detachFailure) -> frontend.eventLoop().execute(() -> {
+                if (detachFailure != null) {
+                    boolean attached = frontend.pipeline().get("raw-relay") != null
+                            && source.pipeline().get("raw-relay") != null;
+                    failTransfer(attempt, "could not detach source relay");
+                    if (!attached) closePair();
+                    return;
+                }
+                attempt.detached = true;
+                if (!currentAttempt(attempt) || !targetStillCurrent(attempt)) {
+                    failTransfer(attempt, "replacement backend closed during source release");
+                    closePair();
+                    return;
+                }
+                // Disarm exact old-channel EOF before closing it; no destination exists yet.
+                attempt.sourceReleased = true;
+                attempt.clientBuffer.discardFrames();
+                attempt.oldBackendBuffer.discardFrames();
+                backend = null;
+                relay = null;
+                view = new PlayerView(identity, view.username(), Optional.empty());
+                owner.playerContextChanged(view);
+                if (source.pipeline().get("transfer-frame-handler") != null) {
+                    source.pipeline().remove("transfer-frame-handler");
+                }
+                source.close().addListener(closedSource -> {
+                    if (!currentAttempt(attempt)) return;
+                    if (!closedSource.isSuccess()) {
+                        failTransfer(attempt, "could not close source connection");
+                        return;
+                    }
+                    confirmSourceReleased(attempt, prepared);
+                });
+            }));
+        }));
+    }
+
+    private void confirmSourceReleased(TransferAttempt attempt, PreparedTransfer prepared) {
+        try {
+            CompletionStage<Void> confirmation = prepared.sourceClosed();
+            attempt.coordination = confirmation.toCompletableFuture();
+            confirmation.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+                if (!currentAttempt(attempt)) return;
+                attempt.coordination = null;
+                if (failure != null) {
+                    LOGGER.debug("Source release confirmation failed for {}", view.username(), failure);
+                    failTransfer(attempt, "source release confirmation failed");
+                } else if (!targetStillCurrent(attempt)) {
+                    failTransfer(attempt, "replacement backend registration changed");
+                } else writeBackendLogin(attempt.channel);
+            }));
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, "could not confirm source release");
         }
     }
 
@@ -1113,6 +1266,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void writeBackendLogin(Channel channel) {
+        transfer.candidate.loginStarted();
         ByteBuf handshakeBody = encodeBackendHandshake(
                 transfer.target.handle().id().value(), transfer.target.owner().instanceGeneration());
         ByteBuf loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
@@ -1186,11 +1340,23 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void candidateReady(TransferAttempt attempt) {
         if (transfer != attempt || attempt.finished || closed.get() || disconnecting) return;
+        if (attempt.preparation != null && !targetStillCurrent(attempt)) {
+            failTransfer(attempt, "replacement backend registration changed during login");
+            return;
+        }
         attempt.cutoverDeadline = frontend.eventLoop().schedule(() -> {
             if (transfer != attempt || attempt.result.isDone()) return;
             attempt.result.complete(TransferResult.failed("replacement backend cutover timed out"));
             closePair();
         }, owner.transferCutoverTimeout().toNanos(), TimeUnit.NANOSECONDS);
+        if (attempt.sourceReleased) {
+            if (clientHasPartialFrame()) {
+                failTransfer(attempt, "client packet was incomplete at replacement cutover");
+                return;
+            }
+            activateCandidate(attempt);
+            return;
+        }
         try {
             attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
             attempt.oldBackendBuffer = installTransferBuffer(backend, "transfer-old-backend-buffer");
@@ -1265,14 +1431,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void activateCandidate(TransferAttempt attempt) {
-        try {
-            attempt.candidate.handOff();
-        } catch (RuntimeException invalid) {
-            failTransfer(attempt, "replacement backend was not ready");
-            closePair();
-            return;
-        }
-        removeHandshakeCodecs(attempt.channel).whenComplete((ignored, failure) ->
+        // Keep READY ownership until removal. A decoder can emit more target frames after
+        // JoinGame in the same read batch; marking HANDED_OFF early would silently drop them.
+        removeHandshakeCodecs(attempt.channel, attempt.candidate::handOff).whenComplete((ignored, failure) ->
                 frontend.eventLoop().execute(() -> {
                     if (failure != null || closed.get() || disconnecting || !attempt.channel.isActive()) {
                         if (disconnecting) return;
@@ -1306,7 +1467,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             return;
         }
         next.ready().whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
-            if (failure != null || closed.get() || disconnecting) {
+            if (failure != null || closed.get() || disconnecting
+                    || (attempt.preparation != null && !targetStillCurrent(attempt))) {
                 if (disconnecting) return;
                 failTransfer(attempt, "replacement relay was not ready");
                 closePair();
@@ -1322,14 +1484,16 @@ final class Session extends ChannelInboundHandlerAdapter {
                 return;
             }
             frontend.writeAndFlush(opening).addListener(write -> frontend.eventLoop().execute(() -> {
-                if (!write.isSuccess() || closed.get() || disconnecting || !attempt.channel.isActive()) {
+                if (!write.isSuccess() || closed.get() || disconnecting || !attempt.channel.isActive()
+                        || (attempt.preparation != null && !targetStillCurrent(attempt))) {
                     if (disconnecting) return;
                     failTransfer(attempt, "could not send replacement world transition");
                     closePair();
                     return;
                 }
                 Channel oldBackend = backend;
-                Optional<String> previousServer = view.currentServer();
+                Optional<String> previousServer = attempt.sourceReleased
+                        ? Optional.of(attempt.context.source().name()) : view.currentServer();
                 PlayObservation oldObservation = playObservation;
                 TransferFrameHandler.State oldFrameState = frameState;
                 backend = attempt.channel;
@@ -1339,7 +1503,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 frameState = attempt.frameState;
                 view = new PlayerView(identity, view.username(), selected.handle().id().value());
                 owner.serverConnected(view, previousServer);
-                oldBackend.close();
+                if (oldBackend != null) oldBackend.close();
                 oldObservation.close();
                 if (oldFrameState != null) oldFrameState.close();
                 try {
@@ -1376,6 +1540,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         transfer = null;
         attempt.finished = true;
         attempt.cutoverDeadline.cancel(false);
+        cancelCoordination(attempt);
         attempt.result.complete(TransferResult.of(TransferStatus.NETWORK_READY));
     }
 
@@ -1444,6 +1609,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 attempt.channel != null && attempt.channel.isActive());
         attempt.finished = true;
         attempt.failureReason = reason;
+        cancelCoordination(attempt);
         if (attempt.channel != null) attempt.channel.close();
         if (attempt.candidate != null) attempt.candidate.close();
         if (attempt.frameState != null) attempt.frameState.close();
@@ -1474,6 +1640,15 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (attempt.cutoverDeadline != null) attempt.cutoverDeadline.cancel(false);
         if (transfer == attempt) transfer = null;
         attempt.result.complete(TransferResult.failed(attempt.failureReason));
+        if (attempt.detached) closePair();
+    }
+
+    private static void cancelCoordination(TransferAttempt attempt) {
+        if (attempt.totalDeadline != null) attempt.totalDeadline.cancel(false);
+        CompletableFuture<?> work = attempt.coordination;
+        attempt.coordination = null;
+        // Cancellation may run arbitrary CompletionStage continuations, never on session I/O.
+        if (work != null) Thread.startVirtualThread(() -> work.cancel(false));
     }
 
     void closePair() {
@@ -1507,6 +1682,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (activeTransfer != null) {
                 transfer = null;
                 activeTransfer.finished = true;
+                cancelCoordination(activeTransfer);
                 if (activeTransfer.cutoverDeadline != null) activeTransfer.cutoverDeadline.cancel(false);
                 if (activeTransfer.channel != null) activeTransfer.channel.close();
                 if (activeTransfer.candidate != null) activeTransfer.candidate.close();
@@ -1587,6 +1763,11 @@ final class Session extends ChannelInboundHandlerAdapter {
         private boolean finished;
         private String failureReason;
         private ScheduledFuture<?> cutoverDeadline;
+        private TransferPreparation preparation;
+        private TransferContext context;
+        private CompletableFuture<?> coordination;
+        private ScheduledFuture<?> totalDeadline;
+        private boolean sourceReleased;
 
         private TransferAttempt(BackendView target,
                                 CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {

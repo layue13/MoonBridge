@@ -6,8 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import dev.moonbridge.api.AccessDecision;
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.api.PlayerView;
+import dev.moonbridge.api.ServerView;
 import java.net.InetSocketAddress;
 import java.util.Optional;
+import java.time.Instant;
+import java.net.URI;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
@@ -51,6 +54,26 @@ class EventsApiTest {
 
         admission.close();
         notification.close();
+    }
+
+    @Test
+    void transferApiCarriesExactImmutableContextAndDecisionCallbacks() {
+        var source = new ServerView("source", URI.create("tcp://127.0.0.1:25565"), java.util.Map.of(), java.util.Map.of());
+        var target = new ServerView("target", URI.create("tcp://127.0.0.1:25566"), java.util.Map.of(), java.util.Map.of());
+        var context = new TransferContext(UUID.randomUUID(), PLAYER.identity(), source, target, 1, 2, 3, 4,
+                Instant.now());
+        var preparing = new TransferPreparingEvent(context);
+        assertEquals(context, preparing.context());
+        assertEquals(new TransferDecision.Allowed(), TransferDecision.allow());
+        assertEquals("busy", ((TransferDecision.Denied) TransferDecision.deny("busy")).reason());
+        java.util.function.Supplier<java.util.concurrent.CompletionStage<Void>> callback =
+                () -> CompletableFuture.completedFuture(null);
+        assertEquals(callback, ((TransferDecision.ReleaseSource) TransferDecision.releaseSource(callback))
+                .afterSourceClosed());
+        assertThrows(IllegalArgumentException.class, () -> TransferDecision.deny(" "));
+        assertThrows(NullPointerException.class, () -> TransferDecision.releaseSource(null));
+        assertThrows(IllegalArgumentException.class, () -> new TransferContext(
+                UUID.randomUUID(), PLAYER.identity(), source, target, 0, 2, 3, 4, Instant.now()));
     }
 
 }

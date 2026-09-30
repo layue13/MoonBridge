@@ -297,9 +297,15 @@ public final class ProxySessionListener implements Players {
     }
 
     boolean hasSubscribers(Class<?> eventType) { return events != null && events.hasSubscribers(eventType); }
+    dev.moonbridge.core.event.TransferPreparation selectTransferPreparation() {
+        return events == null ? null : events.selectTransferPreparation();
+    }
     <R> CompletionStage<R> dispatchEvent(Event<R> event) { return events.dispatch(event); }
-    void serverConnected(PlayerView player, Optional<String> previousServer) {
+    void playerContextChanged(PlayerView player) {
         if (permissions != null) permissions.update(player);
+    }
+    void serverConnected(PlayerView player, Optional<String> previousServer) {
+        playerContextChanged(player);
         if (hasSubscribers(ServerConnectedEvent.class)) events.dispatch(new ServerConnectedEvent(player, previousServer));
     }
     void playerDisconnected(PlayerView player) {

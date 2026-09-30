@@ -12,7 +12,9 @@ package dev.moonbridge.api.event;
  * subject to the same configured deadline, including time waiting in the dispatch queue.
  * Each concrete event defines its result aggregation.
  * Admission events aggregate {@code AccessDecision} results by allowing access when every listener
- * allows it; the first denial denies access. With no listeners, admission is allowed. A listener
+ * allows it; the first denial denies access. Transfer preparation events similarly aggregate
+ * {@link TransferDecision} results; a denial is terminal, and release-source callbacks are retained
+ * in registration order. With no listeners, admission and transfer preparation are allowed. A listener
  * returning a null stage or result, failing, or timing out fails closed. Notification events use
  * {@link Void}; their listener results are ignored.
  *
