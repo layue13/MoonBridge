@@ -23,10 +23,13 @@ public final class UraniumTransferPlugin implements Plugin {
     private PluginContext context;
     private ServerRegistration targetRegistration;
     private boolean returnToOld;
+    private boolean sharedBackendHost;
+    private volatile Thread registrationWorker;
     private volatile Thread worker;
 
     @Override public void onLoad(PluginContext loadedContext) {
         context = loadedContext;
+        sharedBackendHost = Boolean.parseBoolean(context.settings().getOrDefault("sharedBackendHost", "false"));
         int port = Integer.parseInt(context.settings().get("newPort"));
         String returnSetting = context.settings().getOrDefault("returnToOld", "false");
         if (!returnSetting.equals("true") && !returnSetting.equals("false")) {
@@ -56,10 +59,26 @@ public final class UraniumTransferPlugin implements Plugin {
                 }));
             });
         }
-        targetRegistration = context.servers().register(new ServerDefinition("new",
-                URI.create("tcp://127.0.0.1:" + port), Map.of(),
-                Map.of("source", "uranium-smoke-plugin")));
-        context.logger().info("SMOKE_PLUGIN_REGISTER_PASS name=new port={}", port);
+        if (sharedBackendHost) {
+            registrationWorker = Thread.ofVirtual().name("uranium-registration-smoke").start(() -> {
+                try {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+                    while (System.nanoTime() < deadline) {
+                        if (context.servers().find("old").isPresent() && context.servers().find("new").isPresent()) {
+                            context.logger().info("SMOKE_SHARED_HOSTS_READY");
+                            return;
+                        }
+                        Thread.sleep(20);
+                    }
+                    context.logger().error("SMOKE_SHARED_HOSTS_FAILED registration timeout");
+                } catch (InterruptedException stopped) { Thread.currentThread().interrupt(); }
+            });
+        } else {
+            targetRegistration = context.servers().register(new ServerDefinition("new",
+                    URI.create("tcp://127.0.0.1:" + port), Map.of(),
+                    Map.of("source", "uranium-smoke-plugin")));
+            context.logger().info("SMOKE_PLUGIN_REGISTER_PASS name=new port={}", port);
+        }
     }
 
     @Override public Optional<InitialPlacementHandler> initialPlacementHandler() {
@@ -68,7 +87,7 @@ public final class UraniumTransferPlugin implements Plugin {
                     servers.stream().map(server -> server.name()).toList());
             if (servers.stream().noneMatch(server -> server.name().equals("old"))
                     || servers.stream().noneMatch(server -> server.name().equals("new")
-                            && "uranium-smoke-plugin".equals(server.metadata().get("source")))) {
+                            && (sharedBackendHost || "uranium-smoke-plugin".equals(server.metadata().get("source"))))) {
                 return CompletableFuture.completedFuture(PlacementDecision.reject("Missing Uranium smoke backend"));
             }
             worker = Thread.ofVirtual().name("uranium-transfer-smoke").start(() -> transferWhenConnected(player.identity()));
@@ -82,6 +101,7 @@ public final class UraniumTransferPlugin implements Plugin {
             while (System.nanoTime() < deadline) {
                 PlayerView player = context.players().find(identity).orElse(null);
                 if (player != null && player.currentServer().filter("old"::equals).isPresent()) {
+                    if (sharedBackendHost) Thread.sleep(500); // Allow the next Bukkit tick to verify promotion.
                     var result = context.players().transfer(identity, "new").toCompletableFuture()
                             .get(30, TimeUnit.SECONDS);
                     if (result.status() != TransferStatus.NETWORK_READY) {
@@ -116,6 +136,7 @@ public final class UraniumTransferPlugin implements Plugin {
     @Override public void onDisable() {
         Thread current = worker;
         if (current != null) current.interrupt();
+        if (registrationWorker != null) registrationWorker.interrupt();
         if (targetRegistration != null) targetRegistration.unregister();
     }
 }
