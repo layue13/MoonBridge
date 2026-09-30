@@ -5,10 +5,6 @@ param(
     [string]$BackendJavaAgent,
     [switch]$InstalledPlugin,
     [switch]$ReleaseSource,
-    [switch]$AuthenticateEarly,
-    [switch]$ManagedPlayerData,
-    [string]$UraniumApiJar,
-    [string]$BukkitApiJar,
     [switch]$DebugSession,
     [switch]$TraceBackend,
     [switch]$PrismClient,
@@ -20,12 +16,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($ReleaseSource -and -not $InstalledPlugin) { throw '-ReleaseSource requires -InstalledPlugin' }
-if ($AuthenticateEarly -and (-not $InstalledPlugin -or $TraceBackend -or -not $BukkitApiJar)) {
-    throw '-AuthenticateEarly requires -InstalledPlugin and -BukkitApiJar, and cannot use -TraceBackend'
-}
-if ($ManagedPlayerData -and (-not $AuthenticateEarly -or -not $ReturnToOld -or -not $UraniumApiJar -or $PrismClient)) {
-    throw '-ManagedPlayerData requires -AuthenticateEarly, -ReturnToOld, and -UraniumApiJar, with the Netty probe'
-}
 if ($BackendJavaAgent) { $BackendJavaAgent = (Resolve-Path -LiteralPath $BackendJavaAgent).Path }
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
 if ($DebugSession -and -not $InstalledPlugin) { throw '-DebugSession requires -InstalledPlugin' }
@@ -96,8 +86,8 @@ function WaitForPort([int]$port, [System.Diagnostics.Process]$process) {
     throw "Proxy port $port did not open within 15 seconds"
 }
 
-function WaitForProxyLog([string]$path, [string]$pattern, [int]$timeoutSeconds = 5) {
-    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+function WaitForProxyLog([string]$path, [string]$pattern) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
     while ([DateTime]::UtcNow -lt $deadline) {
         if ((Test-Path -LiteralPath $path) -and
             (Select-String -LiteralPath $path -Pattern $pattern -Quiet)) { return }
@@ -108,31 +98,6 @@ function WaitForProxyLog([string]$path, [string]$pattern, [int]$timeoutSeconds =
 
 function StartUranium([string]$directory, [int]$port) {
     Copy-Item -LiteralPath $bundle -Destination $directory -Recurse
-    if ($AuthenticateEarly) {
-        $node = Split-Path -Leaf $directory
-        $plugins = Join-Path $directory 'plugins'
-        $hostConfig = Join-Path $plugins 'MoonBridgeBackend'
-        New-Item -ItemType Directory -Force $plugins, $hostConfig | Out-Null
-        Copy-Item -LiteralPath $hostJar.FullName -Destination $plugins
-        Copy-Item -LiteralPath $earlyProbeJar -Destination $plugins
-        if ($ManagedPlayerData) {
-            Copy-Item -LiteralPath $authorityProbeJar -Destination $plugins
-            $authorityConfig = Join-Path $plugins 'PlayerDataAuthorityAcceptance'
-            New-Item -ItemType Directory -Force $authorityConfig | Out-Null
-            "backendName: $node" | Set-Content -LiteralPath (Join-Path $authorityConfig 'config.yml') -Encoding utf8
-        }
-        "settings:`n  bungeecord: true`n" |
-            Set-Content -LiteralPath (Join-Path $directory 'spigot.yml') -Encoding utf8
-        @"
-proxyHost: 127.0.0.1
-proxyPort: $controlPort
-instanceId: early-$node
-backendName: $node
-gameAddress: "tcp://127.0.0.1:$port"
-keyId: primary
-secret: isolated-early-session-secret-at-least-32-bytes
-"@ | Set-Content -LiteralPath (Join-Path $hostConfig 'config.yml') -Encoding utf8
-    }
     $serverJar = @(Get-ChildItem -LiteralPath $directory -Filter '*-server.jar')
     if ($serverJar.Count -ne 1) { throw "Expected one Uranium server JAR in $directory" }
     @"
@@ -195,37 +160,6 @@ $prismLauncher = $null
 $initialJavawIds = @()
 $clientLaunchAttempted = $false
 try {
-    if ($AuthenticateEarly) {
-        $controlPort = FreePort
-        while ($controlPort -eq $oldPort -or $controlPort -eq $newPort) { $controlPort = FreePort }
-        $distribution = Split-Path -Parent $proxyLib
-        $hostJars = @(Get-ChildItem (Join-Path $distribution 'backend-host') -Filter '*.jar')
-        if ($hostJars.Count -ne 1) { throw 'Expected one shared Bukkit host artifact' }
-        $hostJar = $hostJars[0]
-        $earlyClasses = Join-Path $runDir 'early-classes'
-        New-Item -ItemType Directory -Force $earlyClasses | Out-Null
-        $apiClasspath = Join-Path $distribution 'backend-api/*'
-        $javac8 = Join-Path (Split-Path -Parent $Java8Path) 'javac.exe'
-        & $javac8 -cp "$apiClasspath;$BukkitApiJar" -d $earlyClasses (Join-Path $PSScriptRoot 'EarlySessionAcceptancePlugin.java')
-        if ($LASTEXITCODE -ne 0) { throw 'Early session probe compilation failed' }
-        "name: EarlySessionAcceptance`nmain: dev.moonbridge.smoke.EarlySessionAcceptancePlugin`nversion: 1.0`ndepend: [MoonBridgeBackend]`n" |
-            Set-Content -LiteralPath (Join-Path $earlyClasses 'plugin.yml') -Encoding utf8
-        $earlyProbeJar = Join-Path $runDir 'early-session-acceptance.jar'
-        & jar cf $earlyProbeJar -C $earlyClasses .
-        if ($LASTEXITCODE -ne 0) { throw 'Early session probe packaging failed' }
-        if ($ManagedPlayerData) {
-            $authorityClasses = Join-Path $runDir 'authority-classes'
-            New-Item -ItemType Directory -Force $authorityClasses | Out-Null
-            $libraryClasspath = Join-Path $bundle 'libraries/*'
-            & $javac8 -cp "$UraniumApiJar;$BukkitApiJar;$libraryClasspath" -d $authorityClasses (Join-Path $PSScriptRoot 'PlayerDataAuthorityAcceptancePlugin.java')
-            if ($LASTEXITCODE -ne 0) { throw 'Player data authority probe compilation failed' }
-            "name: PlayerDataAuthorityAcceptance`nmain: dev.moonbridge.smoke.PlayerDataAuthorityAcceptancePlugin`nversion: 1.0`ndepend: [MoonBridgeBackend, EarlySessionAcceptance]`n" |
-                Set-Content -LiteralPath (Join-Path $authorityClasses 'plugin.yml') -Encoding utf8
-            $authorityProbeJar = Join-Path $runDir 'player-data-authority-acceptance.jar'
-            & jar cf $authorityProbeJar -C $authorityClasses .
-            if ($LASTEXITCODE -ne 0) { throw 'Player data authority probe packaging failed' }
-        }
-    }
     $old = StartUranium (Join-Path $runDir 'old') $oldPort
     $servers.Add($old)
     WaitForReady $oldPort $old.Process $old.Directory
@@ -281,34 +215,6 @@ try {
         $pluginDirYaml = $pluginDir.Replace('\', '/')
         $returnToOldSetting = if ($ReturnToOld) { 'true' } else { 'false' }
         $releaseSourceSetting = if ($ReleaseSource) { 'true' } else { 'false' }
-        $sharedHostSetting = if ($AuthenticateEarly) { 'true' } else { 'false' }
-        $backendSettings = @"
-backends:
-  - name: old
-    address: "127.0.0.1:$oldRoutePort"
-"@
-        if ($AuthenticateEarly) {
-            $backendSettings = @"
-backends: []
-backendChannel:
-  listen: "127.0.0.1:$controlPort"
-  leaseSeconds: 30
-  maxConnections: 8
-  clients:
-    early-old:
-      backendName: old
-      keyId: primary
-      secret: isolated-early-session-secret-at-least-32-bytes
-      allowedHosts: [127.0.0.1]
-      allowedNamespaces: [accept]
-    early-new:
-      backendName: new
-      keyId: primary
-      secret: isolated-early-session-secret-at-least-32-bytes
-      allowedHosts: [127.0.0.1]
-      allowedNamespaces: [accept]
-"@
-        }
         @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
@@ -322,8 +228,9 @@ plugins:
       newPort: "$newRoutePort"
       returnToOld: "$returnToOldSetting"
       releaseSource: "$releaseSourceSetting"
-      sharedBackendHost: "$sharedHostSetting"
-$backendSettings
+backends:
+  - name: old
+    address: "127.0.0.1:$oldRoutePort"
 "@ | Set-Content -LiteralPath $config -Encoding utf8
         $java = (Get-Command java.exe -ErrorAction Stop).Source
         $proxyLog = Join-Path $runDir 'proxy.stdout.log'
@@ -348,7 +255,6 @@ $backendSettings
         ) -WindowStyle Hidden -PassThru -RedirectStandardOutput $proxyLog `
           -RedirectStandardError (Join-Path $runDir 'proxy.stderr.log')
         WaitForPort $proxyPort $proxy
-        if ($AuthenticateEarly) { WaitForProxyLog $proxyLog 'SMOKE_SHARED_HOSTS_READY' 60 }
         if ($PrismClient) {
             if (-not (Test-Path -LiteralPath $PrismPath)) { throw "Prism Launcher not found: $PrismPath" }
             $existingSmokeLauncher = @(Get-CimInstance Win32_Process -Filter "Name = 'prismlauncher.exe'" |
@@ -428,7 +334,7 @@ $backendSettings
                 Write-Output 'REAL_URANIUM_PLUGIN_TRANSFER_PASS dynamicRegistration=true status=NETWORK_READY'
             }
         }
-        if (-not $AuthenticateEarly) { WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new' }
+        WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new'
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
         if ($ReturnToOld) { WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY' }
         if ($ReleaseSource) {
@@ -488,35 +394,4 @@ $backendSettings
             Set-Content -LiteralPath (Join-Path $server.Directory 'server.stderr.log')
     }
     Write-Output "Runtime logs: $runDir"
-}
-if ($AuthenticateEarly) {
-    # Bukkit JUL logs reach stdout, while Uranium's latest.log may omit them.
-    # Drain and stop our servers before reading those redirected streams.
-    $expectedOld = if ($ReturnToOld) { 2 } else { 1 }
-    foreach ($item in @(@{ Server = $old; Expected = $expectedOld }, @{ Server = $new; Expected = 1 })) {
-        $log = Join-Path $item.Server.Directory 'server.stdout.log'
-        foreach ($marker in @('EARLY_AUTH_PASS', 'EARLY_PROMOTION_PASS')) {
-            if (@(Select-String -LiteralPath $log -Pattern $marker).Count -ne $item.Expected) {
-                throw "Expected $($item.Expected) $marker markers in $log"
-            }
-        }
-        if (Select-String -LiteralPath $log -Pattern 'EARLY_.*FAILED' -Quiet) { throw "Early session probe failed: $log" }
-    }
-    Write-Output 'REAL_URANIUM_EARLY_SESSION_PASS beforeJoin=true sameBinding=true privateProofRemoved=true'
-}
-if ($ManagedPlayerData) {
-    foreach ($item in @(@{ Server = $old; Expected = 2 }, @{ Server = $new; Expected = 1 })) {
-        $log = Join-Path $item.Server.Directory 'server.stdout.log'
-        foreach ($marker in @('PDA_PROBE_RESTORE_PASS', 'PDA_PROBE_NATIVE_DENIAL_OVERRIDE_PASS', 'PDA_PROBE_POST_JOIN_PASS')) {
-            if (@(Select-String -LiteralPath $log -Pattern $marker).Count -ne $item.Expected) {
-                throw "Expected $($item.Expected) $marker markers in $log"
-            }
-        }
-        if (Select-String -LiteralPath $log -Pattern 'PDA_PROBE_FAIL|failed=true|Exception caught during firing event|NoSuchMethodError|NoClassDefFoundError' -Quiet) { throw "Player authority probe failed: $log" }
-    }
-    $oldLog = Join-Path $old.Directory 'server.stdout.log'
-    foreach ($marker in @('PDA_PROBE_OLD_FILE_PASS', 'PDA_PROBE_FALLBACK_PASS', 'PDA_PROBE_QUIT_SAVE_PASS')) {
-        if (-not (Select-String -LiteralPath $oldLog -Pattern $marker -Quiet)) { throw "Missing $marker in $oldLog" }
-    }
-    Write-Output 'REAL_URANIUM_PLAYER_AUTHORITY_PASS beforeLogin=true staleFileSkipped=true loadDataGuarded=true invalidDimensionFallback=true normalQuitSave=true'
 }
