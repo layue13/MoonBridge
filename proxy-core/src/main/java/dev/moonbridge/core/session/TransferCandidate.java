@@ -28,6 +28,9 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     private final UUID expectedId;
     private final String username;
     private final Listener listener;
+    private final boolean deferLogin;
+    private ChannelHandlerContext context;
+    private boolean loginStarted;
     private final PlayObservation observation = new PlayObservation();
     private final ArrayDeque<ByteBuf> queued = new ArrayDeque<>();
     private Minecraft1710PlayPackets.JoinGame joinGame;
@@ -36,13 +39,30 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     private int queuedBytes;
 
     TransferCandidate(UUID expectedId, String username, Listener listener) {
+        this(expectedId, username, listener, false);
+    }
+
+    TransferCandidate(UUID expectedId, String username, Listener listener, boolean deferLogin) {
         this.expectedId = expectedId;
         this.username = username;
         this.listener = listener;
+        this.deferLogin = deferLogin;
     }
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
-        deadline = ctx.executor().schedule(() -> fail(ctx, "backend login timed out"), 15, TimeUnit.SECONDS);
+        context = ctx;
+        if (!deferLogin) loginStarted();
+    }
+
+    /** Coordinated waits must not consume the destination's login budget. */
+    void loginStarted() {
+        if (loginStarted) return;
+        if (context == null || !context.executor().inEventLoop()) {
+            throw new IllegalStateException("candidate login must start on its event loop");
+        }
+        loginStarted = true;
+        deadline = context.executor().schedule(() -> fail(context, "backend login timed out"),
+                15, TimeUnit.SECONDS);
     }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
@@ -58,6 +78,10 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
                 throw new IllegalArgumentException("invalid backend transfer frame");
             }
             if (state == State.FAILED || state == State.HANDED_OFF) return;
+            if (!loginStarted) {
+                fail(ctx, "backend sent data before login started");
+                return;
+            }
             if (state == State.LOGIN) {
                 int id = ProtocolVarInt.read(packet.duplicate());
                 if (id != 2) {

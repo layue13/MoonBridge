@@ -48,6 +48,30 @@ final class TransferFrameBufferTest {
     }
 
     @Test
+    void discardModeReleasesQueuedFramesAndDropsFutureFramesWithoutReplay() {
+        var buffer = new TransferFrameBuffer(() -> { });
+        var channel = new EmbeddedChannel(buffer);
+        try {
+            ByteBuf queued = Unpooled.wrappedBuffer(new byte[]{1});
+            channel.writeInbound(queued);
+            channel.eventLoop().execute(buffer::discardFrames);
+            channel.runPendingTasks();
+            assertEquals(0, queued.refCnt());
+
+            ByteBuf later = Unpooled.wrappedBuffer(new byte[]{2});
+            channel.writeInbound(later);
+            assertEquals(0, later.refCnt());
+            assertNull(channel.readInbound());
+
+            channel.eventLoop().execute(buffer::drainAndRemove);
+            channel.runPendingTasks();
+            assertNull(channel.readInbound(), "removing the handler must not replay discarded source frames");
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     void exceedingCutoverLimitRejectsTheNewFrame() {
         var overflows = new AtomicInteger();
         var channel = new EmbeddedChannel(new TransferFrameBuffer(overflows::incrementAndGet));

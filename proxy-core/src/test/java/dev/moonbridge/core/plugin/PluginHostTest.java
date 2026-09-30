@@ -11,6 +11,10 @@ import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
+import dev.moonbridge.api.event.SourceReleasedEvent;
+import dev.moonbridge.api.event.TransferContext;
+import dev.moonbridge.api.event.TransferDecision;
+import dev.moonbridge.api.event.TransferPreparingEvent;
 
 import dev.moonbridge.api.CommandInvocation;
 import dev.moonbridge.api.PlacementDecision;
@@ -32,16 +36,19 @@ import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
+import dev.moonbridge.core.event.PreparedTransfer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -125,6 +132,214 @@ class PluginHostTest {
             assertEquals(AccessDecision.deny("Player blocked"), login);
             assertEquals(List.of("first-connection", "second-connection", "first-login:false", "second-login"), calls);
         }
+    }
+
+    @Test
+    void transferPreparationPinsListenersAndRunsReleaseCallbacksInRegistrationOrder() throws Exception {
+        var order = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        TransferContext context = transferContext();
+        var first = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event -> {
+                    order.add("prepare-first");
+                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        assertEquals(context, released.context());
+                        order.add("release-first");
+                        return CompletableFuture.completedFuture(null);
+                    }));
+                });
+            }
+        };
+        var second = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event -> {
+                    order.add("prepare-second");
+                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        assertEquals(context, released.context());
+                        order.add("release-second");
+                        return CompletableFuture.completedFuture(null);
+                    }));
+                });
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(1))) {
+            host.load(List.of(first, second));
+            host.enable();
+            var selected = host.selectTransferPreparation();
+            assertTrue(selected != null);
+            PreparedTransfer prepared = selected.prepare(new TransferPreparingEvent(context))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(prepared.requiresSourceRelease());
+            assertEquals(List.of("prepare-first", "prepare-second"), order);
+            prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertEquals(List.of("prepare-first", "prepare-second", "release-first", "release-second"), order);
+        }
+    }
+
+    @Test
+    void transferSelectionSkipsEmptyCohortsAndFailsWhenPinnedOwnerIsRevoked() throws Exception {
+        try (var empty = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            empty.load(List.of());
+            empty.enable();
+            assertEquals(null, empty.selectTransferPreparation());
+        }
+
+        var subscription = new java.util.concurrent.atomic.AtomicReference<EventSubscription>();
+        var calls = new AtomicInteger();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                subscription.set(pluginContext.events().subscribe(TransferPreparingEvent.class, event -> {
+                    calls.incrementAndGet();
+                    return CompletableFuture.completedFuture(TransferDecision.allow());
+                }));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var selected = host.selectTransferPreparation();
+            subscription.get().close();
+            assertThrows(CompletionException.class, () -> selected.prepare(
+                    new TransferPreparingEvent(transferContext())).toCompletableFuture().join());
+            assertEquals(0, calls.get());
+        }
+    }
+
+    @Test
+    void transferReleaseCallbackCannotOutliveItsOwner() throws Exception {
+        var subscription = new java.util.concurrent.atomic.AtomicReference<EventSubscription>();
+        var invoked = new AtomicInteger();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                subscription.set(pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            invoked.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        }))));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            TransferContext context = transferContext();
+            PreparedTransfer prepared = host.selectTransferPreparation()
+                    .prepare(new TransferPreparingEvent(context)).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            subscription.get().close();
+            assertThrows(CompletionException.class, () -> prepared.sourceReleased(
+                    new SourceReleasedEvent(context)).toCompletableFuture().join());
+            assertEquals(0, invoked.get());
+        }
+    }
+
+    @Test
+    void sourceConfirmationUsesOneDeadlineForTheWholePinnedCohort() throws Exception {
+        var firstStarted = new CountDownLatch(1);
+        var laterCallback = new AtomicInteger();
+        var pending = new CompletableFuture<Void>();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            firstStarted.countDown();
+                            return pending;
+                        })));
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            laterCallback.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        })));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofMillis(80))) {
+            host.load(List.of(plugin));
+            host.enable();
+            TransferContext context = transferContext();
+            PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertThrows(CompletionException.class, () -> prepared.sourceReleased(new SourceReleasedEvent(context))
+                    .toCompletableFuture().join());
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertEquals(0, laterCallback.get());
+        }
+    }
+
+    @Test
+    void cancellationOfSourceConfirmationStopsLaterPinnedCallbacks() throws Exception {
+        var firstStarted = new CountDownLatch(1);
+        var laterCallback = new AtomicInteger();
+        var pending = new CompletableFuture<Void>();
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            firstStarted.countDown();
+                            return pending;
+                        })));
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            laterCallback.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        })));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(5))) {
+            host.load(List.of(plugin));
+            host.enable();
+            TransferContext context = transferContext();
+            PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var confirmation = prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture();
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(confirmation.cancel(false));
+            assertEquals(0, laterCallback.get());
+        }
+    }
+
+    @Test
+    void revokingEarlierRequiredParticipantWhileLaterCallbackWaitsFailsConfirmation() throws Exception {
+        var firstSubscription = new java.util.concurrent.atomic.AtomicReference<EventSubscription>();
+        var laterStarted = new CountDownLatch(1);
+        var laterPending = new CompletableFuture<Void>();
+        var first = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                firstSubscription.set(pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released ->
+                                CompletableFuture.completedFuture(null)))));
+            }
+        };
+        var second = new Plugin() {
+            @Override public void onLoad(PluginContext pluginContext) {
+                pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                            laterStarted.countDown();
+                            return laterPending;
+                        })));
+            }
+        };
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                Duration.ofSeconds(2))) {
+            host.load(List.of(first, second));
+            host.enable();
+            TransferContext context = transferContext();
+            PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var confirmation = prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture();
+            assertTrue(laterStarted.await(1, TimeUnit.SECONDS));
+            firstSubscription.get().close();
+            laterPending.complete(null);
+            assertThrows(CompletionException.class, confirmation::join);
+        }
+    }
+
+    private static TransferContext transferContext() {
+        return new TransferContext(UUID.randomUUID(), PLAYER.identity(),
+                new dev.moonbridge.api.ServerView("source", URI.create("tcp://127.0.0.1:25565"), Map.of(), Map.of()),
+                new dev.moonbridge.api.ServerView("target", URI.create("tcp://127.0.0.1:25566"), Map.of(), Map.of()),
+                1, 2, 3, 4, Instant.now().plusSeconds(10));
     }
 
     @Test

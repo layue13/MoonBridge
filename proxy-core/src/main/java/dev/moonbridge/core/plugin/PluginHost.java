@@ -11,6 +11,9 @@ import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
+import dev.moonbridge.api.event.SourceReleasedEvent;
+import dev.moonbridge.api.event.TransferDecision;
+import dev.moonbridge.api.event.TransferPreparingEvent;
 import dev.moonbridge.messaging.Endpoint;
 import dev.moonbridge.messaging.Message;
 import dev.moonbridge.messaging.MessageKind;
@@ -50,7 +53,9 @@ import dev.moonbridge.core.backend.BackendRegistration;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.control.BackendChannelTransport;
 import dev.moonbridge.core.event.EventDispatcher;
+import dev.moonbridge.core.event.PreparedTransfer;
 import dev.moonbridge.core.permission.PermissionService;
+import dev.moonbridge.core.event.TransferPreparation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,6 +99,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.jar.JarFile;
 
 /** Owns plugin lifecycles and exposes only the proxy services in the plugin API. */
@@ -102,6 +108,14 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final AtomicLong NEXT_HOST_GENERATION = new AtomicLong();
     private static final int MAX_PENDING_COMMAND_COMPLETIONS = 128;
     private static final int MAX_PENDING_COMMAND_EXECUTIONS = 128;
+    private static final int MAX_PENDING_TRANSFER_EVENTS = 128;
+    private static final PreparedTransfer ALLOWED_TRANSFER = new PreparedTransfer() {
+        @Override public boolean requiresSourceRelease() { return false; }
+        @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent event) {
+            Objects.requireNonNull(event, "event");
+            return CompletableFuture.completedFuture(null);
+        }
+    };
     private static final int MAX_COMPLETION_RESULTS = 100;
     // Leave room for bounded protocol encoding overhead beyond suggestion UTF-8 bodies.
     private static final int MAX_COMPLETION_BYTES = 32_000;
@@ -114,6 +128,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final Players players;
     private final UUID proxyEpoch;
     private final Duration placementTimeout;
+    private final Duration eventTimeout;
     private final PermissionService permissionService;
     private final Duration shutdownTimeout;
     private final ThreadPoolExecutor callbacks;
@@ -128,6 +143,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final ScheduledThreadPoolExecutor timer;
     private final AsyncEventDispatcher admissionEvents;
     private final AsyncEventDispatcher notificationEvents;
+    private final AsyncEventDispatcher.EventPolicy<TransferDecision> transferPolicy;
     private final AsyncEventDispatcher.EventPolicy<AccessDecision> admissionPolicy;
     private final AsyncEventDispatcher.EventPolicy<Void> notificationPolicy;
     private final AtomicLong notificationDrops = new AtomicLong();
@@ -140,6 +156,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private ScheduledFuture<?> notificationDropReporter;
     private InitialPlacementHandler placementHandler;
     private volatile Map<Class<?>, List<EventRegistration<?, ?>>> eventListeners = Map.of();
+    private volatile AsyncEventDispatcher transferEvents;
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
         this(catalog, players, placementTimeout, Duration.ofSeconds(5));
@@ -193,6 +210,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         this.proxyEpoch = Objects.requireNonNull(proxyEpoch, "proxyEpoch");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         Objects.requireNonNull(eventTimeout, "eventTimeout");
+        this.eventTimeout = eventTimeout;
         this.permissionService = new PermissionService(eventTimeout);
         this.shutdownTimeout = Objects.requireNonNull(shutdownTimeout, "shutdownTimeout");
         if (placementTimeout.isZero() || placementTimeout.isNegative()) {
@@ -222,6 +240,11 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         this.notificationPolicy = new AsyncEventDispatcher.EventPolicy<>(() -> null, ignored -> true,
                 ignored -> false, true, (event, failure) -> LOGGER.warn("Plugin event listener failed for {}",
                 event.getClass().getName(), failure), 129, true);
+        this.transferPolicy = new AsyncEventDispatcher.EventPolicy<>(TransferDecision::allow,
+                decision -> decision instanceof TransferDecision.Allowed
+                        || decision instanceof TransferDecision.Denied,
+                decision -> decision instanceof TransferDecision.Denied, false, (event, failure) -> { },
+                MAX_PENDING_TRANSFER_EVENTS, false);
         this.admissionEvents = new AsyncEventDispatcher(eventTimeout, accessThreads, accessQueueCapacity,
                 timer, namedThreads("moonbridge-plugin-admission"));
         this.notificationEvents = new AsyncEventDispatcher(eventTimeout, 1, 128,
@@ -363,6 +386,11 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             }
             if (selectedPermissions != null) permissionService.configure(selectedPermissions);
             freezeEventRegistrations();
+            if (eventListeners.getOrDefault(TransferPreparingEvent.class, List.of()).stream()
+                    .anyMatch(EventRegistration::isActive)) {
+                transferEvents = new AsyncEventDispatcher(eventTimeout, 2, 128,
+                        timer, namedThreads("moonbridge-plugin-transfer"));
+            }
             state = State.ENABLED;
             if (eventListeners.containsKey(ServerConnectedEvent.class)
                     || eventListeners.containsKey(PlayerDisconnectedEvent.class)) {
@@ -401,8 +429,125 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             });
             return delivery;
         }
+        if (event instanceof TransferPreparingEvent) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                    "Transfer preparation must use a pinned transfer cohort"));
+        }
         return CompletableFuture.failedFuture(new IllegalArgumentException(
                 "Unsupported event type: " + event.getClass().getName()));
+    }
+
+    @Override
+    public TransferPreparation selectTransferPreparation() {
+        if (state != State.ENABLED) return null;
+        List<EventRegistration<?, ?>> registered = eventListeners.getOrDefault(TransferPreparingEvent.class, List.of());
+        AsyncEventDispatcher dispatcher = transferEvents;
+        if (registered.isEmpty() || dispatcher == null) return null;
+        List<EventRegistration<?, ?>> cohort = registered.stream().filter(EventRegistration::isActive).toList();
+        if (cohort.isEmpty()) return null;
+        return event -> prepareTransfer(dispatcher, cohort, event);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private CompletionStage<PreparedTransfer> prepareTransfer(AsyncEventDispatcher dispatcher,
+            List<EventRegistration<?, ?>> cohort, TransferPreparingEvent event) {
+        Objects.requireNonNull(event, "event");
+        List<PinnedReleaseCallback> callbacks = new ArrayList<>();
+        List<AsyncEventDispatcher.EventHandler<TransferDecision>> handlers = new ArrayList<>(cohort.size());
+        for (EventRegistration<?, ?> raw : cohort) {
+            EventRegistration<TransferPreparingEvent, TransferDecision> registration = (EventRegistration) raw;
+            handlers.add(new AsyncEventDispatcher.EventHandler<>() {
+                @Override public boolean active() { return true; }
+
+                @Override public CompletionStage<TransferDecision> handle(Event<?> ignored) {
+                    registration.requireActive();
+                    CompletionStage<TransferDecision> stage = Objects.requireNonNull(
+                            registration.handle(event), "transfer preparation stage");
+                    return mapCancellable(stage, decision -> {
+                        registration.requireActive();
+                        Objects.requireNonNull(decision, "transfer decision");
+                        if (decision instanceof TransferDecision.Denied) return decision;
+                        if (decision instanceof TransferDecision.ReleaseSource release) {
+                            callbacks.add(new PinnedReleaseCallback(registration, release.handler()));
+                        } else if (!(decision instanceof TransferDecision.Allowed)) {
+                            throw new IllegalStateException("Unsupported transfer decision");
+                        }
+                        return TransferDecision.allow();
+                    });
+                }
+            });
+        }
+        CompletionStage<TransferDecision> dispatched = dispatcher.dispatch(event, handlers, transferPolicy);
+        return mapCancellable(dispatched, decision -> {
+            if (decision instanceof TransferDecision.Denied) {
+                LOGGER.info("Transfer preparation denied for transfer {}", event.context().transferId());
+                throw new IllegalStateException("transfer preparation denied");
+            }
+            List<PinnedReleaseCallback> pinned = List.copyOf(callbacks);
+            if (pinned.isEmpty()) return ALLOWED_TRANSFER;
+            return new PreparedTransfer() {
+                private final AtomicBoolean releaseStarted = new AtomicBoolean();
+
+                @Override public boolean requiresSourceRelease() { return !pinned.isEmpty(); }
+
+                @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent released) {
+                    Objects.requireNonNull(released, "released");
+                    if (!event.context().equals(released.context())) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalArgumentException("source release context does not match transfer"));
+                    }
+                    if (pinned.isEmpty()) return CompletableFuture.completedFuture(null);
+                    if (!releaseStarted.compareAndSet(false, true)) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException("source release callbacks already started"));
+                    }
+                    List<AsyncEventDispatcher.EventHandler<TransferDecision>> releaseHandlers = pinned.stream()
+                            .<AsyncEventDispatcher.EventHandler<TransferDecision>>map(callback ->
+                                    new AsyncEventDispatcher.EventHandler<>() {
+                                        @Override public boolean active() { return true; }
+                                        @Override public CompletionStage<TransferDecision> handle(Event<?> ignored) {
+                                            return mapCancellable(callback.invoke(released),
+                                                    nothing -> TransferDecision.allow());
+                                        }
+                                    }).toList();
+                    CompletionStage<TransferDecision> release = dispatcher.dispatch(event, releaseHandlers,
+                            transferPolicy);
+                    return mapCancellable(release, ignored -> {
+                        pinned.forEach(PinnedReleaseCallback::requireActive);
+                        return null;
+                    });
+                }
+            };
+        });
+    }
+
+    private static <A, B> CompletableFuture<B> mapCancellable(
+            CompletionStage<A> stage, Function<? super A, ? extends B> mapper) {
+        CompletableFuture<A> upstream = stage.toCompletableFuture();
+        Object completionLock = new Object();
+        CompletableFuture<B> mapped = new CompletableFuture<>() {
+            @Override public boolean cancel(boolean mayInterruptIfRunning) {
+                synchronized (completionLock) {
+                    boolean cancelled = super.cancel(mayInterruptIfRunning);
+                    if (cancelled) upstream.cancel(mayInterruptIfRunning);
+                    return cancelled;
+                }
+            }
+        };
+        upstream.whenComplete((value, failure) -> {
+            synchronized (completionLock) {
+                if (mapped.isDone()) return;
+                if (failure != null) mapped.completeExceptionally(failure);
+                else {
+                    try {
+                        mapped.complete(mapper.apply(value));
+                    } catch (Throwable mappingFailure) {
+                        mapped.completeExceptionally(mappingFailure);
+                    }
+                }
+            }
+        });
+        return mapped;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -920,6 +1065,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         // chain can skip the revoked subscriptions and incorrectly finish with allow().
         admissionEvents.close();
         notificationEvents.close();
+        if (transferEvents != null) transferEvents.close();
         localMessaging.close();
         if (notificationDropReporter != null) notificationDropReporter.cancel(false);
         logNotificationDrops();
@@ -1019,7 +1165,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         Objects.requireNonNull(eventType, "eventType");
         Objects.requireNonNull(listener, "listener");
         if (eventType != ConnectionAdmissionEvent.class && eventType != PlayerAdmissionEvent.class
-                && eventType != ServerConnectedEvent.class && eventType != PlayerDisconnectedEvent.class)
+                && eventType != ServerConnectedEvent.class && eventType != PlayerDisconnectedEvent.class
+                && eventType != TransferPreparingEvent.class)
             throw new IllegalArgumentException("Unsupported event type: " + eventType.getName());
         requireEventRegistrationState();
         synchronized (this) {
@@ -1167,7 +1314,35 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return listener.onEvent(eventType.cast(event));
         }
         private boolean isActive() { return active.get() && context.active; }
+        private void requireActive() {
+            if (!isActive()) throw new IllegalStateException("Transfer listener owner is no longer active");
+        }
         @Override public void close() { active.set(false); }
+    }
+
+    private final class PinnedReleaseCallback {
+        private final EventRegistration<TransferPreparingEvent, TransferDecision> registration;
+        private final dev.moonbridge.api.event.SourceReleasedHandler handler;
+
+        private PinnedReleaseCallback(EventRegistration<TransferPreparingEvent, TransferDecision> registration,
+                                      dev.moonbridge.api.event.SourceReleasedHandler handler) {
+            this.registration = registration;
+            this.handler = handler;
+        }
+
+        private CompletionStage<Void> invoke(SourceReleasedEvent event) {
+            registration.requireActive();
+            CompletionStage<Void> stage = Objects.requireNonNull(
+                    handler.onSourceReleased(event), "source release callback stage");
+            return mapCancellable(stage, ignored -> {
+                requireActive();
+                return null;
+            });
+        }
+
+        private void requireActive() {
+            registration.requireActive();
+        }
     }
 
     private static final class LoadedPlugin {

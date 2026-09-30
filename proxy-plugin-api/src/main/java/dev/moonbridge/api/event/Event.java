@@ -9,5 +9,5 @@ package dev.moonbridge.api.event;
  */
 public sealed interface Event<R>
         permits ConnectionAdmissionEvent, PlayerAdmissionEvent, ServerConnectedEvent,
-                PlayerDisconnectedEvent {
+                PlayerDisconnectedEvent, TransferPreparingEvent {
 }

@@ -5,8 +5,10 @@ import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.TransferStatus;
 import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
+import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
 import dev.moonbridge.core.event.EventDispatcher;
+import dev.moonbridge.core.event.PreparedTransfer;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendHandle;
@@ -165,6 +167,7 @@ final class SessionTransferTest {
         var catalog = new InMemoryBackendCatalog();
         try (ServerSocket oldServer = server(); ServerSocket newServer = server()) {
             var oldReceived = new CompletableFuture<Void>();
+            var oldClosed = new CompletableFuture<Void>();
             var newClosed = new CompletableFuture<Void>();
             backendThread(oldServer, () -> {
                 try (Socket socket = oldServer.accept()) {
@@ -176,24 +179,21 @@ final class SessionTransferTest {
                     assertArrayEquals(new byte[]{0x01, 0x66}, readFrame(input));
                     oldReceived.complete(null);
                     while (input.read() != -1) { }
-                } catch (Throwable failure) { oldReceived.completeExceptionally(failure); }
+                    oldClosed.complete(null);
+                } catch (Throwable failure) { oldReceived.completeExceptionally(failure); oldClosed.completeExceptionally(failure); }
             });
             backendThread(newServer, () -> {
                 try (Socket socket = newServer.accept()) {
                     socket.setSoTimeout(5000);
-                    var input = new DataInputStream(socket.getInputStream());
-                    var output = new DataOutputStream(socket.getOutputStream());
-                    acceptHandshakeAndLogin(input, output);
-                    sendLoginSuccess(output);
-                    sendJoinGame(output, 0, 200);
-                    writeFrame(output, new byte[]{0x08});
-                    assertEquals(-1, input.read());
+                    assertEquals(-1, socket.getInputStream().read(),
+                            "a rejected pre-detach candidate must not receive even a Login Start");
                     newClosed.complete(null);
                 } catch (Throwable failure) { newClosed.completeExceptionally(failure); }
             });
             register(catalog, "old", oldServer);
             register(catalog, "new", newServer);
             var listener = listener(catalog);
+            listener.setEvents(releaseSourceEvents(), Duration.ofSeconds(5));
             try {
                 int port = ((InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress()).getPort();
@@ -273,6 +273,8 @@ final class SessionTransferTest {
                             Unpooled.wrappedBuffer(new byte[]{0x66}))).get(5, TimeUnit.SECONDS);
                     oldReceived.get(5, TimeUnit.SECONDS);
                     newClosed.get(5, TimeUnit.SECONDS);
+                    assertThrows(TimeoutException.class, () -> oldClosed.get(150, TimeUnit.MILLISECONDS),
+                            "partial-frame rejection occurs before source close");
                 }
             } finally { listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS); }
         }
@@ -1019,6 +1021,7 @@ final class SessionTransferTest {
             register(catalog, "old", oldServer);
             register(catalog, "new", newServer);
             var listener = listener(catalog);
+            listener.setEvents(releaseSourceEvents(), Duration.ofSeconds(5));
             try {
                 var bound = (InetSocketAddress) listener.start().toCompletableFuture()
                         .get(5, TimeUnit.SECONDS).localAddress();
@@ -1503,6 +1506,23 @@ final class SessionTransferTest {
         var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
         listener.setPlacement(ignored -> CompletableFuture.completedFuture(Optional.of(PlacementDecision.select("old"))));
         return listener;
+    }
+
+    private static EventDispatcher releaseSourceEvents() {
+        return new EventDispatcher() {
+            @Override public boolean hasSubscribers(Class<?> eventType) { return false; }
+            @Override public <R> CompletionStage<R> dispatch(Event<R> event) {
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override public dev.moonbridge.core.event.TransferPreparation selectTransferPreparation() {
+                return ignored -> CompletableFuture.completedFuture(new PreparedTransfer() {
+                    @Override public boolean requiresSourceRelease() { return true; }
+                    @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent event) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                });
+            }
+        };
     }
 
     private static dev.moonbridge.api.PlayerView awaitPlayer(ProxySessionListener listener) throws Exception {

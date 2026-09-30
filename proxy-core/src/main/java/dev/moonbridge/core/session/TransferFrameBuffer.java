@@ -20,6 +20,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     private int bytes;
     private boolean draining;
     private boolean reading;
+    private boolean discard;
 
     TransferFrameBuffer(Runnable closeSession) {
         this.closeSession = closeSession;
@@ -49,6 +50,10 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
             closeSession.run();
             return;
         }
+        if (discard) {
+            frame.release();
+            return;
+        }
         int size = frame.readableBytes();
         if (frames.size() >= MAX_MESSAGES || size > MAX_BYTES - bytes) {
             frame.release();
@@ -76,6 +81,16 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
             releaseFrames();
             ctx.pipeline().remove(this);
         }
+    }
+
+    /** After irreversible source detach, discard queued and future old-world frames. */
+    void discardFrames() {
+        var ctx = context;
+        if (ctx == null || !ctx.executor().inEventLoop()) {
+            throw new IllegalStateException("transfer buffer must switch mode on its channel event loop");
+        }
+        discard = true;
+        releaseFrames();
     }
 
     @Override public void handlerRemoved(ChannelHandlerContext ctx) {

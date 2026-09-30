@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory)][string]$BundlePath,
     [string]$Java8Path = 'C:\Program Files\Zulu\zulu-8\bin\java.exe',
+    [string]$BackendJavaAgent,
     [switch]$InstalledPlugin,
+    [switch]$ReleaseSource,
     [switch]$DebugSession,
     [switch]$TraceBackend,
     [switch]$PrismClient,
@@ -13,6 +15,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ReleaseSource -and -not $InstalledPlugin) { throw '-ReleaseSource requires -InstalledPlugin' }
+if ($BackendJavaAgent) { $BackendJavaAgent = (Resolve-Path -LiteralPath $BackendJavaAgent).Path }
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
 if ($DebugSession -and -not $InstalledPlugin) { throw '-DebugSession requires -InstalledPlugin' }
 if ($TraceBackend -and -not $InstalledPlugin) { throw '-TraceBackend requires -InstalledPlugin' }
@@ -128,6 +132,9 @@ motd=MoonBridge Uranium transfer smoke
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    if ($BackendJavaAgent) {
+        $info.ArgumentList.Add("-javaagent:${BackendJavaAgent}=$(Join-Path $directory 'class-dump')")
+    }
     foreach ($argument in @('-Xms512m', '-Xmx1024m', '-jar', $serverJar[0].Name, 'nogui')) {
         $info.ArgumentList.Add($argument)
     }
@@ -207,6 +214,7 @@ try {
         $config = Join-Path $runDir 'moonbridge.yml'
         $pluginDirYaml = $pluginDir.Replace('\', '/')
         $returnToOldSetting = if ($ReturnToOld) { 'true' } else { 'false' }
+        $releaseSourceSetting = if ($ReleaseSource) { 'true' } else { 'false' }
         @"
 listen: "127.0.0.1:$proxyPort"
 authentication: OFFLINE
@@ -219,6 +227,7 @@ plugins:
     dev.moonbridge.smoke.UraniumTransferPlugin:
       newPort: "$newRoutePort"
       returnToOld: "$returnToOldSetting"
+      releaseSource: "$releaseSourceSetting"
 backends:
   - name: old
     address: "127.0.0.1:$oldRoutePort"
@@ -328,6 +337,12 @@ backends:
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_REGISTER_PASS name=new'
         WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_TRANSFER_PASS status=NETWORK_READY'
         if ($ReturnToOld) { WaitForProxyLog $proxyLog 'SMOKE_PLUGIN_RETURN_PASS status=NETWORK_READY' }
+        if ($ReleaseSource) {
+            WaitForProxyLog $proxyLog 'SMOKE_PREPARATION_PASS'
+            WaitForProxyLog $proxyLog 'SMOKE_SOURCE_RELEASED_PASS'
+            WaitForProxyLog $proxyLog 'SMOKE_SOURCE_CONFIRMATION_PASS'
+            Write-Output 'REAL_URANIUM_SOURCE_RELEASE_PASS asyncBarrier=true persistenceVerified=false'
+        }
     } else {
         & java -cp "$classes;$classpath" dev.moonbridge.smoke.UraniumTransferProbe $oldPort $newPort
         if ($LASTEXITCODE -ne 0) { throw "Uranium transfer probe failed: $LASTEXITCODE" }
