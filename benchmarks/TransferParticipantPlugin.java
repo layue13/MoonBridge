@@ -25,7 +25,7 @@ public final class TransferParticipantPlugin implements Plugin {
             context.events().subscribe(TransferPreparingEvent.class, event -> {
                 CompletableFuture<TransferDecision> result = new CompletableFuture<>();
                 completeAfter(delayMillis, () -> result.complete(releaseSource
-                        ? TransferDecision.releaseSource(ignored -> delayedVoid(delayMillis))
+                        ? TransferDecision.releaseSource(() -> delayedVoid(delayMillis))
                         : TransferDecision.allow()));
                 return result;
             });

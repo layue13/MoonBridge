@@ -1,6 +1,8 @@
 package dev.moonbridge.api.event;
 
 import java.util.Objects;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 /** One listener's response to a transfer preparation request. Denial detail is not sent to clients. */
 public sealed interface TransferDecision permits TransferDecision.Allowed,
@@ -13,8 +15,13 @@ public sealed interface TransferDecision permits TransferDecision.Allowed,
         return new Denied(reason);
     }
 
-    static TransferDecision releaseSource(SourceReleasedHandler handler) {
-        return new ReleaseSource(handler);
+    /**
+     * Runs the supplied asynchronous confirmation after the proxy has closed this transfer's
+     * exact source backend socket. This does not mean the backend fired a game Quit event or
+     * persisted state; successful completion confirms the participant's own durable boundary.
+     */
+    static TransferDecision releaseSource(Supplier<CompletionStage<Void>> afterSourceClosed) {
+        return new ReleaseSource(afterSourceClosed);
     }
 
     record Allowed() implements TransferDecision {
@@ -30,9 +37,9 @@ public sealed interface TransferDecision permits TransferDecision.Allowed,
         }
     }
 
-    record ReleaseSource(SourceReleasedHandler handler) implements TransferDecision {
+    record ReleaseSource(Supplier<CompletionStage<Void>> afterSourceClosed) implements TransferDecision {
         public ReleaseSource {
-            Objects.requireNonNull(handler, "handler");
+            Objects.requireNonNull(afterSourceClosed, "afterSourceClosed");
         }
     }
 }

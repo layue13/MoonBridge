@@ -11,7 +11,6 @@ import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
-import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.api.event.TransferDecision;
 import dev.moonbridge.api.event.TransferPreparingEvent;
 import dev.moonbridge.messaging.Endpoint;
@@ -111,8 +110,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private static final int MAX_PENDING_TRANSFER_EVENTS = 128;
     private static final PreparedTransfer ALLOWED_TRANSFER = new PreparedTransfer() {
         @Override public boolean requiresSourceRelease() { return false; }
-        @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent event) {
-            Objects.requireNonNull(event, "event");
+        @Override public CompletionStage<Void> sourceClosed() {
             return CompletableFuture.completedFuture(null);
         }
     };
@@ -468,7 +466,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                         Objects.requireNonNull(decision, "transfer decision");
                         if (decision instanceof TransferDecision.Denied) return decision;
                         if (decision instanceof TransferDecision.ReleaseSource release) {
-                            callbacks.add(new PinnedReleaseCallback(registration, release.handler()));
+                            callbacks.add(new PinnedReleaseCallback(registration, release.afterSourceClosed()));
                         } else if (!(decision instanceof TransferDecision.Allowed)) {
                             throw new IllegalStateException("Unsupported transfer decision");
                         }
@@ -490,23 +488,18 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
                 @Override public boolean requiresSourceRelease() { return !pinned.isEmpty(); }
 
-                @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent released) {
-                    Objects.requireNonNull(released, "released");
-                    if (!event.context().equals(released.context())) {
-                        return CompletableFuture.failedFuture(
-                                new IllegalArgumentException("source release context does not match transfer"));
-                    }
+                @Override public CompletionStage<Void> sourceClosed() {
                     if (pinned.isEmpty()) return CompletableFuture.completedFuture(null);
                     if (!releaseStarted.compareAndSet(false, true)) {
                         return CompletableFuture.failedFuture(
-                                new IllegalStateException("source release callbacks already started"));
+                            new IllegalStateException("source release callbacks already started"));
                     }
                     List<AsyncEventDispatcher.EventHandler<TransferDecision>> releaseHandlers = pinned.stream()
                             .<AsyncEventDispatcher.EventHandler<TransferDecision>>map(callback ->
                                     new AsyncEventDispatcher.EventHandler<>() {
                                         @Override public boolean active() { return true; }
                                         @Override public CompletionStage<TransferDecision> handle(Event<?> ignored) {
-                                            return mapCancellable(callback.invoke(released),
+                                            return mapCancellable(callback.invoke(),
                                                     nothing -> TransferDecision.allow());
                                         }
                                     }).toList();
@@ -1322,18 +1315,18 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
 
     private final class PinnedReleaseCallback {
         private final EventRegistration<TransferPreparingEvent, TransferDecision> registration;
-        private final dev.moonbridge.api.event.SourceReleasedHandler handler;
+        private final java.util.function.Supplier<CompletionStage<Void>> afterSourceClosed;
 
         private PinnedReleaseCallback(EventRegistration<TransferPreparingEvent, TransferDecision> registration,
-                                      dev.moonbridge.api.event.SourceReleasedHandler handler) {
+                                      java.util.function.Supplier<CompletionStage<Void>> afterSourceClosed) {
             this.registration = registration;
-            this.handler = handler;
+            this.afterSourceClosed = afterSourceClosed;
         }
 
-        private CompletionStage<Void> invoke(SourceReleasedEvent event) {
+        private CompletionStage<Void> invoke() {
             registration.requireActive();
             CompletionStage<Void> stage = Objects.requireNonNull(
-                    handler.onSourceReleased(event), "source release callback stage");
+                    afterSourceClosed.get(), "source release callback stage");
             return mapCancellable(stage, ignored -> {
                 requireActive();
                 return null;

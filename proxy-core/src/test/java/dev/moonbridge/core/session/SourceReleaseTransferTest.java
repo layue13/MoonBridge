@@ -4,8 +4,8 @@ import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.PlayerView;
 import dev.moonbridge.api.TransferStatus;
 import dev.moonbridge.api.event.Event;
-import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.api.event.TransferDecision;
+import dev.moonbridge.api.event.TransferContext;
 import dev.moonbridge.api.event.TransferPreparingEvent;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendOwner;
@@ -40,6 +40,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,20 +57,22 @@ final class SourceReleaseTransferTest {
     void waitsForSaveAcknowledgementAfterExactSourceEofBeforeTargetLoginAndDiscardsFrames() throws Exception {
         var acknowledgement = new CompletableFuture<Void>();
         var callbackEntered = new CompletableFuture<Void>();
-        var releasedEvent = new AtomicReference<SourceReleasedEvent>();
-        try (TransferFixture fixture = new TransferFixture(preparation(releaseSource(event -> {
-            releasedEvent.set(event);
-            callbackEntered.complete(null);
-            return acknowledgement;
-        })))) {
+        var preparedContext = new AtomicReference<TransferContext>();
+        try (TransferFixture fixture = new TransferFixture(event -> {
+            preparedContext.set(event.context());
+            return CompletableFuture.completedFuture(releaseSource(() -> {
+                callbackEntered.complete(null);
+                return acknowledgement;
+            }));
+        })) {
             try (Client client = fixture.login()) {
                 PlayerView player = fixture.player();
                 var transfer = fixture.listener.transfer(player.identity(), "target").toCompletableFuture();
                 fixture.targetAccepted.get(5, TimeUnit.SECONDS);
                 fixture.sourceClosed.get(5, TimeUnit.SECONDS);
                 callbackEntered.get(5, TimeUnit.SECONDS);
-                assertNotNull(releasedEvent.get(), "source release callback must follow the source socket close");
-                assertEquals("source", releasedEvent.get().context().source().name());
+                assertNotNull(preparedContext.get(), "preparation context must be captured for the close callback");
+                assertEquals("source", preparedContext.get().source().name());
                 PlayerView releasedView = fixture.listener.find(player.identity()).orElseThrow();
                 assertTrue(releasedView.currentServer().isEmpty(), "source EOF must clear the current backend view");
                 assertTrue(fixture.listener.online().stream().anyMatch(online -> online.identity().equals(player.identity())),
@@ -122,7 +125,7 @@ final class SourceReleaseTransferTest {
     @Test
     void sourceReleaseCallbackFailureDisconnectsAfterSourceEof() throws Exception {
         try (TransferFixture fixture = new TransferFixture(preparation(releaseSource(
-                event -> CompletableFuture.failedFuture(new IllegalStateException("save failed")))))) {
+                () -> CompletableFuture.failedFuture(new IllegalStateException("save failed")))))) {
             try (Client client = fixture.login()) {
                 PlayerView player = fixture.player();
                 var transfer = fixture.listener.transfer(player.identity(), "target").toCompletableFuture();
@@ -146,7 +149,7 @@ final class SourceReleaseTransferTest {
                 fixture.targetAccepted.get(5, TimeUnit.SECONDS);
                 client.close();
                 fixture.sourceClosed.get(5, TimeUnit.SECONDS);
-                pending.complete(releaseSource(event -> {
+                pending.complete(releaseSource(() -> {
                     sourceReleasedCalls.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }));
@@ -164,7 +167,7 @@ final class SourceReleaseTransferTest {
         var acknowledgement = new CompletableFuture<Void>();
         var callbackEntered = new CompletableFuture<Void>();
         try (TransferFixture fixture = new TransferFixture(preparation(releaseSource(
-                event -> { callbackEntered.complete(null); return acknowledgement; })))) {
+                () -> { callbackEntered.complete(null); return acknowledgement; })))) {
             try (Client client = fixture.login()) {
                 PlayerView player = fixture.player();
                 var transfer = fixture.listener.transfer(player.identity(), "target").toCompletableFuture();
@@ -189,7 +192,7 @@ final class SourceReleaseTransferTest {
             if (acknowledgement.isCancelled()) cancelled.complete(null);
         });
         try (TransferFixture fixture = new TransferFixture(preparation(releaseSource(
-                event -> { callbackEntered.complete(null); return acknowledgement; })))) {
+                () -> { callbackEntered.complete(null); return acknowledgement; })))) {
             Client client = fixture.login();
             try {
                 PlayerView player = fixture.player();
@@ -240,7 +243,7 @@ final class SourceReleaseTransferTest {
             if (acknowledgement.isCancelled()) cancelled.complete(null);
         });
         try (TransferFixture fixture = new TransferFixture(preparation(releaseSource(
-                event -> { callbackEntered.complete(null); return acknowledgement; })))) {
+                () -> { callbackEntered.complete(null); return acknowledgement; })))) {
             try (Client client = fixture.login()) {
                 PlayerView player = fixture.player();
                 var transfer = fixture.listener.transfer(player.identity(), "target").toCompletableFuture();
@@ -257,18 +260,13 @@ final class SourceReleaseTransferTest {
         }
     }
 
-    private static PreparedTransfer releaseSource(SourceReleasedHandler handler) {
+    private static PreparedTransfer releaseSource(Supplier<CompletionStage<Void>> afterSourceClosed) {
         return new PreparedTransfer() {
             @Override public boolean requiresSourceRelease() { return true; }
-            @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent event) {
-                return handler.onSourceReleased(event);
+            @Override public CompletionStage<Void> sourceClosed() {
+                return afterSourceClosed.get();
             }
         };
-    }
-
-    @FunctionalInterface
-    private interface SourceReleasedHandler {
-        CompletionStage<Void> onSourceReleased(SourceReleasedEvent event);
     }
 
     private static TransferPreparation preparation(PreparedTransfer prepared) {

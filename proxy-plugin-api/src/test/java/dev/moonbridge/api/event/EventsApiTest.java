@@ -63,14 +63,15 @@ class EventsApiTest {
         var context = new TransferContext(UUID.randomUUID(), PLAYER.identity(), source, target, 1, 2, 3, 4,
                 Instant.now());
         var preparing = new TransferPreparingEvent(context);
-        var released = new SourceReleasedEvent(context);
         assertEquals(context, preparing.context());
-        assertEquals(context, released.context());
         assertEquals(new TransferDecision.Allowed(), TransferDecision.allow());
         assertEquals("busy", ((TransferDecision.Denied) TransferDecision.deny("busy")).reason());
-        SourceReleasedHandler callback = event -> CompletableFuture.completedFuture(null);
-        assertEquals(callback, ((TransferDecision.ReleaseSource) TransferDecision.releaseSource(callback)).handler());
+        java.util.function.Supplier<java.util.concurrent.CompletionStage<Void>> callback =
+                () -> CompletableFuture.completedFuture(null);
+        assertEquals(callback, ((TransferDecision.ReleaseSource) TransferDecision.releaseSource(callback))
+                .afterSourceClosed());
         assertThrows(IllegalArgumentException.class, () -> TransferDecision.deny(" "));
+        assertThrows(NullPointerException.class, () -> TransferDecision.releaseSource(null));
         assertThrows(IllegalArgumentException.class, () -> new TransferContext(
                 UUID.randomUUID(), PLAYER.identity(), source, target, 0, 2, 3, 4, Instant.now()));
     }

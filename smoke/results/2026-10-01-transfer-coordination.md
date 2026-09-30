@@ -39,6 +39,20 @@ The return confirmation was at 02:25:05.378; destination login frames followed a
 
 Local raw evidence: `build/local-uranium-transfer-66c44a7f4ab4411a88ea09f4cc1fa231/`, including `proxy.stdout.log`, backend logs and final-defined class dumps. These disposable runtime files are excluded from Git.
 
+## API subtraction recheck
+
+The redundant public `SourceReleasedEvent` and `SourceReleasedHandler` were removed. A preparing participant now returns `releaseSource(Supplier<CompletionStage<Void>>)`; its closure captures the original immutable preparation context. The internal prepared transfer invokes `sourceClosed()` once after its exact local source socket closes. Remote EOF processing and backend persistence still require the participant's own confirmation.
+
+The revised implementation passed the full `check :proxy-core:installDist` again in 6 minutes 30 seconds: 49 suites, 309 tests, zero failures/errors/skips, including installed artifact and LuckPerms acceptance checks. Both benchmark Java sources compiled against the revised installed distribution; the earlier performance measurements were not rerun for this API-only subtraction.
+
+The real Uranium A→B→A smoke was repeated with the revised external plugin, the same server artifact and no instrumentation agent:
+
+```powershell
+./smoke/local-uranium-transfer.ps1 -BundlePath build/uranium-event-bundle -InstalledPlugin -ReleaseSource -ReturnToOld -DebugSession
+```
+
+All six pass markers were present, including `asyncBarrier=true persistenceVerified=false`, both `NETWORK_READY` transfers and two KeepAlives after return. Raw evidence: `build/local-uranium-transfer-25e5fc428e874f3cbaf1618888f34f09/`. The script stopped its own processes; no matching Java process remained. This still does not verify PlayerDataSQL persistence or additional gameplay mods.
+
 ## Limits
 
 The synthetic protocol client is not a real Prism visual/gameplay test. The smoke callback confirms only its deliberate asynchronous barrier; it does not observe a database commit. Additional mod inventories, a production Uranium build, arbitrary plugin behavior and PlayerDataSQL crash recovery are outside this result. Performance evidence and its uncertainty are recorded separately in [the benchmark report](../../benchmarks/results/transfer-coordination-validation.md).

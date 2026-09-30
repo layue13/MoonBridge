@@ -5,7 +5,6 @@ import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.TransferStatus;
 import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
-import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
 import dev.moonbridge.core.event.EventDispatcher;
 import dev.moonbridge.core.event.PreparedTransfer;
@@ -1517,7 +1516,7 @@ final class SessionTransferTest {
             @Override public dev.moonbridge.core.event.TransferPreparation selectTransferPreparation() {
                 return ignored -> CompletableFuture.completedFuture(new PreparedTransfer() {
                     @Override public boolean requiresSourceRelease() { return true; }
-                    @Override public CompletionStage<Void> sourceReleased(SourceReleasedEvent event) {
+                    @Override public CompletionStage<Void> sourceClosed() {
                         return CompletableFuture.completedFuture(null);
                     }
                 });

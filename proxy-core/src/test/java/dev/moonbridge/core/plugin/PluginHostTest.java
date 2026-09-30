@@ -11,7 +11,6 @@ import dev.moonbridge.api.event.Events;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
-import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.api.event.TransferContext;
 import dev.moonbridge.api.event.TransferDecision;
 import dev.moonbridge.api.event.TransferPreparingEvent;
@@ -142,8 +141,8 @@ class PluginHostTest {
             @Override public void onLoad(PluginContext pluginContext) {
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event -> {
                     order.add("prepare-first");
-                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
-                        assertEquals(context, released.context());
+                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
+                        assertEquals(context, event.context());
                         order.add("release-first");
                         return CompletableFuture.completedFuture(null);
                     }));
@@ -154,8 +153,8 @@ class PluginHostTest {
             @Override public void onLoad(PluginContext pluginContext) {
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event -> {
                     order.add("prepare-second");
-                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
-                        assertEquals(context, released.context());
+                    return CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
+                        assertEquals(context, event.context());
                         order.add("release-second");
                         return CompletableFuture.completedFuture(null);
                     }));
@@ -172,8 +171,9 @@ class PluginHostTest {
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertTrue(prepared.requiresSourceRelease());
             assertEquals(List.of("prepare-first", "prepare-second"), order);
-            prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture()
-                    .get(5, TimeUnit.SECONDS);
+            prepared.sourceClosed().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(List.of("prepare-first", "prepare-second", "release-first", "release-second"), order);
+            assertThrows(CompletionException.class, () -> prepared.sourceClosed().toCompletableFuture().join());
             assertEquals(List.of("prepare-first", "prepare-second", "release-first", "release-second"), order);
         }
     }
@@ -214,7 +214,7 @@ class PluginHostTest {
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext pluginContext) {
                 subscription.set(pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             invoked.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         }))));
@@ -227,8 +227,7 @@ class PluginHostTest {
             PreparedTransfer prepared = host.selectTransferPreparation()
                     .prepare(new TransferPreparingEvent(context)).toCompletableFuture().get(5, TimeUnit.SECONDS);
             subscription.get().close();
-            assertThrows(CompletionException.class, () -> prepared.sourceReleased(
-                    new SourceReleasedEvent(context)).toCompletableFuture().join());
+            assertThrows(CompletionException.class, () -> prepared.sourceClosed().toCompletableFuture().join());
             assertEquals(0, invoked.get());
         }
     }
@@ -241,12 +240,12 @@ class PluginHostTest {
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext pluginContext) {
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             firstStarted.countDown();
                             return pending;
                         })));
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             laterCallback.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         })));
@@ -259,8 +258,7 @@ class PluginHostTest {
             TransferContext context = transferContext();
             PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertThrows(CompletionException.class, () -> prepared.sourceReleased(new SourceReleasedEvent(context))
-                    .toCompletableFuture().join());
+            assertThrows(CompletionException.class, () -> prepared.sourceClosed().toCompletableFuture().join());
             assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
             assertEquals(0, laterCallback.get());
         }
@@ -274,12 +272,12 @@ class PluginHostTest {
         var plugin = new Plugin() {
             @Override public void onLoad(PluginContext pluginContext) {
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             firstStarted.countDown();
                             return pending;
                         })));
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             laterCallback.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         })));
@@ -292,7 +290,7 @@ class PluginHostTest {
             TransferContext context = transferContext();
             PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var confirmation = prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture();
+            var confirmation = prepared.sourceClosed().toCompletableFuture();
             assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
             assertTrue(confirmation.cancel(false));
             assertEquals(0, laterCallback.get());
@@ -307,14 +305,14 @@ class PluginHostTest {
         var first = new Plugin() {
             @Override public void onLoad(PluginContext pluginContext) {
                 firstSubscription.set(pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released ->
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() ->
                                 CompletableFuture.completedFuture(null)))));
             }
         };
         var second = new Plugin() {
             @Override public void onLoad(PluginContext pluginContext) {
                 pluginContext.events().subscribe(TransferPreparingEvent.class, event ->
-                        CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
+                        CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
                             laterStarted.countDown();
                             return laterPending;
                         })));
@@ -327,7 +325,7 @@ class PluginHostTest {
             TransferContext context = transferContext();
             PreparedTransfer prepared = host.selectTransferPreparation().prepare(new TransferPreparingEvent(context))
                     .toCompletableFuture().get(5, TimeUnit.SECONDS);
-            var confirmation = prepared.sourceReleased(new SourceReleasedEvent(context)).toCompletableFuture();
+            var confirmation = prepared.sourceClosed().toCompletableFuture();
             assertTrue(laterStarted.await(1, TimeUnit.SECONDS));
             firstSubscription.get().close();
             laterPending.complete(null);

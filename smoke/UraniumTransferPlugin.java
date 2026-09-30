@@ -39,18 +39,19 @@ public final class UraniumTransferPlugin implements Plugin {
         }
         if (Boolean.parseBoolean(releaseSetting)) {
             context.events().subscribe(TransferPreparingEvent.class, preparing -> {
+                var transferContext = preparing.context();
                 context.logger().info("SMOKE_PREPARATION_PASS source={} target={} transfer={}",
-                        preparing.context().source().name(), preparing.context().target().name(),
-                        preparing.context().transferId());
-                return CompletableFuture.completedFuture(TransferDecision.releaseSource(released -> {
-                    PlayerView waiting = context.players().find(released.context().player()).orElseThrow();
+                        transferContext.source().name(), transferContext.target().name(),
+                        transferContext.transferId());
+                return CompletableFuture.completedFuture(TransferDecision.releaseSource(() -> {
+                    PlayerView waiting = context.players().find(transferContext.player()).orElseThrow();
                     if (waiting.currentServer().isPresent()) {
                         return CompletableFuture.failedFuture(new AssertionError("released source still current"));
                     }
-                    context.logger().info("SMOKE_SOURCE_RELEASED_PASS transfer={}", released.context().transferId());
+                    context.logger().info("SMOKE_SOURCE_RELEASED_PASS transfer={}", transferContext.transferId());
                     // Exercise a genuinely asynchronous barrier; this smoke does not certify a database save.
                     return CompletableFuture.runAsync(() -> context.logger().info(
-                            "SMOKE_SOURCE_CONFIRMATION_PASS transfer={}", released.context().transferId()),
+                            "SMOKE_SOURCE_CONFIRMATION_PASS transfer={}", transferContext.transferId()),
                             CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS));
                 }));
             });

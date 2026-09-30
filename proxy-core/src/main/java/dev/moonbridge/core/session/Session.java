@@ -5,7 +5,6 @@ import dev.moonbridge.api.AccessDecision;
 import dev.moonbridge.api.ServerView;
 import dev.moonbridge.api.event.TransferContext;
 import dev.moonbridge.api.event.TransferPreparingEvent;
-import dev.moonbridge.api.event.SourceReleasedEvent;
 import dev.moonbridge.core.event.TransferPreparation;
 import dev.moonbridge.core.event.PreparedTransfer;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
@@ -1241,7 +1240,7 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void confirmSourceReleased(TransferAttempt attempt, PreparedTransfer prepared) {
         try {
-            CompletionStage<Void> confirmation = prepared.sourceReleased(new SourceReleasedEvent(attempt.context));
+            CompletionStage<Void> confirmation = prepared.sourceClosed();
             attempt.coordination = confirmation.toCompletableFuture();
             confirmation.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
                 if (!currentAttempt(attempt)) return;
