@@ -6,8 +6,6 @@ param(
     [switch]$InstalledPlugin,
     [switch]$ReleaseSource,
     [switch]$AuthenticateEarly,
-    [switch]$ManagedPlayerData,
-    [string]$UraniumApiJar,
     [string]$BukkitApiJar,
     [switch]$DebugSession,
     [switch]$TraceBackend,
@@ -22,9 +20,6 @@ $ErrorActionPreference = 'Stop'
 if ($ReleaseSource -and -not $InstalledPlugin) { throw '-ReleaseSource requires -InstalledPlugin' }
 if ($AuthenticateEarly -and (-not $InstalledPlugin -or $TraceBackend -or -not $BukkitApiJar)) {
     throw '-AuthenticateEarly requires -InstalledPlugin and -BukkitApiJar, and cannot use -TraceBackend'
-}
-if ($ManagedPlayerData -and (-not $AuthenticateEarly -or -not $ReturnToOld -or -not $UraniumApiJar -or $PrismClient)) {
-    throw '-ManagedPlayerData requires -AuthenticateEarly, -ReturnToOld, and -UraniumApiJar, with the Netty probe'
 }
 if ($BackendJavaAgent) { $BackendJavaAgent = (Resolve-Path -LiteralPath $BackendJavaAgent).Path }
 if ($PrismClient -and -not $InstalledPlugin) { throw '-PrismClient requires -InstalledPlugin' }
@@ -115,12 +110,6 @@ function StartUranium([string]$directory, [int]$port) {
         New-Item -ItemType Directory -Force $plugins, $hostConfig | Out-Null
         Copy-Item -LiteralPath $hostJar.FullName -Destination $plugins
         Copy-Item -LiteralPath $earlyProbeJar -Destination $plugins
-        if ($ManagedPlayerData) {
-            Copy-Item -LiteralPath $authorityProbeJar -Destination $plugins
-            $authorityConfig = Join-Path $plugins 'PlayerDataAuthorityAcceptance'
-            New-Item -ItemType Directory -Force $authorityConfig | Out-Null
-            "backendName: $node" | Set-Content -LiteralPath (Join-Path $authorityConfig 'config.yml') -Encoding utf8
-        }
         "settings:`n  bungeecord: true`n" |
             Set-Content -LiteralPath (Join-Path $directory 'spigot.yml') -Encoding utf8
         @"
@@ -213,18 +202,6 @@ try {
         $earlyProbeJar = Join-Path $runDir 'early-session-acceptance.jar'
         & jar cf $earlyProbeJar -C $earlyClasses .
         if ($LASTEXITCODE -ne 0) { throw 'Early session probe packaging failed' }
-        if ($ManagedPlayerData) {
-            $authorityClasses = Join-Path $runDir 'authority-classes'
-            New-Item -ItemType Directory -Force $authorityClasses | Out-Null
-            $libraryClasspath = Join-Path $bundle 'libraries/*'
-            & $javac8 -cp "$UraniumApiJar;$BukkitApiJar;$libraryClasspath" -d $authorityClasses (Join-Path $PSScriptRoot 'PlayerDataAuthorityAcceptancePlugin.java')
-            if ($LASTEXITCODE -ne 0) { throw 'Player data authority probe compilation failed' }
-            "name: PlayerDataAuthorityAcceptance`nmain: dev.moonbridge.smoke.PlayerDataAuthorityAcceptancePlugin`nversion: 1.0`ndepend: [MoonBridgeBackend, EarlySessionAcceptance]`n" |
-                Set-Content -LiteralPath (Join-Path $authorityClasses 'plugin.yml') -Encoding utf8
-            $authorityProbeJar = Join-Path $runDir 'player-data-authority-acceptance.jar'
-            & jar cf $authorityProbeJar -C $authorityClasses .
-            if ($LASTEXITCODE -ne 0) { throw 'Player data authority probe packaging failed' }
-        }
     }
     $old = StartUranium (Join-Path $runDir 'old') $oldPort
     $servers.Add($old)
@@ -503,20 +480,4 @@ if ($AuthenticateEarly) {
         if (Select-String -LiteralPath $log -Pattern 'EARLY_.*FAILED' -Quiet) { throw "Early session probe failed: $log" }
     }
     Write-Output 'REAL_URANIUM_EARLY_SESSION_PASS beforeJoin=true sameBinding=true privateProofRemoved=true'
-}
-if ($ManagedPlayerData) {
-    foreach ($item in @(@{ Server = $old; Expected = 2 }, @{ Server = $new; Expected = 1 })) {
-        $log = Join-Path $item.Server.Directory 'server.stdout.log'
-        foreach ($marker in @('PDA_PROBE_RESTORE_PASS', 'PDA_PROBE_NATIVE_DENIAL_OVERRIDE_PASS', 'PDA_PROBE_POST_JOIN_PASS')) {
-            if (@(Select-String -LiteralPath $log -Pattern $marker).Count -ne $item.Expected) {
-                throw "Expected $($item.Expected) $marker markers in $log"
-            }
-        }
-        if (Select-String -LiteralPath $log -Pattern 'PDA_PROBE_FAIL|failed=true|Exception caught during firing event|NoSuchMethodError|NoClassDefFoundError' -Quiet) { throw "Player authority probe failed: $log" }
-    }
-    $oldLog = Join-Path $old.Directory 'server.stdout.log'
-    foreach ($marker in @('PDA_PROBE_OLD_FILE_PASS', 'PDA_PROBE_FALLBACK_PASS', 'PDA_PROBE_QUIT_SAVE_PASS')) {
-        if (-not (Select-String -LiteralPath $oldLog -Pattern $marker -Quiet)) { throw "Missing $marker in $oldLog" }
-    }
-    Write-Output 'REAL_URANIUM_PLAYER_AUTHORITY_PASS beforeLogin=true staleFileSkipped=true loadDataGuarded=true invalidDimensionFallback=true normalQuitSave=true'
 }
