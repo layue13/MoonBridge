@@ -8,7 +8,7 @@ if (!['sql','redis'].includes(mode)) throw new Error('Usage: node smoke/permissi
 const outage = process.argv[3] === 'outage';
 const log = fs.createWriteStream(path.join(root,'build',`permission-network-${mode}${outage?'-outage':''}.log`));
 const args = ['-cp',`${path.join(root,'proxy-core/build/install/moonbridge/lib/*')}${path.delimiter}${path.join(root,'build/permission-network-classes')}`,
- 'PermissionNetworkAcceptance','proxy-core/build/install/moonbridge',`build/permission-services/${mode==='sql'?'mysql':'redis'}-base.yml`,'build/permission-network',mode];
+ 'PermissionNetworkAcceptance','proxy-core/build/install/moonbridge',`build/permission-services/${mode==='sql'?'mariadb':'redis'}-base.yml`,'build/permission-network',mode];
 if (outage) args.push('outage');
 const child = spawn('java',args,{cwd:root,windowsHide:true,stdio:['pipe','pipe','pipe']});
 let pending = '';
@@ -18,7 +18,7 @@ child.stdout.on('data',chunk=>{
  let end;
  while ((end=pending.indexOf('\n'))>=0) {
   const line=pending.slice(0,end).trim(); pending=pending.slice(end+1);
-  const request=/^REQUEST_(STOP|START)_(MYSQL|REDIS)$/.exec(line);
+  const request=/^REQUEST_(STOP|START)_(MARIADB|REDIS)$/.exec(line);
   if (request) {
    const [,verb,kind]=request;
    console.log(line);

@@ -35,10 +35,10 @@ public final class PermissionNetworkAcceptance {
         }
         String configTemplate = Files.readString(Path.of(args[1]).toAbsolutePath());
         if (mode.equals("sql")) {
-            require(configTemplate.contains("storage-method: mysql"), "SQL mode requires MySQL storage");
+            require(configTemplate.contains("storage-method: mariadb"), "SQL mode requires MariaDB storage");
             require(configTemplate.contains("messaging-service: auto"), "SQL mode must exercise automatic SQL messenger selection");
         } else {
-            require(configTemplate.contains("storage-method: mysql"), "Redis mode still requires shared MySQL persistence");
+            require(configTemplate.contains("storage-method: mariadb"), "Redis mode still requires shared MariaDB persistence");
             require(configTemplate.contains("messaging-service: redis"), "Redis mode requires the Redis messenger");
         }
 
@@ -94,7 +94,7 @@ public final class PermissionNetworkAcceptance {
                     == PermissionResult.UNDEFINED, "temporary permission expiry");
 
             if (outage && mode.equals("sql")) {
-                runMysqlOutage(first, second, a, b, playersA, playerId);
+                runMariaDbOutage(first, second, a, b, playersA, playerId);
             } else if (outage) {
                 runRedisOutage(first, second, a, b, playerId, user);
             }
@@ -147,49 +147,49 @@ public final class PermissionNetworkAcceptance {
         return configured;
     }
 
-    private static void runMysqlOutage(Running first, Running second, PlayerView a, PlayerView b,
+    private static void runMariaDbOutage(Running first, Running second, PlayerView a, PlayerView b,
                                        TestPlayers playersA, UUID playerId) throws Exception {
-        command(first, "lp user " + playerId + " permission set acceptance.network.mysql-cache true");
-        expect(first, a, "acceptance.network.mysql-cache", PermissionResult.ALLOW);
-        expect(second, b, "acceptance.network.mysql-cache", PermissionResult.ALLOW);
+        command(first, "lp user " + playerId + " permission set acceptance.network.mariadb-cache true");
+        expect(first, a, "acceptance.network.mariadb-cache", PermissionResult.ALLOW);
+        expect(second, b, "acceptance.network.mariadb-cache", PermissionResult.ALLOW);
 
-        handshake("REQUEST_STOP_MYSQL", "MYSQL_STOPPED");
-        expect(first, a, "acceptance.network.mysql-cache", PermissionResult.ALLOW);
-        expect(second, b, "acceptance.network.mysql-cache", PermissionResult.ALLOW);
+        handshake("REQUEST_STOP_MARIADB", "MARIADB_STOPPED");
+        expect(first, a, "acceptance.network.mariadb-cache", PermissionResult.ALLOW);
+        expect(second, b, "acceptance.network.mariadb-cache", PermissionResult.ALLOW);
 
         UUID freshId = UUID.randomUUID();
-        PlayerView fresh = new PlayerView(new PlayerIdentity(freshId, 40), "FreshMysqlProbe", "lobby");
+        PlayerView fresh = new PlayerView(new PlayerIdentity(freshId, 40), "FreshMariaProbe", "lobby");
         playersA.current = fresh;
         try {
             first.host.permissionService().prepare(fresh).toCompletableFuture().get(20, TimeUnit.SECONDS);
-            throw new AssertionError("prepare unexpectedly succeeded while MySQL was stopped");
+            throw new AssertionError("prepare unexpectedly succeeded while MariaDB was stopped");
         } catch (ExecutionException | CompletionException | TimeoutException expected) {
-            first.transcript.add("MYSQL_OUTAGE_FRESH_PREPARE_FAILED " + expected.getClass().getSimpleName());
+            first.transcript.add("MARIADB_OUTAGE_FRESH_PREPARE_FAILED " + expected.getClass().getSimpleName());
         }
-        require(first.probe.context.permissions().check(fresh.identity(), "acceptance.network.mysql-cache")
+        require(first.probe.context.permissions().check(fresh.identity(), "acceptance.network.mariadb-cache")
                         == PermissionResult.UNAVAILABLE,
-                "failed new-user preparation must remain UNAVAILABLE during MySQL outage");
+                "failed new-user preparation must remain UNAVAILABLE during MariaDB outage");
 
-        handshake("REQUEST_START_MYSQL", "MYSQL_STARTED");
+        handshake("REQUEST_START_MARIADB", "MARIADB_STARTED");
         playersA.current = a;
         PlayerView recovered = null;
         Throwable lastFailure = null;
         for (int attempt = 0; attempt < 6 && recovered == null; attempt++) {
-            PlayerView candidate = new PlayerView(new PlayerIdentity(freshId, 50 + attempt), "FreshMysqlProbe", "lobby");
+            PlayerView candidate = new PlayerView(new PlayerIdentity(freshId, 50 + attempt), "FreshMariaProbe", "lobby");
             try {
                 first.host.permissionService().prepare(candidate).toCompletableFuture().get(15, TimeUnit.SECONDS);
                 recovered = candidate;
-                first.transcript.add("MYSQL_OUTAGE_RECOVERED_PREPARE attempt=" + (attempt + 1));
+                first.transcript.add("MARIADB_OUTAGE_RECOVERED_PREPARE attempt=" + (attempt + 1));
             } catch (ExecutionException | CompletionException | TimeoutException failure) {
                 lastFailure = failure;
-                first.transcript.add("MYSQL_OUTAGE_RETRY_FAILED attempt=" + (attempt + 1));
+                first.transcript.add("MARIADB_OUTAGE_RETRY_FAILED attempt=" + (attempt + 1));
                 Thread.sleep(1000);
             }
         }
-        if (recovered == null) throw new AssertionError("prepare did not recover after MySQL restart", lastFailure);
+        if (recovered == null) throw new AssertionError("prepare did not recover after MariaDB restart", lastFailure);
         expect(first, recovered, "acceptance.network.no-such-recovery-node", PermissionResult.UNDEFINED);
-        command(first, "lp user " + freshId + " permission set acceptance.network.mysql-recovered true");
-        expect(first, recovered, "acceptance.network.mysql-recovered", PermissionResult.ALLOW);
+        command(first, "lp user " + freshId + " permission set acceptance.network.mariadb-recovered true");
+        expect(first, recovered, "acceptance.network.mariadb-recovered", PermissionResult.ALLOW);
         first.host.permissionService().release(recovered.identity());
     }
 

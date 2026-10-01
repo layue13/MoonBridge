@@ -1,5 +1,7 @@
 # MoonBridge 权限与 LuckPerms 验收
 
+这是旧 MySQL/H2 构建的历史验收记录。当前 MariaDB 13.0.2 的入口和结果见 [MariaDB 验证](../../docs/mariadb.md)，旧数据库脚本参数不适用于当前版本。
+
 环境：Windows、Zulu JDK 25、Gradle 9.6.1。实现基于 MoonBridge `0344f0bc65da327c69385ab07c77e69158606d22`，LuckPerms 子模块固定为 `25f223317a9ec2b6e73369126b630eca07d79506`，上游源码未修改。
 
 ## 已完成的专项验收

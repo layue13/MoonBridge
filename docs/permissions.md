@@ -74,7 +74,7 @@ plugins:
 
 插件数据位于 `plugins/data/dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin/`；LuckPerms 的存储与规则配置使用此目录中的配置文件。不要同时启用另一个权限提供者。
 
-默认存储为本地 H2。首次启动会由 LuckPerms 自身的依赖管理器下载带固定校验值的运行库，缓存到数据目录的 `libs/`；离线部署应先在可联网环境完成启动并带上该缓存。插件 JAR 也作为 `uk.potatolab.moonbridge:luckperms-moonbridge` 发布，版本与同次构建的 MoonBridge API 一致。
+新配置默认使用共享 MariaDB 13.0.2，启用插件前需创建权限数据库并填写连接信息。单机开发与内部验收可显式选择 H2。首次启动会由 LuckPerms 自身的依赖管理器下载带固定校验值的运行库，缓存到数据目录的 `libs/`；离线部署应先在可联网环境完成启动并带上该缓存。插件 JAR 也作为 `uk.potatolab.moonbridge:luckperms-moonbridge` 发布，版本与同次构建的 MoonBridge API 一致。
 
 组、继承、临时节点、缓存、存储和管理命令由 LuckPerms 引擎处理。MoonBridge 的 `backend` 上下文在适配器中映射到 LuckPerms 的 `world` 上下文；LuckPerms 的 `server` 保留其配置的代理服务器标识，沿用 Velocity 的语义。
 
@@ -82,27 +82,32 @@ plugins:
 
 固定的上游 API 枚举没有 MoonBridge 项，因此 LuckPerms 信息页显示 `Standalone - MoonBridge`，并不表示运行的是上游独立服务。平台插件使用隔离的类加载器；业务插件应依赖 MoonBridge 的权限接口，当前不提供跨插件的 `LuckPermsProvider.get()` 服务访问。
 
-同步使用 LuckPerms 原生实现。`messaging-service: auto` 根据共享 SQL 或启用的 Redis 等配置选择消息同步；默认本地 H2 不启用 messenger，`sync-minutes: -1` 不执行周期重载。上游将旧值 `none` 按 `auto` 处理，不应把它当作强制关闭。Velocity 的 `pluginmsg` 不适用于 MoonBridge。
+同步使用 LuckPerms 原生实现。`messaging-service: auto` 根据共享 SQL 或启用的 Redis 等配置选择消息同步；显式选择本地 H2 时不启用 messenger，`sync-minutes: -1` 不执行周期重载。上游将旧值 `none` 按 `auto` 处理，不应把它当作强制关闭。Velocity 的 `pluginmsg` 不适用于 MoonBridge。
 
-### 使用 MySQL 与跨代理同步
+### 使用 MariaDB 13.0.2 与跨代理同步
 
 在 LuckPerms 数据目录的 `config.yml` 中设置以下配置，然后重启代理。数据库需预先创建，账号需能创建、查询和修改 LuckPerms 的表：
 
 ```yaml
 server: proxy-1
-storage-method: mysql
+storage-method: mariadb
 data:
-  address: "mysql.example.net:3306"
+  address: "mariadb.example.net:3306"
   database: moonbridge_permissions
   username: moonbridge
   password: "替换为数据库密码"
   table-prefix: "luckperms_"
+  pool-settings:
+    properties:
+      sslMode: verify-full
 messaging-service: auto
 ```
 
-多台代理使用相同的数据库和表前缀，分别设置各自的 `server`。MySQL 本身即可提供 LuckPerms 的 SQL 消息同步，无需额外安装 Redis。身份模式与 UUID 必须一致；共享存储不会自动转换离线 UUID 与正版 UUID。
+MariaDB 的远程连接需按证书部署配置 `sslMode: verify-full`；测试和默认本机示例使用 `disable`。原生 LuckPerms 按地址、端口和数据库名组成 `jdbc:mariadb:` URL，并由自身依赖管理器下载、校验和隔离 MariaDB 驱动；当前固定上游使用 Connector/J 3.5.2。已有配置不会自动覆盖，需手动更新 `storage-method` 和连接属性，并保留已有表前缀及数据。
 
-若已有 Redis，可继续以 MySQL 存储权限，将消息同步改为：
+多台代理使用相同的数据库和表前缀，分别设置各自的 `server`。MariaDB 本身即可提供 LuckPerms 的 SQL 消息同步，无需额外安装 Redis。身份模式与 UUID 必须一致；共享存储不会自动转换离线 UUID 与正版 UUID。
+
+若已有 Redis，可继续以 MariaDB 存储权限，将消息同步改为：
 
 ```yaml
 messaging-service: redis
@@ -112,9 +117,9 @@ redis:
   password: "替换为Redis密码"
 ```
 
-Redis 负责通知其他实例重载权限，权限数据仍保存在 MySQL。Redis 中断期间不会保证其他实例即时看到修改；恢复连接后的新通知可触发刷新，也可以在需要时使用 `lp sync` 主动同步。数据库中断时，已加载玩家可继续使用现有缓存，新玩家加载失败会被拒绝登录；缓存不是数据库最新状态的保证。
+Redis 负责通知其他实例重载权限，权限数据仍保存在 MariaDB。Redis 中断期间不会保证其他实例即时看到修改；恢复连接后的新通知可触发刷新，也可以在需要时使用 `lp sync` 主动同步。数据库中断时，已加载玩家可继续使用现有缓存，新玩家加载失败会被拒绝登录；缓存不是数据库最新状态的保证。
 
-MySQL 8.4 与 Redis 7.4 已用实际分发包完成双实例同步、重启持久化和故障恢复验收，详见 [验收记录](../smoke/results/2026-09-28-permissions.md)。其他数据库实现由上游提供，本次没有据此宣称 PostgreSQL 或 MariaDB 已完成联调。
+此前 MySQL 8.4 与 Redis 7.4 的结果保留为 [历史验收记录](../smoke/results/2026-09-28-permissions.md)。当前 MariaDB 13.0.2 的验收入口和记录见 [MariaDB 验证](mariadb.md)。
 
 backend 可安装与其 Minecraft / Java 版本兼容的原生 Bukkit LuckPerms，使用相同的身份模式、共享数据库与 LuckPerms 支持的同步方式；MoonBridge 平台插件 JAR 只供代理使用。共享数据库不意味着所有场景的检查结果相同：代理知道后端名称，但不知道玩家在 Bukkit 世界中的位置或其他后端私有上下文。玩家首次登录的权限加载不依赖某个 backend 在线。
 
