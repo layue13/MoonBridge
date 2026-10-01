@@ -46,3 +46,5 @@ git submodule update --init --recursive
 `MoonBridgeBackend` 后端宿主与独立 API 已通过两个真实 Uranium / Java 8 服务端的注册、通信、主线程回调、插件停用、重连及注销/租约验收，见[改名与独立 API 验收记录](smoke/results/2026-09-27-moonbridge-api.md)。这是无玩家、隔离服务端上的功能验收，不代表生产容量测试。
 
 最新初次路由专项记录包含自动化测试，以及通过实际 `ProxyMain` 连接真实 Java 8 Uranium 后端的协议探针结果；未进行本分支的完整模组包玩家视觉验收，见[路由验收记录](smoke/results/2026-09-27-initial-routing.md)。2026-09-26 Prism 记录是当日代码和环境下的历史真实客户端及配对测量，不应视作当前路由改动的完整模组包证明，见[历史验收记录](benchmarks/results/2026-09-26-prism-pack.md)。生产容量仍需按部署环境测量。已知 Uranium 候选服登录停滞的调查见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
+
+生产权限存储统一使用 MariaDB 13.0.2；默认配置、已有数据边界与实际双实例验收入口见 [MariaDB 权限数据库](docs/mariadb.md)。
