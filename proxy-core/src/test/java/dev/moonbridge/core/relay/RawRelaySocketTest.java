@@ -87,7 +87,7 @@ final class RawRelaySocketTest {
         var sending = pair.workers.submit(() -> { writeFully(sender, payload); return null; });
 
         long bytesWhenBlocked = awaitStableReads(observed, relayTarget,
-                "source reads stopped while the actual target socket was nonwritable");
+                "source reads stopped while the actual target socket had a pending write");
         assertTrue(bytesWhenBlocked > before, "the source socket must deliver bytes before pressure");
         assertTrue(bytesWhenBlocked < before + payload.length, "pressure must stop an unfinished transfer");
         long pending = pendingBytes(relayTarget);
@@ -113,10 +113,6 @@ final class RawRelaySocketTest {
             bytes[i] = (byte) state;
         }
         return bytes;
-    }
-
-    private static boolean isWritable(Channel channel) {
-        return channel.isWritable();
     }
 
     private static boolean isActive(Channel channel) {
@@ -170,7 +166,9 @@ final class RawRelaySocketTest {
                 lastObserved = current;
                 stableSince = -1;
             }
-            if (!isWritable(target) && current == lastObserved) {
+            // The relay stops reading while any forwarded write is incomplete. On Linux a short read can stay
+            // below the high water mark, so a real pending socket write is the condition, not writability.
+            if (pendingBytes(target) > 0 && current == lastObserved) {
                 if (stableSince < 0) stableSince = System.nanoTime();
                 if (System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(250)) return current;
             } else {
