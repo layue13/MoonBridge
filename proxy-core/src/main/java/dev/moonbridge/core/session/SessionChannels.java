@@ -1,5 +1,6 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.net.NetworkTransport;
 import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.bootstrap.Bootstrap;
@@ -8,7 +9,6 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.resolver.AddressResolverGroup;
 import io.netty.util.NetUtil;
 
@@ -42,10 +42,11 @@ final class SessionChannels {
     }
 
     /** Dials on the player's event loop so session state stays confined to one thread. */
-    static Bootstrap backendBootstrap(Channel frontend, AddressResolverGroup<InetSocketAddress> resolver,
+    static Bootstrap backendBootstrap(Channel frontend, NetworkTransport transport,
+                                      AddressResolverGroup<InetSocketAddress> resolver,
                                       int connectTimeoutMillis, boolean autoRead,
                                       Consumer<ChannelPipeline> extraHandlers) {
-        return new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
+        return new Bootstrap().group(frontend.eventLoop()).channel(transport.socketChannel())
                 .resolver(resolver)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, autoRead)

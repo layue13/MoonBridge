@@ -11,8 +11,12 @@ import java.util.Set;
 /** Configuration understood by the new proxy runtime. */
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                                  Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
-                                 Status status, BackendChannel backendChannel, InitialRouting initialRouting) {
+                                 Status status, BackendChannel backendChannel, InitialRouting initialRouting,
+                                 Transport transport) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
+
+    /** Network I/O transport. AUTO picks epoll on Linux, kqueue on macOS and NIO elsewhere. */
+    public enum Transport { AUTO, NIO, EPOLL, KQUEUE }
 
     public ProxyConfiguration {
         if (listen == null || listen.isBlank()) {
@@ -34,6 +38,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             throw new IllegalArgumentException("maxConnections must be between 1 and 1000000");
         }
         status = status == null ? new Status(null, null, null) : status;
+        transport = transport == null ? Transport.AUTO : transport;
         var names = new java.util.HashSet<String>();
         for (var backend : backends) {
             if (!names.add(backend.name())) {
@@ -57,6 +62,13 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                               Status status, BackendChannel backendChannel) {
         this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
                 backendChannel, null);
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                              Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                              Status status, BackendChannel backendChannel, InitialRouting initialRouting) {
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
+                backendChannel, initialRouting, null);
     }
 
     /** Explicit default destinations used only when no plugin owns initial placement. */

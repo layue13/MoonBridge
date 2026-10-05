@@ -419,7 +419,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void connectInitialBackend(BackendView target, long remainingNanos) {
         // Do not attach the shared Session until the attempt has won. A failed
         // dial's inactive/exception callbacks must not close a later connection.
-        Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.backendResolver(),
+        Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.transport(), owner.backendResolver(),
                 (int) Math.max(1, Math.min(5000, TimeUnit.NANOSECONDS.toMillis(remainingNanos))), false,
                 pipeline -> { });
         ChannelFuture connect;
@@ -1051,7 +1051,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
         }, attempt.preparation != null);
         try {
-            Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.backendResolver(), 5000, true,
+            Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.transport(),
+                    owner.backendResolver(), 5000, true,
                     pipeline -> pipeline.addLast("transfer-candidate", attempt.candidate));
             ChannelFuture connect = bootstrap.connect(SessionChannels.socketAddress(attempt.target.address()));
             attempt.channel = connect.channel();

@@ -1,5 +1,6 @@
 package dev.moonbridge.app;
 
+import dev.moonbridge.core.net.NetworkTransport;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 import dev.moonbridge.core.control.BackendControlService;
 import dev.moonbridge.core.auth.MojangSessionVerifier;
@@ -81,10 +82,13 @@ public final class ProxyMain {
                     thread.setDaemon(true);
                     return thread;
                 }) : null;
+        var transport = NetworkTransport.select(
+                NetworkTransport.Preference.valueOf(configuration.transport().name()));
+        LOGGER.info("Using {} network transport", transport.name());
         var listener = verifierWorkers == null
-                ? new ProxySessionListener(configuration.listenAddress(), catalog, null, placementTimeout)
+                ? new ProxySessionListener(configuration.listenAddress(), catalog, null, placementTimeout, transport)
                 : new ProxySessionListener(configuration.listenAddress(), catalog,
-                        new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout);
+                        new MojangSessionVerifier(Duration.ofSeconds(5), verifierWorkers), placementTimeout, transport);
         listener.setSessionBinding(proxyEpoch, sessionBindingSecrets(configuration));
         listener.setServerListStatus(serverListStatus);
         listener.setInitialServers(configuration.initialRouting().servers());

@@ -43,6 +43,23 @@ final class ProxyConfigurationTest {
     }
 
     @Test
+    void transportDefaultsToAutoAndAcceptsExplicitChoices() throws Exception {
+        var config = Files.createTempFile("moonbridge-transport", ".yml");
+        try {
+            String base = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n";
+            Files.writeString(config, base);
+            assertEquals(ProxyConfiguration.Transport.AUTO, new ProxyConfigurationLoader().load(config).transport());
+            Files.writeString(config, base + "transport: NIO\n");
+            assertEquals(ProxyConfiguration.Transport.NIO, new ProxyConfigurationLoader().load(config).transport());
+            Files.writeString(config, base + "transport: IO_URING\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class,
+                    () -> new ProxyConfigurationLoader().load(config));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
     void rejectsInvalidConnectionLimit() throws Exception {
         var config = Files.createTempFile("moonbridge-cap", ".yml");
         try {

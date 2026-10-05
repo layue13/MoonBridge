@@ -104,7 +104,7 @@ sh smoke/container-channel.sh
 
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
 
-`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。
+`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
 
 原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 

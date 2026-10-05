@@ -16,6 +16,16 @@ dependencies {
     implementation(libs.findLibrary("netty-transport").get())
     implementation(libs.findLibrary("netty-handler").get())
     implementation(libs.findLibrary("netty-resolver-dns").get())
+    // Native transports are optional at runtime: NetworkTransport falls back to NIO when the
+    // platform library is missing or cannot load (Windows, other CPU architectures, musl).
+    implementation(libs.findLibrary("netty-transport-classes-epoll").get())
+    implementation(libs.findLibrary("netty-transport-classes-kqueue").get())
+    for (classifier in listOf("linux-x86_64", "linux-aarch_64")) {
+        runtimeOnly(variantOf(libs.findLibrary("netty-transport-native-epoll").get()) { classifier(classifier) })
+    }
+    for (classifier in listOf("osx-x86_64", "osx-aarch_64")) {
+        runtimeOnly(variantOf(libs.findLibrary("netty-transport-native-kqueue").get()) { classifier(classifier) })
+    }
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
     implementation(libs.findLibrary("adventure-gson").get())
@@ -100,6 +110,12 @@ tasks.named("check") {
 application {
     mainClass.set("dev.moonbridge.app.ProxyMain")
     applicationName = "moonbridge"
+    // Netty's epoll/kqueue transports load a JNI library; allow it without JDK restricted-method warnings.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 tasks.jar {

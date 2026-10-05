@@ -13,6 +13,10 @@ netty-transport = { module = "io.netty:netty-transport", version.ref = "netty" }
 netty-codec = { module = "io.netty:netty-codec", version.ref = "netty" }
 netty-handler = { module = "io.netty:netty-handler", version.ref = "netty" }
 netty-resolver-dns = { module = "io.netty:netty-resolver-dns", version.ref = "netty" }
+netty-transport-classes-epoll = { module = "io.netty:netty-transport-classes-epoll", version.ref = "netty" }
+netty-transport-native-epoll = { module = "io.netty:netty-transport-native-epoll", version.ref = "netty" }
+netty-transport-classes-kqueue = { module = "io.netty:netty-transport-classes-kqueue", version.ref = "netty" }
+netty-transport-native-kqueue = { module = "io.netty:netty-transport-native-kqueue", version.ref = "netty" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }

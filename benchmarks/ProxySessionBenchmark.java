@@ -49,6 +49,9 @@ public final class ProxySessionBenchmark {
         int commandInterceptor = intArg(args, "command-interceptor", 1);
         int burst = intArg(args, "burst", 1);
         String mode = modeArg(args);
+        var transport = dev.moonbridge.core.net.NetworkTransport.select(
+                dev.moonbridge.core.net.NetworkTransport.Preference.valueOf(
+                        stringArg(args, "transport", "auto").toUpperCase(java.util.Locale.ROOT)));
         boolean afterTransfer = mode.equals("post-transfer");
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
@@ -75,7 +78,8 @@ public final class ProxySessionBenchmark {
                         URI.create("tcp://127.0.0.1:" + replacement.port()), Map.of(), Map.of()));
             }
             ProxySessionListener proxy = new ProxySessionListener(
-                    new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+                    new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog, null,
+                    Duration.ofSeconds(15), transport);
             proxy.setPlacement(player -> java.util.concurrent.CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("bench"))));
             if (commandInterceptor == 1) proxy.setCommandDispatcher((player, message, reply, admission) -> false);
@@ -84,9 +88,9 @@ public final class ProxySessionBenchmark {
                         .get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS).localAddress()).getPort();
                 System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
                                 + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
-                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d%n",
+                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d transport=%s%n",
                         mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats,
-                        commandInterceptor, burst);
+                        commandInterceptor, burst, transport.name());
                 if (burst > 1) System.out.println("Each roundtrip writes " + burst + " frames in one client write; "
                         + "the fake backend echoes them with one flush. Window counts bursts.");
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
@@ -532,7 +536,7 @@ public final class ProxySessionBenchmark {
         int found = fallback;
         boolean seen = false;
         List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window",
-                "mode", "command-interceptor", "burst");
+                "mode", "command-interceptor", "burst", "transport");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);
@@ -546,6 +550,11 @@ public final class ProxySessionBenchmark {
             }
         }
         return found;
+    }
+
+    private static String stringArg(String[] args, String key, String fallback) {
+        for (int i = 0; i + 1 < args.length; i++) if (args[i].equals("--" + key)) return args[i + 1];
+        return fallback;
     }
 
     private static String modeArg(String[] args) {
