@@ -73,7 +73,7 @@ sh smoke/container-channel.sh
 
 ## 真实 TCP 慢接收端背压回归
 
-`RawRelaySocketTest` 使用实际 loopback TCP 和 Netty NIO 通道，缩小 socket 发送缓冲与 Netty 写水位，让停止读取的接收方触发真实不可写状态。测试观察源读取停止、排队字节有界，恢复接收后逐字节校验双向数据，并覆盖拥塞中接收方断开后的通道与待发送写入清理。
+`RawRelaySocketTest` 使用实际 loopback TCP 和 Netty NIO 通道，缩小 socket 发送缓冲与 Netty 写水位，让停止读取的接收方造成真实的待发送积压。测试观察在目标仍有未完成写入时源读取停止（Linux 上短读取可能低于高水位，因此不以不可写状态为条件）、排队字节有界，恢复接收后逐字节校验双向数据，并覆盖拥塞中接收方断开后的通道与待发送写入清理。
 
 ```powershell
 ./gradlew.bat :proxy-core:test --tests '*RawRelaySocketTest'
@@ -103,6 +103,8 @@ sh smoke/container-channel.sh
 [玩家命令拦截初筛](../benchmarks/results/2026-09-26-command-interceptor.md) 比较同一合成 PLAY 回声流量下启用与关闭命令拦截器的结果；三轮吞吐和延迟范围重叠。该实验没有发送命令，也不能替代目标整合包的容量验收。
 
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
+
+`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。
 
 原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 

@@ -47,14 +47,15 @@ public final class ProxySessionBenchmark {
         int repeats = intArg(args, "repeats", 2);
         int window = intArg(args, "window", 1);
         int commandInterceptor = intArg(args, "command-interceptor", 1);
+        int burst = intArg(args, "burst", 1);
         String mode = modeArg(args);
         boolean afterTransfer = mode.equals("post-transfer");
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
                 || repeats < 1 || repeats > 10 || window < 1 || window > 1024
-                || (commandInterceptor != 0 && commandInterceptor != 1)) {
+                || (commandInterceptor != 0 && commandInterceptor != 1) || burst < 1 || burst > 256) {
             throw new IllegalArgumentException("bounds: connections 1..32, messages 1..100000, warmup 0..10000, "
-                    + "payload 5..1048576, repeats 1..10, window 1..1024");
+                    + "payload 5..1048576, repeats 1..10, window 1..1024, burst 1..256");
         }
 
         byte[] playPayload = new byte[payload];
@@ -62,8 +63,8 @@ public final class ProxySessionBenchmark {
         for (int i = 1; i < payload; i++) playPayload[i] = (byte) (i * 31 + 7);
         byte[] playFrame = frame(playPayload);
 
-        try (FakeBackend backend = new FakeBackend(connections, 42);
-             FakeBackend replacement = afterTransfer ? new FakeBackend(connections, 99) : null) {
+        try (FakeBackend backend = new FakeBackend(connections, 42, burst);
+             FakeBackend replacement = afterTransfer ? new FakeBackend(connections, 99, burst) : null) {
             backend.start();
             if (replacement != null) replacement.start();
             InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
@@ -83,9 +84,11 @@ public final class ProxySessionBenchmark {
                         .get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS).localAddress()).getPort();
                 System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
                                 + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
-                                + "window_per_connection=%d repeats=%d command_interceptor=%d%n",
+                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d%n",
                         mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats,
-                        commandInterceptor);
+                        commandInterceptor, burst);
+                if (burst > 1) System.out.println("Each roundtrip writes " + burst + " frames in one client write; "
+                        + "the fake backend echoes them with one flush. Window counts bursts.");
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
                         + "connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.");
                 if (afterTransfer) System.out.println("Proxy clients switch from bench to replacement before warmup; "
@@ -97,14 +100,14 @@ public final class ProxySessionBenchmark {
                 for (int round = 0; round < repeats; round++) {
                     if (proxyFirst) {
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer);
+                                playFrame, playPayload, proxy, afterTransfer, burst);
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer);
+                                playFrame, playPayload, proxy, afterTransfer, burst);
                     } else {
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer);
+                                playFrame, playPayload, proxy, afterTransfer, burst);
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer);
+                                playFrame, playPayload, proxy, afterTransfer, burst);
                     }
                     proxyFirst = !proxyFirst;
                 }
@@ -116,14 +119,14 @@ public final class ProxySessionBenchmark {
 
     private static void runPhase(String name, int port, int connections, int messages, int warmup, int window,
                                  byte[] playFrame, byte[] playPayload, ProxySessionListener proxy,
-                                 boolean afterTransfer) throws Exception {
+                                 boolean afterTransfer, int burst) throws Exception {
         List<ClientWorker> clients = new ArrayList<>();
         CountDownLatch prepared = new CountDownLatch(connections);
         CountDownLatch begin = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(connections);
         for (int i = 0; i < connections; i++) {
             ClientWorker client = new ClientWorker(name, i, port, messages, warmup, window, playFrame,
-                    playPayload, prepared, begin, finished, clients, proxy, afterTransfer);
+                    playPayload, prepared, begin, finished, clients, proxy, afterTransfer, burst);
             clients.add(client);
         }
         for (ClientWorker client : clients) {
@@ -139,6 +142,8 @@ public final class ProxySessionBenchmark {
         for (ClientWorker client : clients) if (client.failure != null)
             { begin.countDown(); closeClients(clients); throw new IllegalStateException(name + " client setup failed", client.failure); }
 
+        long ioCpuStart = proxyIoCpuNanos();
+        long segmentsStart = tcpOutSegments();
         long started = System.nanoTime();
         begin.countDown();
         if (!finished.await(5, TimeUnit.MINUTES)) {
@@ -146,6 +151,8 @@ public final class ProxySessionBenchmark {
             throw new IllegalStateException(name + " phase timed out");
         }
         long elapsed = System.nanoTime() - started;
+        long ioCpu = proxyIoCpuNanos() - ioCpuStart;
+        long segments = segmentsStart < 0 ? -1 : tcpOutSegments() - segmentsStart;
         for (ClientWorker client : clients) if (client.failure != null) {
             closeClients(clients);
             throw new IllegalStateException(name + " client failed", client.failure);
@@ -155,7 +162,8 @@ public final class ProxySessionBenchmark {
         Arrays.sort(samples);
         long measured = (long) connections * messages;
         double seconds = elapsed / 1_000_000_000.0;
-        double oneWayMib = measured * (double) playPayload.length / (1024.0 * 1024.0) / seconds;
+        long frames = measured * burst;
+        double oneWayMib = frames * (double) playPayload.length / (1024.0 * 1024.0) / seconds;
         long echoes = clients.stream().mapToLong(client -> client.echoes).sum();
         long correct = clients.stream().mapToLong(client -> client.correct).sum();
         long errors = clients.stream().mapToLong(client -> client.errors).sum();
@@ -164,10 +172,11 @@ public final class ProxySessionBenchmark {
                     + correct + " errors=" + errors + " expected=" + measured);
         System.out.printf("%s: roundtrips=%d echoes=%d correct=%d errors=%d roundtrips/s=%.1f "
                         + "warmup_roundtrips=%d window=%d one_way_MiB/s=%.2f latency_ms_p50=%.3f p95=%.3f "
-                        + "p99=%.3f elapsed_ms=%.3f%n",
+                        + "p99=%.3f elapsed_ms=%.3f frames/s=%.1f proxy_io_cpu_ns/frame=%.0f tcp_out_segments/frame=%s%n",
                 name, measured, echoes, correct, errors, measured / seconds, connections * warmup, window, oneWayMib,
                 percentile(samples, .50) / 1e6, percentile(samples, .95) / 1e6,
-                percentile(samples, .99) / 1e6, elapsed / 1e6);
+                percentile(samples, .99) / 1e6, elapsed / 1e6, frames / seconds, ioCpu / (double) frames,
+                segments < 0 ? "n/a" : String.format("%.3f", segments / (double) frames));
     }
 
     private static void closeClients(List<ClientWorker> clients) {
@@ -183,6 +192,7 @@ public final class ProxySessionBenchmark {
         final List<ClientWorker> peers;
         final ProxySessionListener proxy;
         final boolean afterTransfer;
+        final int burst;
         volatile Exception failure;
         volatile Socket socket;
         long[] latencies;
@@ -190,11 +200,11 @@ public final class ProxySessionBenchmark {
 
         ClientWorker(String phase, int index, int port, int messages, int warmup, int window, byte[] playFrame,
                      byte[] playPayload, CountDownLatch prepared, CountDownLatch begin, CountDownLatch finished,
-                     List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer) {
+                     List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer, int burst) {
             this.phase = phase; this.index = index; this.port = port; this.messages = messages;
             this.warmup = warmup; this.window = window; this.playFrame = playFrame.clone(); this.playPayload = playPayload;
             this.prepared = prepared; this.begin = begin; this.finished = finished; this.peers = peers;
-            this.proxy = proxy; this.afterTransfer = afterTransfer;
+            this.proxy = proxy; this.afterTransfer = afterTransfer; this.burst = burst;
         }
 
         @Override public void run() {
@@ -240,29 +250,39 @@ public final class ProxySessionBenchmark {
         private void exchange(DataOutputStream output, DataInputStream input, int count, long[] samples,
                               int firstSequence) throws Exception {
             long[] outstandingSince = new long[Math.min(window, Math.max(1, count))];
+            byte[] burstFrames = burst == 1 ? playFrame : new byte[playFrame.length * burst];
             int sent = 0;
             int received = 0;
             while (received < count) {
                 while (sent < count && sent - received < outstandingSince.length) {
                     int sequence = firstSequence + sent;
-                    writeSequence(playFrame, playFrame.length - playPayload.length, sequence);
+                    if (burst == 1) writeSequence(playFrame, playFrame.length - playPayload.length, sequence);
+                    else for (int k = 0; k < burst; k++) {
+                        writeSequence(playFrame, playFrame.length - playPayload.length, sequence * burst + k);
+                        System.arraycopy(playFrame, 0, burstFrames, k * playFrame.length, playFrame.length);
+                    }
                     outstandingSince[sent % outstandingSince.length] = System.nanoTime();
-                    output.write(playFrame);
+                    output.write(burstFrames);
                     output.flush();
                     sent++;
                 }
-                byte[] echo = readFrame(input);
-                if (samples != null) samples[received] = System.nanoTime() - outstandingSince[received % outstandingSince.length];
-                echoes++;
-                int expectedSequence = firstSequence + received;
-                try {
-                    verifyEcho(playPayload, echo, expectedSequence);
-                    correct++;
-                } catch (IOException mismatch) {
-                    errors++;
-                    throw new IOException("echo validation failed at roundtrip " + received + ": "
-                            + mismatch.getMessage(), mismatch);
+                for (int k = 0; k < burst; k++) {
+                    byte[] echo = readFrame(input);
+                    if (k == burst - 1 && samples != null) {
+                        samples[received] = System.nanoTime() - outstandingSince[received % outstandingSince.length];
+                    }
+                    int expectedSequence = burst == 1 ? firstSequence + received
+                            : (firstSequence + received) * burst + k;
+                    try {
+                        verifyEcho(playPayload, echo, expectedSequence);
+                    } catch (IOException mismatch) {
+                        errors++;
+                        throw new IOException("echo validation failed at roundtrip " + received + ": "
+                                + mismatch.getMessage(), mismatch);
+                    }
                 }
+                echoes++;
+                correct++;
                 received++;
             }
         }
@@ -309,12 +329,14 @@ public final class ProxySessionBenchmark {
         private final ServerSocket server = new ServerSocket();
         private final ExecutorService clients;
         private final int entityId;
+        private final int burst;
         private final List<Socket> active = java.util.Collections.synchronizedList(new ArrayList<>());
         private volatile boolean closed;
         private Thread acceptThread;
 
-        FakeBackend(int concurrency, int entityId) throws IOException {
+        FakeBackend(int concurrency, int entityId, int burst) throws IOException {
             this.entityId = entityId;
+            this.burst = burst;
             clients = Executors.newFixedThreadPool(concurrency);
             server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), concurrency * 2);
         }
@@ -352,9 +374,23 @@ public final class ProxySessionBenchmark {
                 writeFrame(output, success.toByteArray());
                 writeFrame(output, joinGame(entityId));
                 writeFrame(output, positionAndLook());
-                while (!closed && !socket.isClosed()) {
-                    byte[] body = readFrame(input);
-                    writeFrame(output, body);
+                if (burst == 1) {
+                    while (!closed && !socket.isClosed()) {
+                        byte[] body = readFrame(input);
+                        writeFrame(output, body);
+                    }
+                } else {
+                    ByteArrayOutputStream echoes = new ByteArrayOutputStream();
+                    while (!closed && !socket.isClosed()) {
+                        echoes.reset();
+                        for (int k = 0; k < burst; k++) {
+                            byte[] body = readFrame(input);
+                            writeVarInt(echoes, body.length);
+                            echoes.write(body);
+                        }
+                        echoes.writeTo(output);
+                        output.flush();
+                    }
                 }
             } catch (EOFException ignored) { }
             catch (IOException ignored) { }
@@ -459,6 +495,35 @@ public final class ProxySessionBenchmark {
         writeVarInt(output, bytes.length); output.write(bytes);
     }
 
+    /** CPU time consumed by the proxy's session I/O event loops; the direct phase leaves them idle. */
+    private static long proxyIoCpuNanos() {
+        var threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        long total = 0;
+        for (Thread thread : Thread.getAllStackTraces().keySet()) {
+            if (!thread.getName().startsWith("moonbridge-session-io")) continue;
+            long cpu = threads.getThreadCpuTime(thread.threadId());
+            if (cpu > 0) total += cpu;
+        }
+        return total;
+    }
+
+    /** Host-wide TCP OutSegs from /proc/net/snmp (Linux only), or -1 when unavailable. */
+    private static long tcpOutSegments() {
+        try {
+            List<String> lines = java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/net/snmp"));
+            for (int i = 0; i + 1 < lines.size(); i++) {
+                if (!lines.get(i).startsWith("Tcp:") || !lines.get(i + 1).startsWith("Tcp:")) continue;
+                List<String> keys = List.of(lines.get(i).trim().split("\\s+"));
+                String[] values = lines.get(i + 1).trim().split("\\s+");
+                int column = keys.indexOf("OutSegs");
+                return column < 0 ? -1 : Long.parseLong(values[column]);
+            }
+        } catch (IOException | RuntimeException unavailable) {
+            return -1;
+        }
+        return -1;
+    }
+
     private static long percentile(long[] sorted, double quantile) {
         return sorted[Math.min(sorted.length - 1, (int) Math.ceil(quantile * sorted.length) - 1)];
     }
@@ -467,7 +532,7 @@ public final class ProxySessionBenchmark {
         int found = fallback;
         boolean seen = false;
         List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window",
-                "mode", "command-interceptor");
+                "mode", "command-interceptor", "burst");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);
