@@ -408,4 +408,57 @@ final class RawRelayTest {
         first.runPendingTasks();
         second.runPendingTasks();
     }
+
+    @Test
+    void nonBufferMessagesAreReleasedAndCloseBothSides() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend).start();
+            pump(client, backend);
+            var holder = new io.netty.buffer.DefaultByteBufHolder(Unpooled.buffer().writeByte(1));
+            client.writeInbound(holder);
+            assertEquals(0, holder.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void releasesAFrameWhenAnObserverFailsBeforeItIsWritten() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend, bytes -> { throw new IllegalStateException("observer"); }, null).start();
+            pump(client, backend);
+            var frame = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(frame);
+            assertEquals(0, frame.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void releasesAQueuedFrameWhenAnObserverFailsDuringStartupReplay() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var link = RawRelay.attach(client, backend, bytes -> { throw new IllegalStateException("observer"); }, null);
+            pump(client, backend);
+            var queued = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(queued); // held while the link is paused
+            link.start();
+            pump(client, backend);
+            assertEquals(0, queued.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
 }

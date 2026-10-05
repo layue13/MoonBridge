@@ -1,5 +1,6 @@
 package dev.moonbridge.core.auth;
 
+import dev.moonbridge.core.protocol.ByteBufs;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 
@@ -15,6 +16,14 @@ final class CipherBufferTransform {
         int length = input.readableBytes();
         boolean direct = input.isDirect() && !input.isReadOnly() && input.nioBufferCount() == 1;
         ByteBuf output = direct ? allocator.directBuffer(length, length) : allocator.buffer(length, length);
+        try {
+            return ByteBufs.fill(output, target -> transform(cipher, input, target, length, direct));
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("Minecraft CFB8 transformation failed", failure);
+        }
+    }
+
+    private static void transform(Cipher cipher, ByteBuf input, ByteBuf output, int length, boolean direct) {
         try {
             if (direct && output.nioBufferCount() == 1) {
                 int written = cipher.update(input.internalNioBuffer(input.readerIndex(), length),
@@ -36,13 +45,8 @@ final class CipherBufferTransform {
                     if (transformed != null) Arrays.fill(transformed, (byte) 0);
                 }
             }
-            return output;
-        } catch (ShortBufferException | RuntimeException failure) {
-            output.release();
-            throw new IllegalStateException("Minecraft CFB8 transformation failed", failure);
-        } catch (Error failure) {
-            output.release();
-            throw failure;
+        } catch (ShortBufferException failure) {
+            throw new IllegalStateException("CFB8 output buffer was too small", failure);
         }
     }
 }

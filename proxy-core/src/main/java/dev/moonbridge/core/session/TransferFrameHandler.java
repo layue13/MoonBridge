@@ -8,13 +8,11 @@ import dev.moonbridge.core.relay.RawRelay;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.util.ReferenceCountUtil;
 
 import java.util.concurrent.CompletableFuture;
 
 /** Handles the few framed packets that cannot pass unchanged after a backend switch. */
-final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
+final class TransferFrameHandler extends FrameTransformHandler {
     static final class State implements AutoCloseable {
         private final Channel frontend;
         private final Channel backend;
@@ -81,52 +79,33 @@ final class TransferFrameHandler extends ChannelInboundHandlerAdapter {
     private final boolean clientbound;
 
     TransferFrameHandler(State state, boolean clientbound) {
+        super(state.closeSession);
         this.state = state;
         this.clientbound = clientbound;
     }
 
-    @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
-        if (!(message instanceof ByteBuf frame)) {
-            ReferenceCountUtil.release(message);
-            state.closeSession.run();
-            return;
+    @Override protected ByteBuf transform(ChannelHandlerContext ctx, ByteBuf frame) {
+        ByteBuf body = frame.duplicate();
+        int length = ProtocolVarInt.read(body);
+        if (length < 1 || length != body.readableBytes()
+                || length > ProtocolProfile.minecraft1710().maxFrameBytes()) {
+            throw new IllegalArgumentException("invalid transferred PLAY frame");
         }
-        ByteBuf outgoing = frame;
-        try {
-            ByteBuf body = frame.duplicate();
-            int length = ProtocolVarInt.read(body);
-            if (length < 1 || length != body.readableBytes()
-                    || length > ProtocolProfile.minecraft1710().maxFrameBytes()) {
-                throw new IllegalArgumentException("invalid transferred PLAY frame");
-            }
-            int packetId = ProtocolVarInt.read(body.duplicate());
-            if (clientbound && packetId == Minecraft1710PlayPackets.JOIN_GAME) {
-                state.joinGame(body);
-                return;
-            }
-            if (!clientbound && state.awaitingForgeWorld()
-                    && !state.forgeControlPacket(body, packetId)) {
-                // Frames from the previous world may have been queued during cutover. Sending
-                // movement or gameplay to a backend still joining the player is unsafe.
-                RawRelay.continueAfterDrop(ctx.channel());
-                return;
-            }
-            Integer serverId = state.serverEntityId;
-            if (serverId != null && serverId != state.clientEntityId) {
-                ByteBuf rewritten = Minecraft1710EntityIds.rewrite(ctx.alloc(), frame, clientbound,
-                        serverId, state.clientEntityId);
-                if (rewritten != frame) {
-                    outgoing = rewritten;
-                    frame.release();
-                }
-            }
-            ctx.fireChannelRead(outgoing);
-            outgoing = null;
-        } catch (RuntimeException failure) {
-            state.closeSession.run();
-        } finally {
-            if (outgoing != null) outgoing.release();
+        int packetId = ProtocolVarInt.read(body.duplicate());
+        if (clientbound && packetId == Minecraft1710PlayPackets.JOIN_GAME) {
+            state.joinGame(body);
+            return CONSUMED; // The relay resumes once the world transition has been written.
         }
+        if (!clientbound && state.awaitingForgeWorld() && !state.forgeControlPacket(body, packetId)) {
+            // Frames from the previous world may have been queued during cutover. Sending
+            // movement or gameplay to a backend still joining the player is unsafe.
+            return null;
+        }
+        Integer serverId = state.serverEntityId;
+        if (serverId != null && serverId != state.clientEntityId) {
+            return Minecraft1710EntityIds.rewrite(ctx.alloc(), frame, clientbound, serverId, state.clientEntityId);
+        }
+        return frame;
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {

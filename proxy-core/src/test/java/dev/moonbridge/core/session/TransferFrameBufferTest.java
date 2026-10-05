@@ -89,4 +89,15 @@ final class TransferFrameBufferTest {
             channel.finishAndReleaseAll();
         }
     }
+
+    @Test
+    void nonBufferMessagesAreReleasedAndCloseTheSession() {
+        var closed = new AtomicInteger();
+        var channel = new EmbeddedChannel(new TransferFrameBuffer(closed::incrementAndGet));
+        var holder = new io.netty.buffer.DefaultByteBufHolder(Unpooled.buffer().writeByte(1));
+        channel.writeInbound(holder);
+        assertEquals(0, holder.refCnt());
+        assertEquals(1, closed.get());
+        channel.finishAndReleaseAll();
+    }
 }

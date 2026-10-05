@@ -193,4 +193,43 @@ class TabCompletionBridgeTest {
             assertEquals(List.of("/proxy", "/second"), read(f.client));
         }
     }
+
+    @Test void requestArrivingAfterCloseIsReleased() {
+        try (Fixture f = new Fixture()) {
+            f.bridge.close();
+            ByteBuf late = request("/p");
+            f.client.writeInbound(late);
+            assertEquals(0, late.refCnt());
+            assertNull(f.client.readInbound());
+        }
+    }
+
+    @Test void malformedRequestIsReleasedAndClosesTheSession() {
+        try (Fixture f = new Fixture()) {
+            ByteBuf body = Unpooled.buffer();
+            body.writeByte(0x14);
+            ProtocolVarInt.write(body, 5); // promises five bytes of text but carries one
+            body.writeByte('a');
+            ByteBuf frame;
+            try { frame = Minecraft1710PlayPackets.frame(UnpooledByteBufAllocatorHolder.ALLOC, body); }
+            finally { body.release(); }
+            f.client.writeInbound(frame);
+            assertEquals(0, frame.refCnt());
+            assertTrue(f.closed.get());
+        }
+    }
+
+    @Test void nonBufferMessagesAreReleasedAndCloseTheSession() {
+        try (Fixture f = new Fixture()) {
+            var fromClient = new io.netty.buffer.DefaultByteBufHolder(Unpooled.buffer().writeByte(1));
+            f.client.writeInbound(fromClient);
+            assertEquals(0, fromClient.refCnt());
+            assertTrue(f.closed.get());
+            f.closed.set(false);
+            var fromBackend = new io.netty.buffer.DefaultByteBufHolder(Unpooled.buffer().writeByte(1));
+            f.backend.writeInbound(fromBackend);
+            assertEquals(0, fromBackend.refCnt());
+            assertTrue(f.closed.get());
+        }
+    }
 }

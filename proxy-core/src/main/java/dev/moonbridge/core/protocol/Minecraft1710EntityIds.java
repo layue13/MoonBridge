@@ -25,17 +25,14 @@ public final class Minecraft1710EntityIds {
                 if (replacement != entityId) {
                     int oldEntityBytes = input.readerIndex() - firstField;
                     int newBodyBytes = length - oldEntityBytes + ProtocolVarInt.encodedSize(replacement);
-                    ByteBuf changed = allocator.buffer(ProtocolVarInt.encodedSize(newBodyBytes) + newBodyBytes);
-                    try {
-                        ProtocolVarInt.write(changed, newBodyBytes);
-                        changed.writeBytes(frame, bodyStart, firstField - bodyStart);
-                        ProtocolVarInt.write(changed, replacement);
-                        changed.writeBytes(frame, input.readerIndex(), frame.writerIndex() - input.readerIndex());
-                        current = changed;
-                    } catch (RuntimeException | Error failure) {
-                        changed.release();
-                        throw failure;
-                    }
+                    current = ByteBufs.fill(
+                            allocator.buffer(ProtocolVarInt.encodedSize(newBodyBytes) + newBodyBytes), changed -> {
+                                ProtocolVarInt.write(changed, newBodyBytes);
+                                changed.writeBytes(frame, bodyStart, firstField - bodyStart);
+                                ProtocolVarInt.write(changed, replacement);
+                                changed.writeBytes(frame, input.readerIndex(),
+                                        frame.writerIndex() - input.readerIndex());
+                            });
                 }
             } else if (intFirst(packetId, clientbound)) {
                 current = rewriteInt(allocator, current, firstField, serverEntityId, clientEntityId);
@@ -110,15 +107,10 @@ public final class Minecraft1710EntityIds {
         if (replacement == original) return frame;
         if (frame.isReadOnly()) {
             int copyOffset = offset - frame.readerIndex();
-            ByteBuf copy = allocator.buffer(frame.readableBytes());
-            try {
+            return ByteBufs.fill(allocator.buffer(frame.readableBytes()), copy -> {
                 copy.writeBytes(frame, frame.readerIndex(), frame.readableBytes());
                 copy.setInt(copyOffset, replacement);
-                return copy;
-            } catch (RuntimeException | Error failure) {
-                copy.release();
-                throw failure;
-            }
+            });
         }
         frame.setInt(offset, replacement);
         return frame;

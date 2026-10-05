@@ -2,9 +2,8 @@ package dev.moonbridge.core.auth;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.DecoderException;
-import io.netty.util.ReferenceCountUtil;
+import io.netty.handler.codec.MessageToMessageDecoder;
+import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -13,7 +12,7 @@ import javax.crypto.spec.SecretKeySpec;
  * Decrypts the raw Minecraft TCP byte stream with the protocol's continuous AES/CFB8 state.
  * Place before the frame decoder so both frame lengths and payloads are decrypted.
  */
-public final class MinecraftCipherDecoder extends ChannelInboundHandlerAdapter {
+public final class MinecraftCipherDecoder extends MessageToMessageDecoder<ByteBuf> {
     private final Cipher cipher;
 
     public MinecraftCipherDecoder(byte[] sharedSecret) {
@@ -21,20 +20,8 @@ public final class MinecraftCipherDecoder extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext context, Object message) {
-        if (!(message instanceof ByteBuf input)) {
-            context.fireChannelRead(message);
-            return;
-        }
-        ByteBuf output;
-        try {
-            output = CipherBufferTransform.update(context.alloc(), cipher, input);
-        } catch (RuntimeException failure) {
-            throw new DecoderException("Minecraft AES/CFB8 decryption failed", failure);
-        } finally {
-            ReferenceCountUtil.release(input);
-        }
-        context.fireChannelRead(output);
+    protected void decode(ChannelHandlerContext context, ByteBuf input, List<Object> output) {
+        output.add(CipherBufferTransform.update(context.alloc(), cipher, input));
     }
 
     private static Cipher createCipher(byte[] sharedSecret) {

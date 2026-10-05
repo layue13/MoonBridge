@@ -32,6 +32,7 @@ dependencies {
     implementation(libs.findLibrary("adventure-plain").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
     testImplementation(project(":backend-channel-client"))
+    testImplementation(libs.findLibrary("logback-classic").get())
 }
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {
@@ -116,6 +117,9 @@ application {
 
 tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    // Tests track every buffer so LeakGate can fail on a leak; the distribution runs with detection off.
+    systemProperty("io.netty.leakDetection.level", "paranoid")
+    systemProperty("io.netty.leakDetection.targetRecords", "16")
 }
 
 tasks.jar {

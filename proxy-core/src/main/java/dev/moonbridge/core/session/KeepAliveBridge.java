@@ -1,18 +1,15 @@
 package dev.moonbridge.core.session;
 
-import dev.moonbridge.core.relay.RawRelay;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.util.ReferenceCountUtil;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Keeps connection-local PLAY keep-alive replies on the backend that issued them. */
-final class KeepAliveBridge extends ChannelInboundHandlerAdapter {
+final class KeepAliveBridge extends FrameTransformHandler {
     static final class State {
         private static final int MAX_PENDING = 1024;
         private int nextClientId = ThreadLocalRandom.current().nextInt();
@@ -64,32 +61,14 @@ final class KeepAliveBridge extends ChannelInboundHandlerAdapter {
     private final Runnable closeSession;
 
     KeepAliveBridge(State state, boolean fromFrontend, Runnable closeSession) {
+        super(closeSession);
         this.state = state;
         this.fromFrontend = fromFrontend;
         this.closeSession = closeSession;
     }
 
-    @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
-        if (!(message instanceof ByteBuf packet)) {
-            ReferenceCountUtil.release(message);
-            closeSession.run();
-            return;
-        }
-        ByteBuf outgoing = packet;
-        try {
-            ByteBuf mapped = state.frame(ctx.alloc(), packet, fromFrontend);
-            if (mapped != packet) {
-                packet.release();
-                outgoing = mapped;
-            }
-            if (outgoing != null) ctx.fireChannelRead(outgoing);
-            else RawRelay.continueAfterDrop(ctx.channel());
-            outgoing = null;
-        } catch (RuntimeException malformed) {
-            closeSession.run();
-        } finally {
-            if (outgoing != null) outgoing.release();
-        }
+    @Override protected ByteBuf transform(ChannelHandlerContext ctx, ByteBuf frame) {
+        return state.frame(ctx.alloc(), frame, fromFrontend);
     }
 
     @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {

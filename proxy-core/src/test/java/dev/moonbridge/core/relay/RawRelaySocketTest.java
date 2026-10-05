@@ -80,6 +80,46 @@ final class RawRelaySocketTest {
         }
     }
 
+    /**
+     * One TCP read decodes into several frames. The first closes the relay, but on a real event loop the
+     * pipeline stays alive until the next task, so the later frames of the same read still reach the relay
+     * and must be released rather than dropped on the floor.
+     */
+    @Test
+    void framesDecodedAfterTheFirstOneClosedTheRelayAreReleased() throws Exception {
+        try (var pair = new SocketPair()) {
+            var read = new java.util.concurrent.CopyOnWriteArrayList<io.netty.buffer.ByteBuf>();
+            pair.firstRelay.config().setAllocator(new io.netty.buffer.AbstractByteBufAllocator() {
+                @Override protected io.netty.buffer.ByteBuf newHeapBuffer(int initial, int max) {
+                    var buffer = io.netty.buffer.UnpooledByteBufAllocator.DEFAULT.heapBuffer(initial, max);
+                    read.add(buffer);
+                    return buffer;
+                }
+                @Override protected io.netty.buffer.ByteBuf newDirectBuffer(int initial, int max) {
+                    var buffer = io.netty.buffer.UnpooledByteBufAllocator.DEFAULT.directBuffer(initial, max);
+                    read.add(buffer);
+                    return buffer;
+                }
+                @Override public boolean isDirectBufferPooled() { return false; }
+            });
+            pair.firstRelay.pipeline().addFirst("frames", new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
+                    dev.moonbridge.core.protocol.ProtocolProfile.minecraft1710(), true));
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var link = RawRelay.attach(pair.firstRelay, pair.secondRelay, bytes -> {
+                if (calls.getAndIncrement() == 0) throw new IllegalStateException("observer rejects the first frame");
+            }, null);
+            link.ready().toCompletableFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            link.start();
+
+            var frames = new byte[] {1, 7, 1, 8, 1, 9}; // three one-byte frames in a single TCP write
+            writeFully(pair.firstPeer, frames);
+
+            await(() -> !isActive(pair.firstRelay) && !isActive(pair.secondRelay), "relay closed by the first frame");
+            await(() -> !read.isEmpty() && read.stream().allMatch(buffer -> buffer.refCnt() == 0),
+                    "every buffer read for the relay was released: " + read.stream().map(io.netty.buffer.ByteBuf::refCnt).toList());
+        }
+    }
+
     private static void transferWithBackpressure(SocketPair pair, Socket sender, Socket receiver, Channel relayTarget,
                                                  AtomicLong observed) throws Exception {
         var payload = payload();

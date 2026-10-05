@@ -194,7 +194,7 @@ final class TabCompletionBridge implements AutoCloseable {
         closed = true;
         if (timeout != null) timeout.cancel(false);
         if (pluginResult != null) pluginResult.cancel(false);
-        if (active != null) active.release();
+        // pump() releases or forwards every request before it returns, so the active one owns no frame.
         active = null;
         Request request;
         while ((request = queued.pollFirst()) != null) request.release();
