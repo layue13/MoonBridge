@@ -45,3 +45,9 @@ Raw output: [2026-10-05-relay-batched-flush-raw.txt](2026-10-05-relay-batched-fl
 ## Limits
 
 This is a synthetic loopback echo on a shared 4-vCPU container, and the direct baseline drifted between runs. The segment counter is host-wide and includes ACKs. The run did not use real Forge traffic, encryption (`ONLINE_BUNGEE`), cross-host RTT or production player counts. It shows that per-frame flushing costs syscalls, segments and CPU on burst traffic. It does not give a production capacity figure. Measure on target hardware with representative pack traffic before claiming an end-to-end gain.
+
+## Follow-up: inline write completion (not adopted)
+
+The relay requests its next read only after every forwarded write has completed. After a forwarded write completes, the relay queues one event-loop task to update its counter and request the next read. That task allocates one lambda per frame. The candidate handled successful completions on the shared event loop inline, using one reusable listener. Pause, close and failure handling kept the queued path. `RawRelay*`, session, keep-alive and tab-completion tests passed with it.
+
+The same three workloads ran twice against the batched-flush build: first batched-then-inline, then inline-then-batched. In the first order the inline candidate had better burst32 medians (I/O CPU 1888 vs 2466 ns/frame) and worse window-1 medians. In the reversed order every direction flipped (burst32: 1688 vs 1354 ns/frame for inline vs batched; window 1: inline better). The ranges overlapped throughout. The difference is not distinguishable from run order and noise on this host, so the candidate was reverted. After batching, the remaining per-frame callback is not a measured bottleneck. Raw output: [2026-10-05-relay-inline-completion-raw.txt](2026-10-05-relay-inline-completion-raw.txt).
