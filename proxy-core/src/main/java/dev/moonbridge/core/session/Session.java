@@ -31,6 +31,7 @@ import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.MinecraftLoginSuccess;
 import dev.moonbridge.core.protocol.MinecraftLoginDisconnect;
 import dev.moonbridge.core.protocol.MinecraftHandshake;
+import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
 import dev.moonbridge.core.relay.RawRelay;
@@ -38,19 +39,15 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.NetUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
-import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -59,6 +56,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.List;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.protocol.MinecraftText;
@@ -71,15 +70,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Mutable session control state is confined to the frontend event loop. */
-@io.netty.channel.ChannelHandler.Sharable
+@ChannelHandler.Sharable
 final class Session extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final int MAX_TRANSITION_BUFFER_FRAMES = 1024;
     private static final int MAX_PENDING_MESSAGES = 64;
-    private static final int COMMAND_BURST = 10;
-    private static final long COMMAND_TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
-    private static final long COMMAND_NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final Duration FORGE_TRANSFER_HANDSHAKE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
     private final ProxySessionListener owner;
@@ -87,6 +83,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private volatile Channel backend;
     private boolean backendConnected;
     private MinecraftHandshake handshake;
+    private boolean statusRequest;
     private LoginStart loginStart;
     private MinecraftEncryptionRequest encryptionRequest;
     private VerifiedProfile verifiedProfile;
@@ -115,10 +112,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private TabCompletionBridge tabCompletion;
     private CompletableFuture<DisconnectResult> disconnectResult;
     private ScheduledFuture<?> disconnectDeadline;
-    private int commandTokens = COMMAND_BURST;
-    private long commandTokenRefillNanos = System.nanoTime();
-    private long lastCommandNoticeNanos;
-    private boolean commandNoticeSent;
+    private final CommandRateLimiter commandLimiter = new CommandRateLimiter(System.nanoTime());
     private ScheduledFuture<?> initialLoginDeadline;
     private ScheduledFuture<?> initialPlayDeadline;
     private PlayObservation playObservation;
@@ -248,12 +242,12 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             pipeline.addAfter("minecraft-frame-decoder", "minecraft-cipher-decoder", new MinecraftCipherDecoder(secret));
             pipeline.addAfter("minecraft-cipher-decoder", "encrypted-frame-decoder",
-                    new dev.moonbridge.core.protocol.MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true,
+                    new MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true,
                             ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
             pipeline.addBefore("minecraft-frame-encoder", "minecraft-cipher-encoder", new MinecraftCipherEncoder(secret));
             pipeline.remove("minecraft-frame-decoder");
         } finally {
-            java.util.Arrays.fill(secret, (byte) 0);
+            Arrays.fill(secret, (byte) 0);
         }
         observeWaitingClient();
         String clientIp = ((InetSocketAddress) frontend.remoteAddress()).getAddress().getHostAddress();
@@ -313,7 +307,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         resetLoginDeadline(owner.eventTimeout().plusSeconds(1));
         try {
-            CompletableFuture<AccessDecision> request = java.util.Objects.requireNonNull(owner.dispatchEvent(
+            CompletableFuture<AccessDecision> request = Objects.requireNonNull(owner.dispatchEvent(
                     new PlayerAdmissionEvent(view, (InetSocketAddress) frontend.remoteAddress(), verifiedProfile != null)),
                     "player admission stage").toCompletableFuture();
             admissionRequest = request;
@@ -363,8 +357,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
         });
     }
-
-    private boolean statusRequest;
 
     private void observeWaitingClient() {
         ChannelPipeline pipeline = frontend.pipeline();
@@ -417,9 +409,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             String name = initialCandidates.get(initialCandidateIndex++);
             BackendView target = owner.catalog().find(new BackendId(name)).orElse(null);
             if (target == null) continue;
-            URI address = target.address();
-            if (!"tcp".equalsIgnoreCase(address.getScheme()) || address.getHost() == null
-                    || address.getPort() < 1 || address.getPort() > 65535) continue;
+            if (!SessionChannels.isTcpAddress(target.address())) continue;
             connectInitialBackend(target, remaining);
             return;
         }
@@ -427,23 +417,14 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void connectInitialBackend(BackendView target, long remainingNanos) {
-        Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
-                .resolver(owner.backendResolver())
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.AUTO_READ, false)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
-                        (int) Math.max(1, Math.min(5000, TimeUnit.NANOSECONDS.toMillis(remainingNanos))))
-                .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
-                    @Override protected void initChannel(SocketChannel channel) {
-                        requireSessionEventLoop(channel);
-                        installCodecs(channel.pipeline());
-                        // Do not attach the shared Session until the attempt has won. A failed
-                        // dial's inactive/exception callbacks must not close a later connection.
-                    }
-                });
+        // Do not attach the shared Session until the attempt has won. A failed
+        // dial's inactive/exception callbacks must not close a later connection.
+        Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.backendResolver(),
+                (int) Math.max(1, Math.min(5000, TimeUnit.NANOSECONDS.toMillis(remainingNanos))), false,
+                pipeline -> { });
         ChannelFuture connect;
         try {
-            connect = bootstrap.connect(backendSocketAddress(target.address()));
+            connect = bootstrap.connect(SessionChannels.socketAddress(target.address()));
         } catch (RuntimeException failure) {
             LOGGER.debug("Initial backend dial could not start for {} to {}", view.username(), target.address(), failure);
             connectNextInitialBackend();
@@ -518,12 +499,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         });
     }
 
-    private static void installCodecs(ChannelPipeline pipeline) {
-        pipeline.addLast("minecraft-frame-decoder", new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
-                ProtocolProfile.minecraft1710(), true));
-        pipeline.addLast("minecraft-frame-encoder", new SessionFrameEncoder());
-    }
-
     private void disconnectLogin(String reason) { disconnectLogin(Component.text(reason)); }
 
     private void disconnectLogin(Component message) {
@@ -564,7 +539,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         if (id == 0) { // Login Disconnect.
             loginDisconnectStarted = true;
             disconnecting = true;
-        if (tabCompletion != null) tabCompletion.close();
+            if (tabCompletion != null) tabCompletion.close();
             disconnectResult = new CompletableFuture<>();
             frontend.config().setAutoRead(false);
             resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
@@ -624,13 +599,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void allowFrontendPlayFrames() {
-        ChannelPipeline pipeline = frontend.pipeline();
-        Object decoder = pipeline.get("encrypted-frame-decoder") != null
-                ? pipeline.get("encrypted-frame-decoder") : pipeline.get("minecraft-frame-decoder");
-        if (!(decoder instanceof dev.moonbridge.core.protocol.MinecraftFrameDecoder frames)) {
-            throw new IllegalStateException("client frame decoder missing after login success");
-        }
-        frames.allowPlayFrames();
+        SessionChannels.frameDecoder(frontend.pipeline(), "client frame decoder missing after login success")
+                .allowPlayFrames();
     }
 
     private void startRelay() {
@@ -704,23 +674,11 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private boolean admitPlayerCommand() {
-        long now = System.nanoTime();
-        long elapsed = now - commandTokenRefillNanos;
-        if (elapsed >= COMMAND_TOKEN_NANOS) {
-            long replenished = Math.min(COMMAND_BURST, elapsed / COMMAND_TOKEN_NANOS);
-            commandTokens = (int) Math.min(COMMAND_BURST, commandTokens + replenished);
-            commandTokenRefillNanos = now;
-        }
-        if (commandTokens > 0) {
-            commandTokens--;
-            return true;
-        }
-        if (!commandNoticeSent || now - lastCommandNoticeNanos >= COMMAND_NOTICE_NANOS) {
-            commandNoticeSent = true;
-            lastCommandNoticeNanos = now;
+        CommandRateLimiter.Decision decision = commandLimiter.admit(System.nanoTime());
+        if (decision == CommandRateLimiter.Decision.DENY_WITH_NOTICE) {
             sendCommandReply(Component.text("Too many proxy commands. Please slow down."));
         }
-        return false;
+        return decision == CommandRateLimiter.Decision.ADMIT;
     }
 
     CompletionStage<MessageResult> sendMessage(String message) {
@@ -1068,8 +1026,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         } catch (IllegalArgumentException invalidName) {
             target = null;
         }
-        if (target == null || !"tcp".equalsIgnoreCase(target.address().getScheme())
-                || target.address().getHost() == null || target.address().getPort() < 1) {
+        if (target == null || !SessionChannels.isTcpAddress(target.address())) {
             result.complete(TransferResult.of(TransferStatus.SERVER_UNAVAILABLE));
             return;
         }
@@ -1094,21 +1051,9 @@ final class Session extends ChannelInboundHandlerAdapter {
             @Override public void failed(TransferCandidate candidate, String reason) { failTransfer(attempt, reason); }
         }, attempt.preparation != null);
         try {
-            Bootstrap bootstrap = new Bootstrap().group(frontend.eventLoop()).channel(NioSocketChannel.class)
-                    .resolver(owner.backendResolver())
-                    .option(ChannelOption.TCP_NODELAY, true)
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-                    .handler(new io.netty.channel.ChannelInitializer<SocketChannel>() {
-                        @Override protected void initChannel(SocketChannel channel) {
-                            requireSessionEventLoop(channel);
-                            channel.pipeline().addLast("minecraft-frame-decoder",
-                                    new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
-                                            ProtocolProfile.minecraft1710(), true));
-                            channel.pipeline().addLast("minecraft-frame-encoder", new SessionFrameEncoder());
-                            channel.pipeline().addLast("transfer-candidate", attempt.candidate);
-                        }
-                    });
-            ChannelFuture connect = bootstrap.connect(backendSocketAddress(attempt.target.address()));
+            Bootstrap bootstrap = SessionChannels.backendBootstrap(frontend, owner.backendResolver(), 5000, true,
+                    pipeline -> pipeline.addLast("transfer-candidate", attempt.candidate));
+            ChannelFuture connect = bootstrap.connect(SessionChannels.socketAddress(attempt.target.address()));
             attempt.channel = connect.channel();
             connect.addListener(future -> {
                 if (attempt.finished || closed.get() || disconnecting) { connect.channel().close(); return; }
@@ -1169,26 +1114,8 @@ final class Session extends ChannelInboundHandlerAdapter {
 
     private void releaseTransferSource(TransferAttempt attempt, PreparedTransfer prepared) {
         Channel source = backend;
-        try {
-            attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
-            attempt.oldBackendBuffer = installTransferBuffer(source, "transfer-old-backend-buffer");
-        } catch (RuntimeException failure) {
-            failTransfer(attempt, "could not stop source gameplay for transfer");
-            closePair();
-            return;
-        }
-        attempt.pauseInProgress = true;
-        CompletionStage<Void> pause = attempt.oldRelay.pause();
-        frontend.eventLoop().execute(attempt.clientBuffer::readUntilRemoved);
-        source.eventLoop().execute(attempt.oldBackendBuffer::readUntilRemoved);
-        pause.whenComplete((ignored, pauseFailure) -> frontend.eventLoop().execute(() -> {
-            attempt.pauseInProgress = false;
-            if (pauseFailure != null) {
-                failTransfer(attempt, "could not drain source relay");
-                closePair();
-                return;
-            }
-            attempt.paused = true;
+        pauseSource(attempt, source, "could not stop source gameplay for transfer",
+                "could not drain source relay", () -> {
             if (!currentAttempt(attempt)) {
                 if (!closed.get() && !disconnecting) resumeAfterFailedTransfer(attempt);
                 return;
@@ -1235,7 +1162,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     confirmSourceReleased(attempt, prepared);
                 });
             }));
-        }));
+        });
     }
 
     private void confirmSourceReleased(TransferAttempt attempt, PreparedTransfer prepared) {
@@ -1290,7 +1217,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         try {
             return encodeForwardedHandshake(backendName, backendEpoch, verifiedProfile, secret);
         } finally {
-            if (secret != null) java.util.Arrays.fill(secret, (byte) 0);
+            if (secret != null) Arrays.fill(secret, (byte) 0);
         }
     }
 
@@ -1304,7 +1231,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             VerifiedProfile offlineProfile = new VerifiedProfile(identity.playerId(), view.username(), List.of());
             return encodeForwardedHandshake(backendName, backendEpoch, offlineProfile, secret);
         } finally {
-            java.util.Arrays.fill(secret, (byte) 0);
+            Arrays.fill(secret, (byte) 0);
         }
     }
 
@@ -1318,24 +1245,6 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         return BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
                 (InetSocketAddress) frontend.remoteAddress(), profile, proof);
-    }
-
-    private static InetSocketAddress backendSocketAddress(URI address) {
-        String host = address.getHost();
-        if (host.startsWith("[") && host.endsWith("]")) {
-            host = host.substring(1, host.length() - 1);
-        }
-        var numericAddress = NetUtil.createInetAddressFromIpAddressString(host);
-        if (numericAddress != null) {
-            return new InetSocketAddress(numericAddress, address.getPort());
-        }
-        return InetSocketAddress.createUnresolved(host, address.getPort());
-    }
-
-    private void requireSessionEventLoop(Channel channel) {
-        if (channel.eventLoop() != frontend.eventLoop()) {
-            throw new IllegalStateException("backend channel must share the player session event loop");
-        }
     }
 
     private void candidateReady(TransferAttempt attempt) {
@@ -1357,26 +1266,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             activateCandidate(attempt);
             return;
         }
-        try {
-            attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
-            attempt.oldBackendBuffer = installTransferBuffer(backend, "transfer-old-backend-buffer");
-        } catch (RuntimeException failure) {
-            failTransfer(attempt, "could not buffer frames for transfer");
-            closePair();
-            return;
-        }
-        attempt.pauseInProgress = true;
-        CompletionStage<Void> pause = attempt.oldRelay.pause();
-        frontend.eventLoop().execute(attempt.clientBuffer::readUntilRemoved);
-        backend.eventLoop().execute(attempt.oldBackendBuffer::readUntilRemoved);
-        pause.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
-            attempt.pauseInProgress = false;
-            if (failure != null) {
-                if (!attempt.finished) failTransfer(attempt, "old backend stopped during transfer");
-                closePair();
-                return;
-            }
-            attempt.paused = true;
+        pauseSource(attempt, backend, "could not buffer frames for transfer",
+                "old backend stopped during transfer", () -> {
             if (attempt.finished || closed.get() || disconnecting) {
                 if (disconnecting) return;
                 resumeAfterFailedTransfer(attempt);
@@ -1408,26 +1299,48 @@ final class Session extends ChannelInboundHandlerAdapter {
                         attempt.detached = true;
                         activateCandidate(attempt);
                     }));
+        });
+    }
+
+    /**
+     * Buffers both old-link directions and pauses the old relay. {@code onPaused} runs on the session
+     * event loop after accepted writes drain; buffer or drain failures fail the attempt and close.
+     */
+    private void pauseSource(TransferAttempt attempt, Channel source, String bufferFailure, String drainFailure,
+                             Runnable onPaused) {
+        try {
+            attempt.clientBuffer = installTransferBuffer(frontend, "transfer-client-buffer");
+            attempt.oldBackendBuffer = installTransferBuffer(source, "transfer-old-backend-buffer");
+        } catch (RuntimeException failure) {
+            failTransfer(attempt, bufferFailure);
+            closePair();
+            return;
+        }
+        attempt.pauseInProgress = true;
+        CompletionStage<Void> pause = attempt.oldRelay.pause();
+        frontend.eventLoop().execute(attempt.clientBuffer::readUntilRemoved);
+        source.eventLoop().execute(attempt.oldBackendBuffer::readUntilRemoved);
+        pause.whenComplete((ignored, failure) -> frontend.eventLoop().execute(() -> {
+            attempt.pauseInProgress = false;
+            if (failure != null) {
+                failTransfer(attempt, drainFailure);
+                closePair();
+                return;
+            }
+            attempt.paused = true;
+            onPaused.run();
         }));
     }
 
     private TransferFrameBuffer installTransferBuffer(Channel channel, String name) {
-        ChannelPipeline pipeline = channel.pipeline();
-        String decoder = pipeline.get("encrypted-frame-decoder") != null
-                ? "encrypted-frame-decoder" : "minecraft-frame-decoder";
         var buffer = new TransferFrameBuffer(this::closePair);
-        pipeline.addAfter(decoder, name, buffer);
+        channel.pipeline().addAfter(SessionChannels.frameDecoderName(channel.pipeline()), name, buffer);
         return buffer;
     }
 
     private boolean clientHasPartialFrame() {
-        ChannelPipeline pipeline = frontend.pipeline();
-        var decoder = pipeline.get("minecraft-frame-decoder");
-        if (decoder == null) decoder = pipeline.get("encrypted-frame-decoder");
-        if (!(decoder instanceof dev.moonbridge.core.protocol.MinecraftFrameDecoder frameDecoder)) {
-            throw new IllegalStateException("client frame decoder missing during transfer");
-        }
-        return frameDecoder.hasPartialFrame();
+        return SessionChannels.frameDecoder(frontend.pipeline(), "client frame decoder missing during transfer")
+                .hasPartialFrame();
     }
 
     private void activateCandidate(TransferAttempt attempt) {
@@ -1547,8 +1460,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void installTransferFrameHandlers(TransferFrameHandler.State state, Channel target) {
         ChannelPipeline clientPipeline = frontend.pipeline();
         if (clientPipeline.get("transfer-frame-handler") != null) clientPipeline.remove("transfer-frame-handler");
-        if (clientPipeline.get("minecraft-frame-decoder") == null
-                && clientPipeline.get("encrypted-frame-decoder") == null) {
+        if (SessionChannels.frameDecoderName(clientPipeline) == null) {
             throw new IllegalStateException("client frame decoder missing during transfer");
         }
         clientPipeline.addLast("transfer-frame-handler", new TransferFrameHandler(state, false));
@@ -1746,46 +1658,6 @@ final class Session extends ChannelInboundHandlerAdapter {
     Optional<PlayerView> onlineView() {
         if (!published || closed.get()) return Optional.empty();
         return Optional.of(view);
-    }
-
-    private static final class TransferAttempt {
-        private final BackendView target;
-        private final CompletableFuture<TransferResult> result;
-        private final RawRelay.Link oldRelay;
-        private TransferCandidate candidate;
-        private TransferFrameHandler.State frameState;
-        private TransferFrameBuffer clientBuffer;
-        private TransferFrameBuffer oldBackendBuffer;
-        private Channel channel;
-        private boolean pauseInProgress;
-        private boolean paused;
-        private boolean detached;
-        private boolean finished;
-        private String failureReason;
-        private ScheduledFuture<?> cutoverDeadline;
-        private TransferPreparation preparation;
-        private TransferContext context;
-        private CompletableFuture<?> coordination;
-        private ScheduledFuture<?> totalDeadline;
-        private boolean sourceReleased;
-
-        private TransferAttempt(BackendView target,
-                                CompletableFuture<TransferResult> result, RawRelay.Link oldRelay) {
-            this.target = target;
-            this.result = result;
-            this.oldRelay = oldRelay;
-        }
-    }
-
-    private static final class PendingTransfer {
-        private final String backendName;
-        private final CompletableFuture<TransferResult> result;
-        private ScheduledFuture<?> deadline;
-
-        private PendingTransfer(String backendName, CompletableFuture<TransferResult> result) {
-            this.backendName = backendName;
-            this.result = result;
-        }
     }
 
     private record PendingFrame(boolean fromFrontend, ByteBuf payload) { }
