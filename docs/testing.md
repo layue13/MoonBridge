@@ -57,6 +57,12 @@ sh smoke/container-channel.sh
 
 新增覆盖包括协议解析前的 IP 拒绝、身份建立后的玩家拒绝、异步等待期间的数据回放、加密登录断开消息、断线取消、超时、异常、工作队列与未决 stage 容量上限，以及进入 PLAY 后不重复调用访问检查。在线身份测试使用注入的会话验证器，未连接真实 Mojang 服务。本次未测量接入吞吐或真实数据库延迟；以下基准均保留各自的历史版本与验证范围。
 
+## 泄漏闸门与变异检查
+
+`proxy-core` 的测试 JVM 以 `-Dio.netty.leakDetection.level=paranoid` 运行，`dev.moonbridge.testing.LeakGate` 自动注册到每个测试类：类结束后强制 GC 并读取 Netty 的泄漏报告，有未释放的缓冲区就使该类失败。`LeakGateTest` 证明它能发现故意制造的泄漏。注意 `Unpooled.wrappedBuffer(byte[])` 创建的缓冲区不被追踪，涉及它们的测试应直接断言 `refCnt()`。
+
+2026-10-05 对手写 `release()` 位置做过一次变异检查（把单个 `release()` 换成不改引用计数的空操作，再跑覆盖它的测试）：对 relay、帧处理器、Tab 补全、协议编码和加解密共 47 处，改造前 23 处无人守护；集中到 `ByteBufs`、`FrameTransformHandler` 并补测试后，剩余 33 处中 32 处被抓到，最后一处随加解密处理器改用 Netty 基类而消失。`ConnectionGate` 与 `Session` 的第二轮检查没有跑完（已完成 11/24：`ConnectionGate:71`、`Session:366/906/911` 当时未被守护，其中 `Session:366/906/911` 已改为复用被测试的辅助代码，`ConnectionGate` 补了单元测试）；`Session` 其余约 10 处（主要是转服开场帧 `transferOpening` 与断开包构造）没有被变异验证。
+
 ## 合成 relay 基准
 
 `benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。

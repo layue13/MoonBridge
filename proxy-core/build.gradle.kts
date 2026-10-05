@@ -112,7 +112,10 @@ application {
     mainClass.set("dev.moonbridge.app.ProxyMain")
     applicationName = "moonbridge"
     // Netty's epoll/kqueue transports load a JNI library; allow it without JDK restricted-method warnings.
-    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+    // Leak detection is off in the distribution; every proxy-core test class runs with PARANOID detection
+    // through LeakGate instead. Re-enable per deployment with JAVA_OPTS=-Dio.netty.leakDetection.level=simple.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED",
+        "-Dio.netty.leakDetection.level=disabled")
 }
 
 tasks.withType<Test>().configureEach {

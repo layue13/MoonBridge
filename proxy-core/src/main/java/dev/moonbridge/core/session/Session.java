@@ -361,10 +361,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void observeWaitingClient() {
         ChannelPipeline pipeline = frontend.pipeline();
         if (pipeline.get("login-wait-guard") == null) {
-            pipeline.addFirst("login-wait-guard", new ChannelInboundHandlerAdapter() {
-                @Override public void channelRead(ChannelHandlerContext ctx, Object message) {
-                    ReferenceCountUtil.release(message);
-                    closePair();
+            pipeline.addFirst("login-wait-guard", new FrameTransformHandler(this::closePair) {
+                @Override protected ByteBuf transform(ChannelHandlerContext ctx, ByteBuf frame) {
+                    throw new IllegalStateException("client sent data while login was pending");
                 }
             });
         }
@@ -897,29 +896,12 @@ final class Session extends ChannelInboundHandlerAdapter {
         PendingFrame pending;
         while ((pending = transitionBuffer.pollFirst()) != null) {
             transitionBufferBytes -= pending.payload.readableBytes();
-            ByteBuf payload = pending.payload;
-            try {
-                if (playObservation != null) {
-                    playObservation.observePacket(!pending.fromFrontend, payload);
-                }
-            } catch (RuntimeException malformed) {
-                payload.release();
-                return CompletableFuture.failedFuture(malformed);
-            }
             Channel target = pending.fromFrontend ? backend : frontend;
-            if (target == null || !target.isActive()) {
-                payload.release();
-                return CompletableFuture.failedFuture(new IllegalStateException("transition peer closed"));
-            }
+            ByteBuf payload;
             try {
-                ByteBuf mapped = keepAlives.body(target.alloc(), payload, pending.fromFrontend);
-                if (mapped != payload) {
-                    payload.release();
-                    payload = mapped;
-                }
-            } catch (RuntimeException malformed) {
-                payload.release();
-                return CompletableFuture.failedFuture(malformed);
+                payload = mapTransitionFrame(pending, target);
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(failure);
             }
             if (payload == null) continue;
             CompletableFuture<Void> write = new CompletableFuture<>();
@@ -930,6 +912,24 @@ final class Session extends ChannelInboundHandlerAdapter {
             });
         }
         return CompletableFuture.allOf(writes.toArray(CompletableFuture[]::new));
+    }
+
+    /**
+     * Takes ownership of a buffered frame and returns the buffer to send, or null when the frame is
+     * swallowed. The frame is released on every failure, so callers never touch it after an exception.
+     */
+    private ByteBuf mapTransitionFrame(PendingFrame pending, Channel target) {
+        ByteBuf payload = pending.payload;
+        try {
+            if (playObservation != null) playObservation.observePacket(!pending.fromFrontend, payload);
+            if (target == null || !target.isActive()) throw new IllegalStateException("transition peer closed");
+            ByteBuf mapped = keepAlives.body(target.alloc(), payload, pending.fromFrontend);
+            if (mapped != payload) payload.release();
+            return mapped;
+        } catch (RuntimeException failure) {
+            payload.release();
+            throw failure;
+        }
     }
 
     private CompletableFuture<Void> removeHandshakeCodecs(Channel channel) {
