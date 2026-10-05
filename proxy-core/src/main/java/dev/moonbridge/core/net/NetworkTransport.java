@@ -1,8 +1,10 @@
 package dev.moonbridge.core.net;
 
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.IoEventLoop;
 import io.netty.channel.IoHandlerFactory;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.SingleThreadIoEventLoop;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.epoll.EpollIoHandler;
@@ -14,6 +16,8 @@ import io.netty.channel.kqueue.KQueueIoHandler;
 import io.netty.channel.kqueue.KQueueServerSocketChannel;
 import io.netty.channel.kqueue.KQueueSocketChannel;
 import io.netty.channel.nio.NioIoHandler;
+import io.netty.util.concurrent.RejectedExecutionHandlers;
+import io.netty.util.internal.PlatformDependent;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
@@ -22,6 +26,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 
 import java.util.Objects;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Supplier;
 
@@ -90,7 +95,17 @@ public final class NetworkTransport {
     }
 
     public EventLoopGroup newEventLoopGroup(int threads, ThreadFactory threadFactory) {
-        return new MultiThreadIoEventLoopGroup(threads, threadFactory, handlers.get());
+        return new MultiThreadIoEventLoopGroup(threads, threadFactory, handlers.get()) {
+            // A bare SingleThreadIoEventLoop queues tasks in a LinkedBlockingQueue because the generic
+            // executor may block in takeTask(). I/O loops never do, which is why Netty's own NIO and epoll
+            // loops use MPSC queues; the relay posts one write-completion task per frame, so this matters.
+            @Override protected IoEventLoop newChild(Executor executor, IoHandlerFactory ioHandlerFactory,
+                                                     Object... args) {
+                return new SingleThreadIoEventLoop(this, executor, ioHandlerFactory,
+                        PlatformDependent.<Runnable>newMpscQueue(), PlatformDependent.<Runnable>newMpscQueue(),
+                        RejectedExecutionHandlers.reject()) { };
+            }
+        };
     }
 
     public String name() { return name; }

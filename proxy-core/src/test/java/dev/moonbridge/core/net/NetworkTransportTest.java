@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class NetworkTransportTest {
     @Test
@@ -36,6 +37,23 @@ final class NetworkTransportTest {
         }
         if (!KQueue.isAvailable()) {
             assertThrows(IllegalStateException.class, () -> NetworkTransport.select(NetworkTransport.Preference.KQUEUE));
+        }
+    }
+
+    @Test
+    void eventLoopsQueueTasksInANonBlockingMpscQueue() throws Exception {
+        for (var preference : new NetworkTransport.Preference[] {
+                NetworkTransport.Preference.AUTO, NetworkTransport.Preference.NIO}) {
+            var group = NetworkTransport.select(preference).newEventLoopGroup(1, Thread.ofPlatform().daemon().factory());
+            try {
+                Class<?> type = io.netty.util.concurrent.SingleThreadEventExecutor.class;
+                var queue = type.getDeclaredField("taskQueue");
+                queue.setAccessible(true);
+                String name = queue.get(group.next()).getClass().getName();
+                assertTrue(name.contains("Mpsc"), preference + " event loop task queue was " + name);
+            } finally {
+                group.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+            }
         }
     }
 

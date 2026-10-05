@@ -35,3 +35,7 @@ No workload showed a regression, and epoll had the better median on every metric
 ## Limits
 
 This was a single loopback host. kqueue (macOS) and the Windows NIO fallback were not measured; on those platforms only the selection and fallback logic is covered by unit tests. The run did not use cross-host links, real Forge traffic or production load.
+
+## Correction (same day)
+
+Both variants above ran on event loops whose task queue was a `LinkedBlockingQueue`; see [event-loop queue record](2026-10-05-event-loop-queue-and-netty.md). The epoll-vs-NIO comparison stays valid as a relative result, but the absolute numbers here include that overhead, which the next commit removed.

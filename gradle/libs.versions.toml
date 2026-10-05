@@ -1,6 +1,6 @@
 [versions]
 junit = "5.14.1"
-netty = "4.2.2.Final"
+netty = "4.2.18.Final"
 jackson = "2.20.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
