@@ -71,7 +71,7 @@ Docker 容器间的监听、服务名和地址配置见[配置与部署](backend
 现有测试可用于定位行为范围：
 
 - 登录、认证和协议：`proxy-core/src/test/java/dev/moonbridge/core/auth/` 与 `proxy-core/src/test/java/dev/moonbridge/core/protocol/`
-- 会话、断开、转服与缓冲：`proxy-core/src/test/java/dev/moonbridge/core/session/`，重点包括 `SessionTransferTest`、`SessionTransferDispatchTest`、`TransferFrameBufferTest`
+- 会话、断开、转服与缓冲：`proxy-core/src/test/java/dev/moonbridge/core/session/`，重点包括 `SessionTransferTest`、`SessionTransferDispatchTest`、`transfer/TransferFrameBufferTest`
 - 插件生命周期、访问检查和 API：`proxy-core/src/test/java/dev/moonbridge/core/plugin/PluginHostTest.java`、`proxy-core/src/test/java/dev/moonbridge/core/session/ProxySessionListenerTest.java`、`proxy-core/src/test/java/dev/moonbridge/app/ProxyConfigurationTest.java` 与 `proxy-plugin-api/src/test/`
 - 控制通道：`proxy-core/src/test/java/dev/moonbridge/core/control/` 与 `backend-channel-client/src/test/`
 

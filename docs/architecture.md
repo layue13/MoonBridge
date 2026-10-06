@@ -28,7 +28,7 @@ flowchart LR
     F --> G[PLAY / Forge 握手与转发]
 ```
 
-普通转发沿用协议 5 帧边界，不重新编码普通帧；同一次 socket 读取解码出的帧逐个写入对端，在读取完成时合并为一次 flush，读取之外转发的帧由每批一次的事件循环任务补发 flush。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/KeepAliveBridge.java)。
+普通转发沿用协议 5 帧边界，不重新编码普通帧；同一次 socket 读取解码出的帧逐个写入对端，在读取完成时合并为一次 flush，读取之外转发的帧由每批一次的事件循环任务补发 flush。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/play/KeepAliveBridge.java)。
 
 ## 后端目录与发现所有权
 
@@ -59,9 +59,23 @@ flowchart LR
 
 玩家名/UUID 和来源 IP 的允许/拒绝判断及其封禁数据库属于 Ban 插件策略，不应放进后端目录或发现插件。连接准入事件在 TCP 建立后、协议解析前触发；玩家准入事件在身份建立后、后端登录前触发。`ONLINE_BUNGEE` 会话验证仍由核心执行，玩家准入事件只在验证之后触发；离线模式同样触发该事件，并以 `authenticated=false` 标记未认证身份。两种决策事件和 `ServerConnectedEvent`、`PlayerDisconnectedEvent` 使用同一个 `Event<R>`、`EventListener<E,R>` 与 `Events.subscribe` 机制。准入链按注册顺序运行，首个拒绝即停止；异常、空结果、超时和队列过载均失败关闭。准入队列有界（128，最多 1024 个未决请求），单事件链期限默认 5 秒、范围 1–30 秒。生命周期通知在同一个统一派发实现中采用异步 FIFO 策略（128 项加一个活动事件）；会话不等待，过载尽力丢弃并聚合记录。订阅只能在 `onLoad`/`onEnable` 注册，监听器启动前冻结；插件停用或失败时自动清理。检查不进入 PLAY 包热路径；目前没有基准证明性能收益或无开销。API 示例与配置细节见[插件接入说明](plugins.md)。
 
+## 代码分层
+
+`proxy-core` 的 `core` 包按职责分层，依赖只向下：
+
+| 包 | 职责 |
+|---|---|
+| `core.session` | `ProxySessionListener`（监听与会话索引）；`Session`（每个玩家连接一个，Netty handler 与生命周期）及其委托：`FrontendLogin`（握手、状态、加密、Mojang 验证）、`InitialRouter`（放置决策与首个后端拨号）、`ClientControl`（代发聊天与有序断开）、`BackendHandshakes` |
+| `core.session.transfer` | `TransferCoordinator` 转服状态机，经 `TransferHost` 接口读取会话状态，自己持有全部转服状态 |
+| `core.session.play` | PLAY 阶段逐帧 handler（Keep Alive、命令拦截、Tab 补全）与中继启动缓冲 |
+| `core.session.channel` | 后端拨号与 pipeline 查找辅助 |
+| `core.relay` | `RawRelay` 帧转发热路径 |
+| `core.plugin` | `PluginHost` 生命周期，分出 `EventRouter`、`CommandService`、`PlacementService`、`PluginContextImpl` |
+| `core.control` | 后端控制通道：`BackendControlService` 接入，`LeaseRegistry`、`InboundRouter`、`BackendExchange`、`OutboundWriter` |
+
 ## 相关源码
 
 - 插件 API：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Servers`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/Servers.java)、[`Players`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/Players.java)
-- 会话和转服：[`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`TransferCandidate`](../proxy-core/src/main/java/dev/moonbridge/core/session/TransferCandidate.java)、[`TransferFrameBuffer`](../proxy-core/src/main/java/dev/moonbridge/core/session/TransferFrameBuffer.java)
+- 会话和转服：[`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`TransferCandidate`](../proxy-core/src/main/java/dev/moonbridge/core/session/transfer/TransferCandidate.java)、[`TransferFrameBuffer`](../proxy-core/src/main/java/dev/moonbridge/core/session/transfer/TransferFrameBuffer.java)
 - 目录：[`BackendCatalog`](../proxy-core/src/main/java/dev/moonbridge/core/backend/BackendCatalog.java)、[`InMemoryBackendCatalog`](../proxy-core/src/main/java/dev/moonbridge/core/backend/InMemoryBackendCatalog.java)
 - 后端控制通道：[`BackendControlService`](../proxy-core/src/main/java/dev/moonbridge/core/control/BackendControlService.java)

@@ -1,5 +1,7 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.channel.SessionFrameEncoder;
+
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.ConnectionAdmissionEvent;
