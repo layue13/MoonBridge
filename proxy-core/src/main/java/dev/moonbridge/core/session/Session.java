@@ -22,9 +22,7 @@ import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.protocol.LoginStart;
-import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.MinecraftLoginSuccess;
-import dev.moonbridge.core.protocol.MinecraftLoginDisconnect;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
 import dev.moonbridge.core.relay.RawRelay;
@@ -58,7 +56,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /** Mutable session control state is confined to the frontend event loop. */
 @ChannelHandler.Sharable
@@ -66,7 +63,6 @@ final class Session extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = LoggerFactory.getLogger(Session.class);
     private static final int MAX_TRANSITION_BUFFER_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private static final int MAX_TRANSITION_BUFFER_FRAMES = 1024;
-    private static final int MAX_PENDING_MESSAGES = 64;
     private static final Duration LOGIN_DISCONNECT_DRAIN_TIMEOUT = Duration.ofSeconds(5);
     private final ProxySessionListener owner;
     private final Channel frontend;
@@ -84,15 +80,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final TransitionBuffer transitionBuffer =
             new TransitionBuffer(MAX_TRANSITION_BUFFER_FRAMES, MAX_TRANSITION_BUFFER_BYTES);
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicInteger pendingMessages = new AtomicInteger();
     private boolean frontendPlayPhase;
     private volatile boolean disconnecting;
-    private boolean disconnectPacketStarted;
-    private boolean disconnectRelayDrained;
-    private String pendingDisconnectReason;
     private TabCompletionBridge tabCompletion;
-    private CompletableFuture<DisconnectResult> disconnectResult;
-    private ScheduledFuture<?> disconnectDeadline;
     private final CommandRateLimiter commandLimiter = new CommandRateLimiter(System.nanoTime());
     private ScheduledFuture<?> initialLoginDeadline;
     private ScheduledFuture<?> initialPlayDeadline;
@@ -102,6 +92,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final FrontendLogin login;
     private final InitialRouter router;
     private final TransferCoordinator transfers;
+    private final ClientControl control;
 
     Session(ProxySessionListener owner, Channel frontend) {
         this.owner = owner;
@@ -117,6 +108,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     @Override public void close() { closePair(); }
                 });
         this.transfers = new TransferCoordinator(new Host());
+        this.control = new ClientControl(frontend, new ControlHost());
     }
 
     @Override public void handlerAdded(ChannelHandlerContext ctx) {
@@ -290,8 +282,8 @@ final class Session extends ChannelInboundHandlerAdapter {
             LOGGER.warn("Invalid plugin login rejection message", invalid);
             reason = MinecraftText.encodeReason(Component.text("Connection rejected."));
         }
-        if (frontend.eventLoop().inEventLoop()) beginDisconnect(reason);
-        else requestDisconnect(reason);
+        if (frontend.eventLoop().inEventLoop()) control.begin(reason);
+        else control.disconnectEncoded(reason);
     }
 
     private void resetLoginDeadline(Duration timeout) {
@@ -322,7 +314,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             loginDisconnectStarted = true;
             disconnecting = true;
             if (tabCompletion != null) tabCompletion.close();
-            disconnectResult = new CompletableFuture<>();
+            control.expectClose();
             frontend.config().setAutoRead(false);
             resetLoginDeadline(LOGIN_DISCONNECT_DRAIN_TIMEOUT);
             frontend.writeAndFlush(packet.copy()).addListener(ignored -> closePair());
@@ -461,199 +453,11 @@ final class Session extends ChannelInboundHandlerAdapter {
         return decision == CommandRateLimiter.Decision.ADMIT;
     }
 
-    CompletionStage<MessageResult> sendMessage(String message) {
-        validateMessage(message);
-        return sendMessage(Component.text(message));
-    }
+    CompletionStage<MessageResult> sendEncodedMessage(String message) { return control.sendEncodedMessage(message); }
 
-    CompletionStage<MessageResult> sendMessage(Component message) {
-        return sendEncodedMessage(MinecraftText.encode(message));
-    }
+    CompletionStage<DisconnectResult> disconnectEncoded(String reason) { return control.disconnectEncoded(reason); }
 
-    CompletionStage<MessageResult> sendEncodedMessage(String message) {
-        CompletableFuture<MessageResult> result = new CompletableFuture<>();
-        if (closed.get() || disconnecting) {
-            result.complete(MessageResult.NOT_CONNECTED);
-            return result;
-        }
-        while (true) {
-            int pending = pendingMessages.get();
-            if (pending >= MAX_PENDING_MESSAGES) {
-                result.complete(MessageResult.BACKPRESSURED);
-                return result;
-            }
-            if (pendingMessages.compareAndSet(pending, pending + 1)) break;
-        }
-        Runnable send = () -> {
-            if (closed.get() || !frontend.isActive()) {
-                finishMessage();
-                result.complete(MessageResult.NOT_CONNECTED);
-                return;
-            }
-            if (disconnecting) {
-                finishMessage();
-                result.complete(MessageResult.NOT_CONNECTED);
-                return;
-            }
-            if (!published || !frontendPlayPhase || relayStarting || relay == null
-                    || transfers.busy() || playObservation == null
-                    || !playObservation.ready().isDone() || playObservation.ready().isCompletedExceptionally()) {
-                finishMessage();
-                result.complete(MessageResult.NOT_READY);
-                return;
-            }
-            if (!frontend.isWritable()) {
-                finishMessage();
-                result.complete(MessageResult.BACKPRESSURED);
-                return;
-            }
-            try {
-                ByteBuf frame = Minecraft1710PlayPackets.chatReplyEncoded(frontend.alloc(), message);
-                frontend.writeAndFlush(frame).addListener(write -> {
-                    pendingMessages.decrementAndGet();
-                    if (write.isSuccess()) result.complete(MessageResult.SENT);
-                    else {
-                        result.completeExceptionally(write.cause());
-                        closePair();
-                    }
-                    if (disconnecting) writeDisconnectReasonIfDrained();
-                });
-            } catch (RuntimeException failure) {
-                pendingMessages.decrementAndGet();
-                result.completeExceptionally(failure);
-                if (disconnecting) writeDisconnectReasonIfDrained();
-            }
-        };
-        if (frontend.eventLoop().inEventLoop()) send.run();
-        else {
-            try { frontend.eventLoop().execute(send); }
-            catch (RejectedExecutionException shutdown) {
-                pendingMessages.decrementAndGet();
-                result.complete(MessageResult.NOT_CONNECTED);
-            }
-        }
-        return result;
-    }
-
-    static void validateMessage(String message) {
-        if (message == null || message.codePointCount(0, message.length()) > 1024) {
-            throw new IllegalArgumentException("message must contain at most 1024 Unicode code points");
-        }
-    }
-
-    private void finishMessage() {
-        pendingMessages.decrementAndGet();
-        if (disconnecting) writeDisconnectReasonIfDrained();
-    }
-
-    private void sendCommandReply(Component message) {
-        sendMessage(message);
-    }
-
-    CompletionStage<DisconnectResult> disconnect(String reason) {
-        validateDisconnectReason(reason);
-        return requestDisconnect(MinecraftText.encodeReason(Component.text(reason)));
-    }
-
-    CompletionStage<DisconnectResult> disconnectEncoded(String reason) {
-        return requestDisconnect(reason);
-    }
-
-    static void validateDisconnectReason(String reason) {
-        if (reason == null || reason.isBlank() || reason.codePointCount(0, reason.length()) > 1024) {
-            throw new IllegalArgumentException("disconnect reason must contain 1 to 1024 Unicode code points");
-        }
-    }
-
-    private CompletionStage<DisconnectResult> requestDisconnect(String reason) {
-        CompletableFuture<DisconnectResult> requested = new CompletableFuture<>();
-        Runnable command = () -> {
-            if (closed.get()) {
-                requested.complete(DisconnectResult.NOT_CONNECTED);
-                return;
-            }
-            beginDisconnect(reason);
-            // Listener shutdown can set closed from another thread between the check above
-            // and beginDisconnect. That path never creates a draining-disconnect future.
-            if (disconnectResult == null) requested.complete(DisconnectResult.NOT_CONNECTED);
-            else disconnectResult.whenComplete((value, failure) -> completeFrom(requested, value, failure));
-        };
-        if (frontend.eventLoop().inEventLoop()) command.run();
-        else {
-            try { frontend.eventLoop().execute(command); }
-            catch (RejectedExecutionException shutdown) { requested.complete(DisconnectResult.NOT_CONNECTED); }
-        }
-        return requested;
-    }
-
-    private void beginDisconnect(String reason) {
-        if (closed.get() || disconnecting) return;
-        disconnecting = true;
-        if (tabCompletion != null) tabCompletion.close();
-        loginDisconnectStarted = true;
-        pendingDisconnectReason = reason;
-        disconnectResult = new CompletableFuture<>();
-        frontend.config().setAutoRead(false);
-        if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
-        if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
-        try {
-            disconnectDeadline = frontend.eventLoop().schedule(this::closePair,
-                    LOGIN_DISCONNECT_DRAIN_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
-            RawRelay.Link activeRelay = relay;
-            if (activeRelay == null) {
-                disconnectRelayDrained = true;
-                writeDisconnectReasonIfDrained();
-            }
-            else activeRelay.pause().whenComplete((ignored, failure) -> {
-                try {
-                    frontend.eventLoop().execute(() -> {
-                        if (!disconnecting || closed.get()) return;
-                        if (failure != null) closePair();
-                        else {
-                            disconnectRelayDrained = true;
-                            writeDisconnectReasonIfDrained();
-                        }
-                    });
-                } catch (RejectedExecutionException shutdown) {
-                    closePair();
-                }
-            });
-        } catch (RuntimeException shutdown) {
-            closePair();
-        }
-    }
-
-    private void writeDisconnectReasonIfDrained() {
-        if (!disconnecting || !disconnectRelayDrained || disconnectPacketStarted || closed.get()
-                || pendingMessages.get() != 0) return;
-        disconnectPacketStarted = true;
-        if (!frontend.isActive()) {
-            closePair();
-            return;
-        }
-        try {
-            ByteBuf packet;
-            if (frontendPlayPhase) {
-                ByteBuf payload = Minecraft1710PlayPackets.disconnectEncoded(frontend.alloc(), pendingDisconnectReason);
-                try {
-                    packet = frontend.pipeline().get("minecraft-frame-encoder") == null
-                            ? Minecraft1710PlayPackets.frame(frontend.alloc(), payload) : payload.copy();
-                } finally {
-                    payload.release();
-                }
-            } else {
-                packet = MinecraftLoginDisconnect.encodeJson(frontend.alloc(), pendingDisconnectReason);
-            }
-            frontend.writeAndFlush(packet).addListener(ignored -> closePair());
-        } catch (RuntimeException failure) {
-            closePair();
-        }
-    }
-
-    private static <T> void completeFrom(CompletableFuture<T> target, T value, Throwable failure) {
-        if (failure == null) target.complete(value);
-        else target.completeExceptionally(failure);
-    }
+    private void sendCommandReply(Component message) { control.sendMessage(message); }
 
     boolean matchesIdentity(PlayerIdentity requested) {
         PlayerView current = view;
@@ -738,7 +542,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             if (tabCompletion != null) tabCompletion.close();
             if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
             if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
-            if (disconnectDeadline != null) disconnectDeadline.cancel(false);
             login.cancel();
             router.cancel();
             if (admissionRequest != null) {
@@ -765,7 +568,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             owner.allSessions().remove(this);
             owner.sessionClosed();
             transitionBuffer.release();
-            if (disconnectResult != null) disconnectResult.complete(DisconnectResult.DISCONNECTED);
+            control.closed();
         };
         if (frontend.eventLoop().inEventLoop()) cleanup.run();
         else {
@@ -855,5 +658,28 @@ final class Session extends ChannelInboundHandlerAdapter {
             view = new PlayerView(identity, view.username(), selected.handle().id().value());
             owner.serverConnected(view, previousServer);
         }
+    }
+
+    /** Adapter exposing this session's state to its {@link ClientControl}. */
+    private final class ControlHost implements ClientControl.Host {
+        @Override public boolean closed() { return closed.get(); }
+        @Override public boolean disconnecting() { return disconnecting; }
+        @Override public boolean chatReady() {
+            PlayObservation observation = playObservation;
+            return published && frontendPlayPhase && !relayStarting && relay != null && !transfers.busy()
+                    && observation != null && observation.ready().isDone()
+                    && !observation.ready().isCompletedExceptionally();
+        }
+        @Override public boolean playPhase() { return frontendPlayPhase; }
+        @Override public RawRelay.Link relay() { return relay; }
+        @Override public void enterDisconnecting() {
+            disconnecting = true;
+            if (tabCompletion != null) tabCompletion.close();
+            loginDisconnectStarted = true;
+            frontend.config().setAutoRead(false);
+            if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
+            if (initialPlayDeadline != null) initialPlayDeadline.cancel(false);
+        }
+        @Override public void closeSession() { closePair(); }
     }
 }

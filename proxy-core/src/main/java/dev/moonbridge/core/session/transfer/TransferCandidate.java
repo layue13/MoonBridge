@@ -40,11 +40,11 @@ public final class TransferCandidate extends ChannelInboundHandlerAdapter {
     private State state = State.LOGIN;
     private int queuedBytes;
 
-    public TransferCandidate(UUID expectedId, String username, Listener listener) {
+    TransferCandidate(UUID expectedId, String username, Listener listener) {
         this(expectedId, username, listener, false);
     }
 
-    public TransferCandidate(UUID expectedId, String username, Listener listener, boolean deferLogin) {
+    TransferCandidate(UUID expectedId, String username, Listener listener, boolean deferLogin) {
         this.expectedId = expectedId;
         this.username = username;
         this.listener = listener;
@@ -57,7 +57,7 @@ public final class TransferCandidate extends ChannelInboundHandlerAdapter {
     }
 
     /** Coordinated waits must not consume the destination's login budget. */
-    public void loginStarted() {
+    void loginStarted() {
         if (loginStarted) return;
         if (context == null || !context.executor().inEventLoop()) {
             throw new IllegalStateException("candidate login must start on its event loop");
@@ -146,14 +146,14 @@ public final class TransferCandidate extends ChannelInboundHandlerAdapter {
     public Minecraft1710PlayPackets.JoinGame joinGame() { return joinGame; }
     public PlayObservation observation() { return observation; }
 
-    public List<ByteBuf> takeQueuedPackets() {
+    List<ByteBuf> takeQueuedPackets() {
         var packets = new ArrayList<>(queued);
         queued.clear();
         queuedBytes = 0;
         return packets;
     }
 
-    public void handOff() {
+    void handOff() {
         if (state != State.READY) throw new IllegalStateException("replacement backend is not ready");
         state = State.HANDED_OFF;
         deadline.cancel(false);

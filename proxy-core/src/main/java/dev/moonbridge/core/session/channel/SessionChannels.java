@@ -18,9 +18,9 @@ import java.util.function.Consumer;
 
 /** Backend dialing and pipeline lookups shared by initial login and transfer. */
 public final class SessionChannels {
-    public static final String FRAME_DECODER = "minecraft-frame-decoder";
-    public static final String ENCRYPTED_FRAME_DECODER = "encrypted-frame-decoder";
-    public static final String FRAME_ENCODER = "minecraft-frame-encoder";
+    static final String FRAME_DECODER = "minecraft-frame-decoder";
+    static final String ENCRYPTED_FRAME_DECODER = "encrypted-frame-decoder";
+    static final String FRAME_ENCODER = "minecraft-frame-encoder";
 
     private SessionChannels() { }
 
@@ -62,7 +62,7 @@ public final class SessionChannels {
                 });
     }
 
-    public static void installCodecs(ChannelPipeline pipeline) {
+    static void installCodecs(ChannelPipeline pipeline) {
         pipeline.addLast(FRAME_DECODER, new MinecraftFrameDecoder(ProtocolProfile.minecraft1710(), true));
         pipeline.addLast(FRAME_ENCODER, new SessionFrameEncoder());
     }

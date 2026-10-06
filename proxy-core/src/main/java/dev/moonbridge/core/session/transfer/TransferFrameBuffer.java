@@ -22,7 +22,7 @@ public final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     private boolean reading;
     private boolean discard;
 
-    public TransferFrameBuffer(Runnable closeSession) {
+    TransferFrameBuffer(Runnable closeSession) {
         this.closeSession = closeSession;
     }
 
@@ -31,7 +31,7 @@ public final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** Keep reading bounded frames so a paused transfer also observes peer disconnects. */
-    public void readUntilRemoved() {
+    void readUntilRemoved() {
         ChannelHandlerContext ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must read on its channel event loop");
@@ -65,7 +65,7 @@ public final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** Replays frames after this handler, preserving the already decoded frame boundary. */
-    public void drainAndRemove() {
+    void drainAndRemove() {
         var ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must drain on its channel event loop");
@@ -84,7 +84,7 @@ public final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** After irreversible source detach, discard queued and future old-world frames. */
-    public void discardFrames() {
+    void discardFrames() {
         var ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must switch mode on its channel event loop");

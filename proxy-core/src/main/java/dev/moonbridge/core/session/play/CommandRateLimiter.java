@@ -6,9 +6,9 @@ import java.util.concurrent.TimeUnit;
 public final class CommandRateLimiter {
     public enum Decision { ADMIT, DENY, DENY_WITH_NOTICE }
 
-    public static final int BURST = 10;
-    public static final long TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
-    public static final long NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
+    static final int BURST = 10;
+    static final long TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
+    static final long NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
 
     private int tokens = BURST;
     private long refillNanos;

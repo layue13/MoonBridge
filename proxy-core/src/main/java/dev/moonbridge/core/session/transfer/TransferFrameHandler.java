@@ -81,7 +81,7 @@ public final class TransferFrameHandler extends FrameTransformHandler {
     private final State state;
     private final boolean clientbound;
 
-    public TransferFrameHandler(State state, boolean clientbound) {
+    TransferFrameHandler(State state, boolean clientbound) {
         super(state.closeSession);
         this.state = state;
         this.clientbound = clientbound;
