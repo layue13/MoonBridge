@@ -12,6 +12,8 @@ import dev.moonbridge.messaging.SendReceipt;
 import dev.moonbridge.messaging.SendResult;
 import dev.moonbridge.messaging.Subscription;
 
+import static dev.moonbridge.messaging.internal.MessagingFailures.*;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,18 +24,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Host-side scope registry and bounded local message dispatcher. The host owns the supplied scheduler and
@@ -56,6 +56,13 @@ public final class LocalMessaging implements AutoCloseable {
     private final Map<String, Scope> scopes = new HashMap<String, Scope>();
     private final Map<String, ChannelEntry> channels = new HashMap<String, ChannelEntry>();
     private final Set<Operation<?>> operations = new HashSet<Operation<?>>();
+    private final OperationHost operationHost = new OperationHost() {
+        @Override public ScheduledExecutorService scheduler() { return scheduler; }
+        @Override public void complete(Operation<?> operation, Runnable completion) {
+            completeOperation(operation, completion);
+        }
+        @Override public void finished(Operation<?> operation) { operationFinished(operation); }
+    };
     private boolean closed;
     private int outboundInFlight;
     private int inboundInFlight;
@@ -182,7 +189,7 @@ public final class LocalMessaging implements AutoCloseable {
             if (inboundInFlight >= MAX_IN_FLIGHT) return failed(new MessagingException(
                     MessagingException.Code.BACKPRESSURED, "inbound request limit reached"));
             inboundInFlight++;
-            operation = new Operation<Message>(handler.scope, new Runnable() {
+            operation = new Operation<Message>(operationHost, handler.scope.operations, new Runnable() {
                 @Override public void run() { inboundInFlight--; }
             });
             operations.add(operation);
@@ -366,7 +373,7 @@ public final class LocalMessaging implements AutoCloseable {
     private void operationFinished(Operation<?> operation) {
         synchronized (lock) {
             operations.remove(operation);
-            operation.scope.operations.remove(operation);
+            operation.scopeOperations.remove(operation);
             operation.release.run();
         }
     }
@@ -390,57 +397,6 @@ public final class LocalMessaging implements AutoCloseable {
                 completion.run();
             }
         });
-    }
-
-    private static long timeoutMillis(Duration timeout) {
-        Objects.requireNonNull(timeout, "timeout");
-        final long millis;
-        try {
-            millis = timeout.toMillis();
-        } catch (ArithmeticException overflow) {
-            throw new IllegalArgumentException("timeout is too large", overflow);
-        }
-        if (millis <= 0 || millis > MAX_REQUEST_TIMEOUT.toMillis()) {
-            throw new IllegalArgumentException("timeout must be positive and at most 60 seconds");
-        }
-        return millis;
-    }
-
-    private static MessagingException handlerFailure(Throwable failure) {
-        return new MessagingException(MessagingException.Code.HANDLER_FAILED,
-                "message handler failed", failure);
-    }
-
-    private static SendReceipt sendReceiptForFailure(UUID messageId, Throwable failure) {
-        Throwable cause = unwrap(failure);
-        if (cause instanceof MessagingException) {
-            MessagingException messagingFailure = (MessagingException) cause;
-            switch (messagingFailure.code()) {
-                case TIMED_OUT: return new SendReceipt(messageId, SendResult.TIMED_OUT);
-                case BACKPRESSURED: return new SendReceipt(messageId, SendResult.BACKPRESSURED);
-                case NOT_CONNECTED: return new SendReceipt(messageId, SendResult.NOT_CONNECTED);
-                case NO_HANDLER: return new SendReceipt(messageId, SendResult.NO_SUBSCRIBER);
-                case REJECTED: return new SendReceipt(messageId, SendResult.REJECTED);
-                case HANDLER_FAILED:
-                case PROTOCOL_ERROR: return new SendReceipt(messageId, SendResult.FAILED);
-                case CLOSED: throw messagingFailure;
-                default: return new SendReceipt(messageId, SendResult.FAILED);
-            }
-        }
-        return new SendReceipt(messageId, SendResult.FAILED);
-    }
-
-    private static Throwable unwrap(Throwable failure) {
-        if (failure instanceof java.util.concurrent.CompletionException && failure.getCause() != null) {
-            return failure.getCause();
-        }
-        return failure;
-    }
-
-    private static <T> CompletionStage<T> failed(Throwable failure) {
-        CompletableFuture<T> future = new CompletableFuture<T>();
-        future.completeExceptionally(failure);
-        return future;
     }
 
     private void ensureHostOpen() {
@@ -504,52 +460,26 @@ public final class LocalMessaging implements AutoCloseable {
         @Override public CompletionStage<SendReceipt> send(Endpoint target, byte[] payload) {
             Objects.requireNonNull(target, "target");
             final Message message = Message.event(name, self, target, payload);
-            final Operation<SendReceipt> operation = new Operation<SendReceipt>(scope,
-                    new Runnable() { @Override public void run() { outboundInFlight--; } },
+            Operation<SendReceipt> operation = newOutboundOperation(scope,
                     failure -> sendReceiptForFailure(message.id(), failure));
-            if (!reserveOutbound(scope, operation)) return operation.future;
-            if (!operation.armTimeout(DEFAULT_REQUEST_TIMEOUT.toMillis())) return operation.future;
-            if (operation.isDone()) return operation.future;
-            CompletionStage<SendResult> stage;
-            try {
-                stage = Objects.requireNonNull(outbound.send(message), "outbound send stage");
-            } catch (Throwable failure) {
-                operation.fail(failure);
-                return operation.future;
-            }
-            operation.setCancellation(stage);
-            stage.whenComplete((result, failure) -> {
-                if (failure != null) operation.fail(unwrap(failure));
-                else if (result == null) operation.fail(new MessagingException(
-                        MessagingException.Code.PROTOCOL_ERROR, "outbound returned null send result"));
-                else operation.succeed(new SendReceipt(message.id(), result));
-            });
-            return operation.future;
+            return dispatchOutbound(scope, operation, DEFAULT_REQUEST_TIMEOUT.toMillis(),
+                    () -> outbound.send(message), "outbound send stage", result -> {
+                        if (result == null) throw new MessagingException(
+                                MessagingException.Code.PROTOCOL_ERROR, "outbound returned null send result");
+                        return new SendReceipt(message.id(), result);
+                    });
         }
 
         @Override public CompletionStage<PublishResult> publish(byte[] payload) {
             final Message event = Message.event(name, self, null, payload);
-            final Operation<PublishResult> operation = new Operation<PublishResult>(scope,
-                    new Runnable() { @Override public void run() { outboundInFlight--; } });
-            if (!reserveOutbound(scope, operation)) return operation.future;
-            if (!operation.armTimeout(DEFAULT_REQUEST_TIMEOUT.toMillis())) return operation.future;
-            if (operation.isDone()) return operation.future;
-            CompletionStage<PublishResult> stage;
-            try {
-                stage = Objects.requireNonNull(outbound.publish(event), "outbound publish stage");
-            } catch (Throwable failure) {
-                operation.fail(failure);
-                return operation.future;
-            }
-            operation.setCancellation(stage);
-            stage.whenComplete((result, failure) -> {
-                if (failure != null) operation.fail(unwrap(failure));
-                else if (result == null || !event.id().equals(result.messageId())) operation.fail(
-                        new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
-                                "outbound returned invalid publish result"));
-                else operation.succeed(result);
-            });
-            return operation.future;
+            return dispatchOutbound(scope, newOutboundOperation(scope, null), DEFAULT_REQUEST_TIMEOUT.toMillis(),
+                    () -> outbound.publish(event), "outbound publish stage", result -> {
+                        if (result == null || !event.id().equals(result.messageId())) {
+                            throw new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
+                                    "outbound returned invalid publish result");
+                        }
+                        return result;
+                    });
         }
 
         @Override public CompletionStage<Message> request(Endpoint target, byte[] payload) {
@@ -560,32 +490,51 @@ public final class LocalMessaging implements AutoCloseable {
             Objects.requireNonNull(target, "target");
             final long timeoutMillis = timeoutMillis(timeout);
             final Message request = Message.request(name, self, target, payload);
-            final Operation<Message> operation = new Operation<Message>(scope,
-                    new Runnable() { @Override public void run() { outboundInFlight--; } });
-            if (!reserveOutbound(scope, operation)) return operation.future;
-            if (!operation.armTimeout(timeoutMillis)) return operation.future;
-            if (operation.isDone()) return operation.future;
-            CompletionStage<Message> stage;
-            try {
-                stage = Objects.requireNonNull(outbound.request(request, Duration.ofMillis(timeoutMillis)),
-                        "outbound request stage");
-            } catch (Throwable failure) {
-                operation.fail(failure);
-                return operation.future;
-            }
-            operation.setCancellation(stage);
-            stage.whenComplete((reply, failure) -> {
-                if (failure != null) {
-                    operation.fail(unwrap(failure));
-                } else if (!isValidReply(request, reply)) {
-                    operation.fail(new MessagingException(MessagingException.Code.PROTOCOL_ERROR,
-                            "outbound returned an uncorrelated reply"));
-                } else {
-                    operation.succeed(reply);
-                }
-            });
+            return dispatchOutbound(scope, newOutboundOperation(scope, null), timeoutMillis,
+                    () -> outbound.request(request, Duration.ofMillis(timeoutMillis)),
+                    "outbound request stage", reply -> {
+                        if (!isValidReply(request, reply)) throw new MessagingException(
+                                MessagingException.Code.PROTOCOL_ERROR, "outbound returned an uncorrelated reply");
+                        return reply;
+                    });
+        }
+    }
+
+    private <T> Operation<T> newOutboundOperation(Scope scope, Function<Throwable, T> failureMapper) {
+        return new Operation<T>(operationHost, scope.operations,
+                new Runnable() { @Override public void run() { outboundInFlight--; } }, failureMapper);
+    }
+
+    /** Admits {@code operation}, arms its timeout, calls the transport and resolves with {@code accept}'s result. */
+    private <R, T> CompletionStage<T> dispatchOutbound(Scope scope, Operation<T> operation, long timeoutMillis,
+                                                       Supplier<CompletionStage<R>> call, String stageName,
+                                                       Function<R, T> accept) {
+        if (!reserveOutbound(scope, operation)) return operation.future;
+        if (!operation.armTimeout(timeoutMillis)) return operation.future;
+        if (operation.isDone()) return operation.future;
+        CompletionStage<R> stage;
+        try {
+            stage = Objects.requireNonNull(call.get(), stageName);
+        } catch (Throwable failure) {
+            operation.fail(failure);
             return operation.future;
         }
+        operation.setCancellation(stage);
+        stage.whenComplete((result, failure) -> {
+            if (failure != null) {
+                operation.fail(unwrap(failure));
+                return;
+            }
+            T value;
+            try {
+                value = accept.apply(result);
+            } catch (MessagingException invalid) {
+                operation.fail(invalid);
+                return;
+            }
+            operation.succeed(value);
+        });
+        return operation.future;
     }
 
     private boolean isValidReply(Message request, Message reply) {
@@ -618,108 +567,6 @@ public final class LocalMessaging implements AutoCloseable {
         private Registration requestHandler;
     }
 
-    private final class Operation<T> {
-        private final Scope scope;
-        private final Runnable release;
-        private final Function<Throwable, T> failureMapper;
-        private final OperationFuture<T> future = new OperationFuture<T>(this);
-        private final AtomicBoolean done = new AtomicBoolean();
-        private volatile ScheduledFuture<?> timer;
-        private volatile CompletionStage<?> underlying;
-
-        private Operation(Scope scope, Runnable release) {
-            this(scope, release, null);
-        }
-
-        private Operation(Scope scope, Runnable release, Function<Throwable, T> failureMapper) {
-            this.scope = scope;
-            this.release = release;
-            this.failureMapper = failureMapper;
-        }
-
-        private boolean isDone() { return done.get(); }
-
-        private boolean armTimeout(long millis) {
-            if (done.get()) return false;
-            try {
-                ScheduledFuture<?> scheduled = scheduler.schedule(new Runnable() {
-                    @Override public void run() {
-                        fail(new MessagingException(MessagingException.Code.TIMED_OUT,
-                                "message request timed out"));
-                    }
-                }, millis, TimeUnit.MILLISECONDS);
-                timer = scheduled;
-                if (done.get()) {
-                    scheduled.cancel(false);
-                    return false;
-                }
-                return true;
-            } catch (RejectedExecutionException rejected) {
-                fail(new MessagingException(MessagingException.Code.CLOSED,
-                        "request timer is unavailable", rejected));
-                return false;
-            }
-        }
-
-        private void succeed(T value) { finish(value, null); }
-
-        private void fail(Throwable failure) { finish(null, failure); }
-
-        private void failLocked(Throwable failure) {
-            if (!done.compareAndSet(false, true)) return;
-            // This operation was rejected before admission and its future has not escaped the API call.
-            completeFailureNow(failure);
-        }
-
-        private void setCancellation(CompletionStage<?> stage) {
-            underlying = stage;
-            if (done.get()) cancelUnderlying();
-        }
-
-        private void cancel() {
-            if (!done.compareAndSet(false, true)) return;
-            ScheduledFuture<?> scheduled = timer;
-            if (scheduled != null) scheduled.cancel(false);
-            cancelUnderlying();
-            operationFinished(this);
-        }
-
-        private void finish(T value, Throwable failure) {
-            if (!done.compareAndSet(false, true)) return;
-            ScheduledFuture<?> scheduled = timer;
-            if (scheduled != null) scheduled.cancel(false);
-            if (failure instanceof MessagingException) {
-                MessagingException.Code code = ((MessagingException) failure).code();
-                if (code == MessagingException.Code.TIMED_OUT || code == MessagingException.Code.CLOSED) {
-                    cancelUnderlying();
-                }
-            }
-            if (failure == null) {
-                completeOperation(this, new Runnable() { @Override public void run() { future.complete(value); } });
-            } else {
-                completeOperation(this, new Runnable() {
-                    @Override public void run() { completeFailureNow(failure); }
-                });
-            }
-        }
-
-        private void completeFailureNow(Throwable failure) {
-            if (failureMapper == null) {
-                future.completeExceptionally(failure);
-                return;
-            }
-            try { future.complete(failureMapper.apply(failure)); }
-            catch (Throwable mappingFailure) { future.completeExceptionally(mappingFailure); }
-        }
-
-        private void cancelUnderlying() {
-            CompletionStage<?> stage = underlying;
-            if (stage != null) {
-                try { stage.toCompletableFuture().cancel(true); } catch (Throwable ignored) { }
-            }
-        }
-    }
-
     private final class EventDelivery {
         private final Scope scope;
         private final AtomicBoolean done = new AtomicBoolean();
@@ -736,15 +583,4 @@ public final class LocalMessaging implements AutoCloseable {
         }
     }
 
-    private final class OperationFuture<T> extends CompletableFuture<T> {
-        private final Operation<T> operation;
-
-        private OperationFuture(Operation<T> operation) { this.operation = operation; }
-
-        @Override public boolean cancel(boolean mayInterruptIfRunning) {
-            boolean cancelled = super.cancel(mayInterruptIfRunning);
-            if (cancelled) operation.cancel();
-            return cancelled;
-        }
-    }
 }
