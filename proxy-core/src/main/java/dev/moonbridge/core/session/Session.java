@@ -25,6 +25,7 @@ import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.forwarding.BungeeLegacyForwarding;
 import dev.moonbridge.messaging.session.ForwardedSessionProof;
+import dev.moonbridge.core.protocol.ByteBufs;
 import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.Minecraft1710EntityIds;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
@@ -100,8 +101,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     private boolean loginDisconnectStarted;
     private volatile boolean published;
     private boolean relayStarting;
-    private int transitionBufferBytes;
-    private final ArrayDeque<PendingFrame> transitionBuffer = new ArrayDeque<>();
+    private final TransitionBuffer transitionBuffer =
+            new TransitionBuffer(MAX_TRANSITION_BUFFER_FRAMES, MAX_TRANSITION_BUFFER_BYTES);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicInteger pendingMessages = new AtomicInteger();
     private boolean frontendPlayPhase;
@@ -880,26 +881,19 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private void bufferTransitionFrame(boolean fromFrontend, ByteBuf packet) {
-        int bytes = packet.readableBytes();
-        if (transitionBuffer.size() >= MAX_TRANSITION_BUFFER_FRAMES
-                || transitionBufferBytes + bytes > MAX_TRANSITION_BUFFER_BYTES) {
-            closePair();
-            return;
-        }
-        transitionBuffer.addLast(new PendingFrame(fromFrontend, packet.retainedDuplicate()));
-        transitionBufferBytes += bytes;
+        if (!transitionBuffer.add(fromFrontend, packet)) closePair();
     }
 
     private CompletableFuture<Void> flushTransitionFrames() {
         if (transitionBuffer.isEmpty()) return CompletableFuture.completedFuture(null);
         ArrayList<CompletableFuture<Void>> writes = new ArrayList<>(transitionBuffer.size());
-        PendingFrame pending;
-        while ((pending = transitionBuffer.pollFirst()) != null) {
-            transitionBufferBytes -= pending.payload.readableBytes();
-            Channel target = pending.fromFrontend ? backend : frontend;
+        TransitionBuffer.Frame pending;
+        while ((pending = transitionBuffer.poll()) != null) {
+            Channel target = pending.fromFrontend() ? backend : frontend;
             ByteBuf payload;
             try {
-                payload = mapTransitionFrame(pending, target);
+                payload = TransitionFrames.map(playObservation, keepAlives, pending.fromFrontend(),
+                        pending.payload(), target);
             } catch (RuntimeException failure) {
                 return CompletableFuture.failedFuture(failure);
             }
@@ -912,24 +906,6 @@ final class Session extends ChannelInboundHandlerAdapter {
             });
         }
         return CompletableFuture.allOf(writes.toArray(CompletableFuture[]::new));
-    }
-
-    /**
-     * Takes ownership of a buffered frame and returns the buffer to send, or null when the frame is
-     * swallowed. The frame is released on every failure, so callers never touch it after an exception.
-     */
-    private ByteBuf mapTransitionFrame(PendingFrame pending, Channel target) {
-        ByteBuf payload = pending.payload;
-        try {
-            if (playObservation != null) playObservation.observePacket(!pending.fromFrontend, payload);
-            if (target == null || !target.isActive()) throw new IllegalStateException("transition peer closed");
-            ByteBuf mapped = keepAlives.body(target.alloc(), payload, pending.fromFrontend);
-            if (mapped != payload) payload.release();
-            return mapped;
-        } catch (RuntimeException failure) {
-            payload.release();
-            throw failure;
-        }
     }
 
     private CompletableFuture<Void> removeHandshakeCodecs(Channel channel) {
@@ -1469,46 +1445,38 @@ final class Session extends ChannelInboundHandlerAdapter {
     }
 
     private ByteBuf transferOpening(TransferAttempt attempt) {
-        ByteBuf output = frontend.alloc().buffer();
         List<ByteBuf> queued = attempt.candidate.takeQueuedPackets();
         try {
-            boolean nextForge = attempt.candidate.observation().forgeSeen();
-            // FML's reset also restores the client's frozen registry. A Forge -> vanilla
-            // switch needs it even though the replacement server has no ServerHello.
-            // After that reset the client remains in HELLO until a later Forge switch.
-            if (!clientFmlAwaitingServerHello && (playObservation.forgeSeen() || nextForge)) {
-                ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
-                try { output.writeBytes(reset); } finally { reset.release(); }
-                clientFmlAwaitingServerHello = true;
-            }
-            if (nextForge) clientFmlAwaitingServerHello = false;
-            if (attempt.candidate.joinGame() != null) {
-                int targetDimension = attempt.candidate.observation().dimension()
-                        .orElse(attempt.candidate.joinGame().dimension());
-                ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
-                        attempt.candidate.joinGame(), targetDimension);
-                try { output.writeBytes(respawns); } finally { respawns.release(); }
-            }
-            for (ByteBuf packet : queued) {
-                ByteBuf mapped = keepAlives.body(frontend.alloc(), packet, false);
-                if (mapped == null) continue;
-                try {
-                    ByteBuf frame = Minecraft1710PlayPackets.frame(frontend.alloc(), mapped);
-                    try {
-                        ByteBuf outgoing = attempt.candidate.joinGame() == null ? frame
-                                : Minecraft1710EntityIds.rewrite(frontend.alloc(), frame, true,
-                                        attempt.candidate.joinGame().entityId(), clientEntityId);
-                        try { output.writeBytes(outgoing); }
-                        finally { if (outgoing != frame) outgoing.release(); }
-                    } finally { frame.release(); }
-                } finally {
-                    if (mapped != packet) mapped.release();
+            return ByteBufs.fill(frontend.alloc().buffer(), output -> {
+                boolean nextForge = attempt.candidate.observation().forgeSeen();
+                // FML's reset also restores the client's frozen registry. A Forge -> vanilla
+                // switch needs it even though the replacement server has no ServerHello.
+                // After that reset the client remains in HELLO until a later Forge switch.
+                if (!clientFmlAwaitingServerHello && (playObservation.forgeSeen() || nextForge)) {
+                    ByteBuf reset = Minecraft1710PlayPackets.forgeReset(frontend.alloc());
+                    try { output.writeBytes(reset); } finally { reset.release(); }
+                    clientFmlAwaitingServerHello = true;
                 }
-            }
-            return output;
-        } catch (RuntimeException failure) {
-            output.release();
-            throw failure;
+                if (nextForge) clientFmlAwaitingServerHello = false;
+                if (attempt.candidate.joinGame() != null) {
+                    int targetDimension = attempt.candidate.observation().dimension()
+                            .orElse(attempt.candidate.joinGame().dimension());
+                    ByteBuf respawns = Minecraft1710PlayPackets.respawnSequence(frontend.alloc(),
+                            attempt.candidate.joinGame(), targetDimension);
+                    try { output.writeBytes(respawns); } finally { respawns.release(); }
+                }
+                for (ByteBuf packet : queued) {
+                    ByteBuf mapped = keepAlives.body(frontend.alloc(), packet, false);
+                    if (mapped == null) continue;
+                    try {
+                        TransitionFrames.appendClientbound(output, frontend.alloc(), mapped,
+                                attempt.candidate.joinGame() == null ? null : attempt.candidate.joinGame().entityId(),
+                                clientEntityId);
+                    } finally {
+                        if (mapped != packet) mapped.release();
+                    }
+                }
+            });
         } finally {
             queued.forEach(ByteBuf::release);
         }
@@ -1612,9 +1580,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             }
             owner.allSessions().remove(this);
             owner.sessionClosed();
-            PendingFrame pending;
-            while ((pending = transitionBuffer.pollFirst()) != null) pending.payload.release();
-            transitionBufferBytes = 0;
+            transitionBuffer.release();
             if (disconnectResult != null) disconnectResult.complete(DisconnectResult.DISCONNECTED);
         };
         if (frontend.eventLoop().inEventLoop()) cleanup.run();
@@ -1661,5 +1627,4 @@ final class Session extends ChannelInboundHandlerAdapter {
         return Optional.of(view);
     }
 
-    private record PendingFrame(boolean fromFrontend, ByteBuf payload) { }
 }

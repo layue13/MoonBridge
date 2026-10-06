@@ -61,7 +61,7 @@ sh smoke/container-channel.sh
 
 `proxy-core` 的测试 JVM 以 `-Dio.netty.leakDetection.level=paranoid` 运行，`dev.moonbridge.testing.LeakGate` 自动注册到每个测试类：类结束后强制 GC 并读取 Netty 的泄漏报告，有未释放的缓冲区就使该类失败。`LeakGateTest` 证明它能发现故意制造的泄漏。注意 `Unpooled.wrappedBuffer(byte[])` 创建的缓冲区不被追踪，涉及它们的测试应直接断言 `refCnt()`。
 
-2026-10-05 对手写 `release()` 位置做过一次变异检查（把单个 `release()` 换成不改引用计数的空操作，再跑覆盖它的测试）：对 relay、帧处理器、Tab 补全、协议编码和加解密共 47 处，改造前 23 处无人守护；集中到 `ByteBufs`、`FrameTransformHandler` 并补测试后，剩余 33 处中 32 处被抓到，最后一处随加解密处理器改用 Netty 基类而消失。`ConnectionGate` 与 `Session` 的第二轮检查没有跑完（已完成 11/24：`ConnectionGate:71`、`Session:366/906/911` 当时未被守护，其中 `Session:366/906/911` 已改为复用被测试的辅助代码，`ConnectionGate` 补了单元测试）；`Session` 其余约 10 处（主要是转服开场帧 `transferOpening` 与断开包构造）没有被变异验证。
+2026-10-05 对手写 `release()` 位置做过一次变异检查（把单个 `release()` 换成不改引用计数的空操作，再跑覆盖它的测试）：对 relay、帧处理器、Tab 补全、协议编码和加解密共 47 处，改造前 23 处无人守护；集中到 `ByteBufs`、`FrameTransformHandler` 并补测试后，剩余 33 处中 32 处被抓到，最后一处随加解密处理器改用 Netty 基类而消失。`ConnectionGate` 与 `Session` 的第二轮检查（3 路并发，每个工作线程一份仓库副本，失败的变异再跑一次以排除负载下的偶发超时）覆盖 17 处：10 处被抓到（`ConnectionGate` 全部 3 处由新增单元测试抓到），1 处结果不稳定不计入（`Session:143`），6 处存活。存活中的 `mapTransitionFrame`、`transferOpening` 的帧改写与失败分支、关闭时清空过渡缓冲，已抽成 `TransitionFrames`、`TransitionBuffer` 并补了单元测试（对这两个类再做一次变异，4 处全部被抓到）。仍未被测试守护的是 `Session` 里两处防御分支：`Session:147`（收到非 ByteBuf 消息，`Session` 的输入始终来自帧解码器，实际不可达）与 `Session:143`（消息来自既非前端也非后端的通道）。
 
 ## 合成 relay 基准
 
