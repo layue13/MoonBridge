@@ -80,6 +80,46 @@ final class RawRelaySocketTest {
         }
     }
 
+    /**
+     * One TCP read decodes into several frames. The first closes the relay, but on a real event loop the
+     * pipeline stays alive until the next task, so the later frames of the same read still reach the relay
+     * and must be released rather than dropped on the floor.
+     */
+    @Test
+    void framesDecodedAfterTheFirstOneClosedTheRelayAreReleased() throws Exception {
+        try (var pair = new SocketPair()) {
+            var read = new java.util.concurrent.CopyOnWriteArrayList<io.netty.buffer.ByteBuf>();
+            pair.firstRelay.config().setAllocator(new io.netty.buffer.AbstractByteBufAllocator() {
+                @Override protected io.netty.buffer.ByteBuf newHeapBuffer(int initial, int max) {
+                    var buffer = io.netty.buffer.UnpooledByteBufAllocator.DEFAULT.heapBuffer(initial, max);
+                    read.add(buffer);
+                    return buffer;
+                }
+                @Override protected io.netty.buffer.ByteBuf newDirectBuffer(int initial, int max) {
+                    var buffer = io.netty.buffer.UnpooledByteBufAllocator.DEFAULT.directBuffer(initial, max);
+                    read.add(buffer);
+                    return buffer;
+                }
+                @Override public boolean isDirectBufferPooled() { return false; }
+            });
+            pair.firstRelay.pipeline().addFirst("frames", new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
+                    dev.moonbridge.core.protocol.ProtocolProfile.minecraft1710(), true));
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var link = RawRelay.attach(pair.firstRelay, pair.secondRelay, bytes -> {
+                if (calls.getAndIncrement() == 0) throw new IllegalStateException("observer rejects the first frame");
+            }, null);
+            link.ready().toCompletableFuture().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            link.start();
+
+            var frames = new byte[] {1, 7, 1, 8, 1, 9}; // three one-byte frames in a single TCP write
+            writeFully(pair.firstPeer, frames);
+
+            await(() -> !isActive(pair.firstRelay) && !isActive(pair.secondRelay), "relay closed by the first frame");
+            await(() -> !read.isEmpty() && read.stream().allMatch(buffer -> buffer.refCnt() == 0),
+                    "every buffer read for the relay was released: " + read.stream().map(io.netty.buffer.ByteBuf::refCnt).toList());
+        }
+    }
+
     private static void transferWithBackpressure(SocketPair pair, Socket sender, Socket receiver, Channel relayTarget,
                                                  AtomicLong observed) throws Exception {
         var payload = payload();
@@ -87,7 +127,7 @@ final class RawRelaySocketTest {
         var sending = pair.workers.submit(() -> { writeFully(sender, payload); return null; });
 
         long bytesWhenBlocked = awaitStableReads(observed, relayTarget,
-                "source reads stopped while the actual target socket was nonwritable");
+                "source reads stopped while the actual target socket had a pending write");
         assertTrue(bytesWhenBlocked > before, "the source socket must deliver bytes before pressure");
         assertTrue(bytesWhenBlocked < before + payload.length, "pressure must stop an unfinished transfer");
         long pending = pendingBytes(relayTarget);
@@ -113,10 +153,6 @@ final class RawRelaySocketTest {
             bytes[i] = (byte) state;
         }
         return bytes;
-    }
-
-    private static boolean isWritable(Channel channel) {
-        return channel.isWritable();
     }
 
     private static boolean isActive(Channel channel) {
@@ -170,7 +206,9 @@ final class RawRelaySocketTest {
                 lastObserved = current;
                 stableSince = -1;
             }
-            if (!isWritable(target) && current == lastObserved) {
+            // The relay stops reading while any forwarded write is incomplete. On Linux a short read can stay
+            // below the high water mark, so a real pending socket write is the condition, not writability.
+            if (pendingBytes(target) > 0 && current == lastObserved) {
                 if (stableSince < 0) stableSince = System.nanoTime();
                 if (System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(250)) return current;
             } else {

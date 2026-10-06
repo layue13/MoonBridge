@@ -50,14 +50,11 @@ public final class Minecraft1710PlayPackets {
     public static ByteBuf chatReplyEncoded(ByteBufAllocator allocator, String componentJson) {
         MinecraftText.validateEncoded(componentJson);
         if (allocator == null) throw new NullPointerException("allocator");
-        ByteBuf packet = allocator.buffer();
-        try {
+        return ByteBufs.use(allocator.buffer(), packet -> {
             ProtocolVarInt.write(packet, SERVER_CHAT);
             ProtocolStrings.write(packet, componentJson, 32767);
             return frame(allocator, packet);
-        } finally {
-            packet.release();
-        }
+        });
     }
 
     /** Encodes an unframed protocol 5 PLAY Disconnect payload. */
@@ -70,15 +67,10 @@ public final class Minecraft1710PlayPackets {
     public static ByteBuf disconnectEncoded(ByteBufAllocator allocator, String componentJson) {
         MinecraftText.validateEncoded(componentJson);
         if (allocator == null) throw new NullPointerException("allocator");
-        ByteBuf packet = allocator.buffer();
-        try {
+        return ByteBufs.fill(allocator.buffer(), packet -> {
             ProtocolVarInt.write(packet, SERVER_DISCONNECT);
             ProtocolStrings.write(packet, componentJson, 32767);
-            return packet;
-        } catch (RuntimeException failure) {
-            packet.release();
-            throw failure;
-        }
+        });
     }
 
     private static void validateText(String text, boolean allowEmpty) {
@@ -150,47 +142,32 @@ public final class Minecraft1710PlayPackets {
 
     /** Always changes dimension before the target; the client's current dimension is not observed on the relay path. */
     public static ByteBuf respawnSequence(ByteBufAllocator allocator, JoinGame target, int targetDimension) {
-        ByteBuf output = allocator.buffer();
-        try {
+        return ByteBufs.fill(allocator.buffer(), output -> {
             writeRespawn(output, allocator, target, targetDimension >= 0 ? -1 : 0);
             writeRespawn(output, allocator, target, targetDimension);
-            return output;
-        } catch (RuntimeException failure) {
-            output.release();
-            throw failure;
-        }
+        });
     }
 
     public static ByteBuf forgeReset(ByteBufAllocator allocator) {
-        ByteBuf packet = allocator.buffer();
-        try {
+        return ByteBufs.use(allocator.buffer(), packet -> {
             ProtocolVarInt.write(packet, SERVER_CUSTOM_PAYLOAD);
             ProtocolStrings.write(packet, "FML|HS", 20);
             packet.writeShort(1); // Forge VarShort encoding of a one-byte payload.
             packet.writeByte(0xFE);
             return frame(allocator, packet);
-        } finally {
-            packet.release();
-        }
+        });
     }
 
     private static void writeRespawn(ByteBuf output, ByteBufAllocator allocator, JoinGame target, int dimension) {
-        ByteBuf packet = allocator.buffer();
-        try {
+        ByteBufs.use(allocator.buffer(), packet -> {
             ProtocolVarInt.write(packet, RESPAWN);
             packet.writeInt(dimension);
             packet.writeByte(target.difficulty());
             packet.writeByte(target.gameMode() & 0x07); // Respawn has no hardcore flag.
             ProtocolStrings.write(packet, target.levelType(), 16);
-            ByteBuf framed = frame(allocator, packet);
-            try {
-                output.writeBytes(framed);
-            } finally {
-                framed.release();
-            }
-        } finally {
-            packet.release();
-        }
+            ByteBufs.writeFrame(output, packet);
+            return null;
+        });
     }
 
     public static ByteBuf frame(ByteBufAllocator allocator, ByteBuf packet) {

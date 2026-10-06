@@ -1,6 +1,7 @@
 listen: "127.0.0.1:25577"
 authentication: OFFLINE
 maxConnections: 4096
+# transport: AUTO # AUTO picks epoll on Linux, kqueue on macOS, NIO elsewhere; NIO, EPOLL or KQUEUE force one.
 status:
   motd: "MoonBridge"
   maxPlayers: 100

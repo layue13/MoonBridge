@@ -18,9 +18,9 @@ public record LoginStart(String username) {
     }
 
     public ByteBuf encode(ByteBufAllocator allocator, ProtocolProfile profile) {
-        ByteBuf packet = allocator.buffer();
-        ProtocolVarInt.write(packet, 0);
-        ProtocolStrings.write(packet, username, profile.maxLoginNameCharacters());
-        return packet;
+        return ByteBufs.fill(allocator.buffer(), packet -> {
+            ProtocolVarInt.write(packet, 0);
+            ProtocolStrings.write(packet, username, profile.maxLoginNameCharacters());
+        });
     }
 }

@@ -1,5 +1,6 @@
 package dev.moonbridge.core.auth;
 
+import dev.moonbridge.core.protocol.ByteBufs;
 import dev.moonbridge.core.protocol.ProtocolException;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
 import io.netty.buffer.ByteBuf;
@@ -55,13 +56,14 @@ public final class MinecraftEncryptionRequest {
 
     public ByteBuf encode(ByteBufAllocator allocator) {
         byte[] serverIdBytes = serverId.getBytes(StandardCharsets.US_ASCII);
-        ByteBuf output = allocator.buffer(1 + 1 + serverIdBytes.length + 2 + publicKey.length + 2 + verifyToken.length);
-        ProtocolVarInt.write(output, PACKET_ID);
-        ProtocolVarInt.write(output, serverIdBytes.length);
-        output.writeBytes(serverIdBytes);
-        writeUnsignedShortArray(output, publicKey);
-        writeUnsignedShortArray(output, verifyToken);
-        return output;
+        return ByteBufs.fill(allocator.buffer(
+                1 + 1 + serverIdBytes.length + 2 + publicKey.length + 2 + verifyToken.length), output -> {
+            ProtocolVarInt.write(output, PACKET_ID);
+            ProtocolVarInt.write(output, serverIdBytes.length);
+            output.writeBytes(serverIdBytes);
+            writeUnsignedShortArray(output, publicKey);
+            writeUnsignedShortArray(output, verifyToken);
+        });
     }
 
     public String serverId() { return serverId; }

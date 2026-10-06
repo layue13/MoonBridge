@@ -57,6 +57,12 @@ sh smoke/container-channel.sh
 
 新增覆盖包括协议解析前的 IP 拒绝、身份建立后的玩家拒绝、异步等待期间的数据回放、加密登录断开消息、断线取消、超时、异常、工作队列与未决 stage 容量上限，以及进入 PLAY 后不重复调用访问检查。在线身份测试使用注入的会话验证器，未连接真实 Mojang 服务。本次未测量接入吞吐或真实数据库延迟；以下基准均保留各自的历史版本与验证范围。
 
+## 泄漏闸门与变异检查
+
+`proxy-core` 的测试 JVM 以 `-Dio.netty.leakDetection.level=paranoid` 运行，`dev.moonbridge.testing.LeakGate` 自动注册到每个测试类：类结束后强制 GC 并读取 Netty 的泄漏报告，有未释放的缓冲区就使该类失败。`LeakGateTest` 证明它能发现故意制造的泄漏。注意 `Unpooled.wrappedBuffer(byte[])` 创建的缓冲区不被追踪，涉及它们的测试应直接断言 `refCnt()`。
+
+2026-10-05 对手写 `release()` 位置做过一次变异检查（把单个 `release()` 换成不改引用计数的空操作，再跑覆盖它的测试）：对 relay、帧处理器、Tab 补全、协议编码和加解密共 47 处，改造前 23 处无人守护；集中到 `ByteBufs`、`FrameTransformHandler` 并补测试后，剩余 33 处中 32 处被抓到，最后一处随加解密处理器改用 Netty 基类而消失。`ConnectionGate` 与 `Session` 的第二轮检查（3 路并发，每个工作线程一份仓库副本，失败的变异再跑一次以排除负载下的偶发超时）覆盖 17 处：10 处被抓到（`ConnectionGate` 全部 3 处由新增单元测试抓到），1 处结果不稳定不计入（`Session:143`），6 处存活。存活中的 `mapTransitionFrame`、`transferOpening` 的帧改写与失败分支、关闭时清空过渡缓冲，已抽成 `TransitionFrames`、`TransitionBuffer` 并补了单元测试（对这两个类再做一次变异，4 处全部被抓到）。`Session:143` 与 `Session:147`（来自既非前端也非后端的通道的消息、非 ByteBuf 消息）由 `SessionFrameOwnershipTest` 直接构造 `Session` 守护，对这两行的变异都被抓到；至此已评估的手写 release 位置都有测试守护。
+
 ## 合成 relay 基准
 
 `benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
@@ -73,7 +79,7 @@ sh smoke/container-channel.sh
 
 ## 真实 TCP 慢接收端背压回归
 
-`RawRelaySocketTest` 使用实际 loopback TCP 和 Netty NIO 通道，缩小 socket 发送缓冲与 Netty 写水位，让停止读取的接收方触发真实不可写状态。测试观察源读取停止、排队字节有界，恢复接收后逐字节校验双向数据，并覆盖拥塞中接收方断开后的通道与待发送写入清理。
+`RawRelaySocketTest` 使用实际 loopback TCP 和 Netty NIO 通道，缩小 socket 发送缓冲与 Netty 写水位，让停止读取的接收方造成真实的待发送积压。测试观察在目标仍有未完成写入时源读取停止（Linux 上短读取可能低于高水位，因此不以不可写状态为条件）、排队字节有界，恢复接收后逐字节校验双向数据，并覆盖拥塞中接收方断开后的通道与待发送写入清理。
 
 ```powershell
 ./gradlew.bat :proxy-core:test --tests '*RawRelaySocketTest'
@@ -103,6 +109,8 @@ sh smoke/container-channel.sh
 [玩家命令拦截初筛](../benchmarks/results/2026-09-26-command-interceptor.md) 比较同一合成 PLAY 回声流量下启用与关闭命令拦截器的结果；三轮吞吐和延迟范围重叠。该实验没有发送命令，也不能替代目标整合包的容量验收。
 
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
+
+`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
 
 原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 

@@ -27,12 +27,12 @@ public record MinecraftHandshake(int protocolVersion, String serverAddress, int 
     }
 
     public ByteBuf encode(ByteBufAllocator allocator, ProtocolProfile profile) {
-        ByteBuf packet = allocator.buffer();
-        ProtocolVarInt.write(packet, 0);
-        ProtocolVarInt.write(packet, protocolVersion);
-        ProtocolStrings.write(packet, serverAddress, profile.maxHandshakeHostCharacters());
-        packet.writeShort(serverPort);
-        ProtocolVarInt.write(packet, nextState.id);
-        return packet;
+        return ByteBufs.fill(allocator.buffer(), packet -> {
+            ProtocolVarInt.write(packet, 0);
+            ProtocolVarInt.write(packet, protocolVersion);
+            ProtocolStrings.write(packet, serverAddress, profile.maxHandshakeHostCharacters());
+            packet.writeShort(serverPort);
+            ProtocolVarInt.write(packet, nextState.id);
+        });
     }
 }

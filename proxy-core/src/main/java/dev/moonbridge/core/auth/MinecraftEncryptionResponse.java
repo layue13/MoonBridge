@@ -1,5 +1,6 @@
 package dev.moonbridge.core.auth;
 
+import dev.moonbridge.core.protocol.ByteBufs;
 import dev.moonbridge.core.protocol.ProtocolException;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
 import io.netty.buffer.ByteBuf;
@@ -30,11 +31,12 @@ public final class MinecraftEncryptionResponse {
     }
 
     public ByteBuf encode(ByteBufAllocator allocator) {
-        ByteBuf output = allocator.buffer(1 + 2 + encryptedSharedSecret.length + 2 + encryptedVerifyToken.length);
-        ProtocolVarInt.write(output, PACKET_ID);
-        MinecraftEncryptionRequest.writeUnsignedShortArray(output, encryptedSharedSecret);
-        MinecraftEncryptionRequest.writeUnsignedShortArray(output, encryptedVerifyToken);
-        return output;
+        return ByteBufs.fill(allocator.buffer(
+                1 + 2 + encryptedSharedSecret.length + 2 + encryptedVerifyToken.length), output -> {
+            ProtocolVarInt.write(output, PACKET_ID);
+            MinecraftEncryptionRequest.writeUnsignedShortArray(output, encryptedSharedSecret);
+            MinecraftEncryptionRequest.writeUnsignedShortArray(output, encryptedVerifyToken);
+        });
     }
 
     public byte[] encryptedSharedSecret() { return encryptedSharedSecret.clone(); }

@@ -172,4 +172,45 @@ class MinecraftCipherHandlersTest {
         }
         return bytes;
     }
+
+    @Test
+    void outboundReleasesItsInputWhenTheOutputBufferCannotBeAllocated() {
+        EmbeddedChannel channel = new EmbeddedChannel(new MinecraftCipherEncoder(secret.clone()));
+        channel.config().setAllocator(new io.netty.buffer.AbstractByteBufAllocator() {
+            @Override protected ByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
+                throw new IllegalStateException("no heap");
+            }
+            @Override protected ByteBuf newDirectBuffer(int initialCapacity, int maxCapacity) {
+                throw new IllegalStateException("no direct");
+            }
+            @Override public boolean isDirectBufferPooled() { return false; }
+        });
+        ByteBuf input = Unpooled.wrappedBuffer(plaintext.clone());
+        var write = channel.writeOneOutbound(input);
+        channel.flushOutbound();
+        assertEquals(0, input.refCnt(), "the plaintext must be released when encryption cannot start");
+        org.junit.jupiter.api.Assertions.assertTrue(write.cause() instanceof io.netty.handler.codec.EncoderException
+                && write.cause().getCause() instanceof IllegalStateException, String.valueOf(write.cause()));
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void transformReleasesItsOutputWhenTheCipherFails() throws Exception {
+        Cipher uninitialised = Cipher.getInstance("AES/CFB8/NoPadding");
+        ByteBuf input = Unpooled.wrappedBuffer(plaintext.clone());
+        ByteBuf[] allocated = new ByteBuf[1];
+        io.netty.buffer.ByteBufAllocator tracking = new io.netty.buffer.AbstractByteBufAllocator() {
+            @Override protected ByteBuf newHeapBuffer(int initialCapacity, int maxCapacity) {
+                return allocated[0] = new io.netty.buffer.UnpooledHeapByteBuf(this, initialCapacity, maxCapacity);
+            }
+            @Override protected ByteBuf newDirectBuffer(int initialCapacity, int maxCapacity) {
+                return allocated[0] = io.netty.buffer.UnpooledByteBufAllocator.DEFAULT.directBuffer(initialCapacity, maxCapacity);
+            }
+            @Override public boolean isDirectBufferPooled() { return false; }
+        };
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> CipherBufferTransform.update(tracking, uninitialised, input));
+        assertEquals(0, allocated[0].refCnt(), "the output buffer must not leak when the cipher throws");
+        input.release();
+    }
 }

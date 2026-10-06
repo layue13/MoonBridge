@@ -17,16 +17,14 @@ import dev.moonbridge.api.TransferStatus;
 import dev.moonbridge.core.auth.MinecraftEncryptionRequest;
 import dev.moonbridge.core.auth.SessionVerifier;
 import dev.moonbridge.core.backend.BackendCatalog;
+import dev.moonbridge.core.net.NetworkTransport;
 import dev.moonbridge.core.protocol.ServerListStatus;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.resolver.AddressResolverGroup;
 import io.netty.resolver.dns.DnsAddressResolverGroup;
 import io.netty.resolver.dns.DnsNameResolverBuilder;
@@ -71,8 +69,9 @@ public final class ProxySessionListener implements Players {
     private final Duration initialPlayTimeout;
     private final KeyPair encryptionKeys;
     private final SecureRandom random = new SecureRandom();
-    private final EventLoopGroup boss = new NioEventLoopGroup(1, namedFactory("moonbridge-session-accept"));
-    private final EventLoopGroup workers = new NioEventLoopGroup(0, namedFactory("moonbridge-session-io"));
+    private final NetworkTransport transport;
+    private final EventLoopGroup boss;
+    private final EventLoopGroup workers;
     private final AddressResolverGroup<InetSocketAddress> backendResolver;
     private final ConcurrentHashMap<UUID, Session> sessionsByPlayerId = new ConcurrentHashMap<>();
     private final Set<Session> allSessions = ConcurrentHashMap.newKeySet();
@@ -114,6 +113,13 @@ public final class ProxySessionListener implements Players {
         this(bindAddress, catalog, verifier, Duration.ofSeconds(15), placementTimeout);
     }
 
+    /** Uses the given I/O transport for the listener, player sessions, backend dials and DNS. */
+    public ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog,
+                                SessionVerifier verifier, Duration placementTimeout, NetworkTransport transport) {
+        this(bindAddress, catalog, verifier, Duration.ofSeconds(15), placementTimeout, Duration.ofSeconds(15),
+                Duration.ofMinutes(2), null, transport);
+    }
+
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout) {
         this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, Duration.ofSeconds(15));
@@ -129,9 +135,7 @@ public final class ProxySessionListener implements Players {
                          Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
                          Duration initialPlayTimeout) {
         this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
-                initialPlayTimeout,
-                new DnsAddressResolverGroup(new DnsNameResolverBuilder()
-                        .datagramChannelType(NioDatagramChannel.class).queryTimeoutMillis(3000)));
+                initialPlayTimeout, null, NetworkTransport.select(NetworkTransport.Preference.AUTO));
     }
 
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
@@ -144,10 +148,20 @@ public final class ProxySessionListener implements Players {
     ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
                          Duration loginStageTimeout, Duration placementTimeout, Duration transferCutoverTimeout,
                          Duration initialPlayTimeout, AddressResolverGroup<InetSocketAddress> backendResolver) {
+        this(bindAddress, catalog, verifier, loginStageTimeout, placementTimeout, transferCutoverTimeout,
+                initialPlayTimeout, Objects.requireNonNull(backendResolver, "backendResolver"),
+                NetworkTransport.select(NetworkTransport.Preference.AUTO));
+    }
+
+    /** A null resolver selects DNS resolution on the session transport. */
+    private ProxySessionListener(SocketAddress bindAddress, BackendCatalog catalog, SessionVerifier verifier,
+                                 Duration loginStageTimeout, Duration placementTimeout,
+                                 Duration transferCutoverTimeout, Duration initialPlayTimeout,
+                                 AddressResolverGroup<InetSocketAddress> backendResolver, NetworkTransport transport) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.verifier = verifier;
-        this.backendResolver = Objects.requireNonNull(backendResolver, "backendResolver");
+        this.transport = Objects.requireNonNull(transport, "transport");
         this.loginStageTimeout = Objects.requireNonNull(loginStageTimeout, "loginStageTimeout");
         this.placementTimeout = Objects.requireNonNull(placementTimeout, "placementTimeout");
         this.transferCutoverTimeout = Objects.requireNonNull(transferCutoverTimeout, "transferCutoverTimeout");
@@ -172,6 +186,12 @@ public final class ProxySessionListener implements Players {
         } catch (GeneralSecurityException failure) {
             throw new IllegalStateException("Could not initialize Minecraft online authentication", failure);
         }
+        // DNS datagram channels register on the session event loops, so they share the transport.
+        this.backendResolver = backendResolver != null ? backendResolver
+                : new DnsAddressResolverGroup(new DnsNameResolverBuilder()
+                        .datagramChannelType(transport.datagramChannel()).queryTimeoutMillis(3000));
+        boss = transport.newEventLoopGroup(1, namedFactory("moonbridge-session-accept"));
+        workers = transport.newEventLoopGroup(0, namedFactory("moonbridge-session-io"));
     }
 
     /** Sets the PluginHost::placeInitial callback exactly once, before start(). */
@@ -320,7 +340,7 @@ public final class ProxySessionListener implements Players {
         started = true;
         ServerBootstrap bootstrap = new ServerBootstrap()
                 .group(boss, workers)
-                .channel(NioServerSocketChannel.class)
+                .channel(transport.serverChannel())
                 .childOption(io.netty.channel.ChannelOption.TCP_NODELAY, true)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override protected void initChannel(SocketChannel channel) {
@@ -427,6 +447,8 @@ public final class ProxySessionListener implements Players {
     }
 
     AddressResolverGroup<InetSocketAddress> backendResolver() { return backendResolver; }
+
+    public NetworkTransport transport() { return transport; }
 
     private long nextConnectionId() {
         long id = nextConnectionId.getAndUpdate(value -> {

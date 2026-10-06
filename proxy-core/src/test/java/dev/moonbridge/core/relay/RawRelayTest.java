@@ -346,10 +346,119 @@ final class RawRelayTest {
         }
     }
 
+    @Test
+    void framesFromOneReadShareOnePeerFlush() {
+        var flushes = new AtomicInteger();
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override public void flush(ChannelHandlerContext ctx) {
+                flushes.incrementAndGet();
+                ctx.flush();
+            }
+        });
+        try {
+            RawRelay.attach(client, backend).start();
+            pump(client, backend);
+            flushes.set(0);
+
+            var first = Unpooled.wrappedBuffer(new byte[] {1});
+            var second = Unpooled.wrappedBuffer(new byte[] {2});
+            var third = Unpooled.wrappedBuffer(new byte[] {3});
+            client.writeInbound(first, second, third);
+            pump(client, backend);
+
+            assertEquals(1, flushes.get(), "one inbound read batch must flush the peer once");
+            for (var expected : new io.netty.buffer.ByteBuf[] {first, second, third}) {
+                var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
+                assertSame(expected, forwarded);
+                forwarded.release();
+            }
+            assertNull(backend.readOutbound());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void framesForwardedOutsideASocketReadAreStillFlushed() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend).start();
+            pump(client, backend);
+
+            // Asynchronous handlers such as tab completion forward a frame without a read-complete event.
+            var late = Unpooled.wrappedBuffer(new byte[] {7});
+            client.pipeline().fireChannelRead(late);
+            pump(client, backend);
+
+            var forwarded = (io.netty.buffer.ByteBuf) backend.readOutbound();
+            assertSame(late, forwarded);
+            forwarded.release();
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
     private static void pump(EmbeddedChannel first, EmbeddedChannel second) {
         first.runPendingTasks();
         second.runPendingTasks();
         first.runPendingTasks();
         second.runPendingTasks();
+    }
+
+    @Test
+    void nonBufferMessagesAreReleasedAndCloseBothSides() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend).start();
+            pump(client, backend);
+            var holder = new io.netty.buffer.DefaultByteBufHolder(Unpooled.buffer().writeByte(1));
+            client.writeInbound(holder);
+            assertEquals(0, holder.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void releasesAFrameWhenAnObserverFailsBeforeItIsWritten() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            RawRelay.attach(client, backend, bytes -> { throw new IllegalStateException("observer"); }, null).start();
+            pump(client, backend);
+            var frame = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(frame);
+            assertEquals(0, frame.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void releasesAQueuedFrameWhenAnObserverFailsDuringStartupReplay() {
+        var client = new EmbeddedChannel();
+        var backend = new EmbeddedChannel();
+        try {
+            var link = RawRelay.attach(client, backend, bytes -> { throw new IllegalStateException("observer"); }, null);
+            pump(client, backend);
+            var queued = Unpooled.wrappedBuffer(new byte[] {1});
+            client.writeInbound(queued); // held while the link is paused
+            link.start();
+            pump(client, backend);
+            assertEquals(0, queued.refCnt());
+            assertTrue(!client.isOpen() && !backend.isOpen());
+        } finally {
+            client.finishAndReleaseAll();
+            backend.finishAndReleaseAll();
+        }
     }
 }

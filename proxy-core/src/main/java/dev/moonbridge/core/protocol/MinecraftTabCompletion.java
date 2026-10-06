@@ -50,14 +50,13 @@ public final class MinecraftTabCompletion {
     }
 
     public static ByteBuf response(ByteBufAllocator allocator, List<String> suggestions) {
-        ByteBuf body = allocator.buffer();
-        try {
+        return ByteBufs.use(allocator.buffer(), body -> {
             if (suggestions.size() > 100) throw new IllegalArgumentException("too many completions");
             ProtocolVarInt.write(body, RESPONSE);
             ProtocolVarInt.write(body, suggestions.size());
             for (String suggestion : suggestions) ProtocolStrings.write(body, suggestion, 100);
             if (body.readableBytes() > 32767) throw new IllegalArgumentException("completion response too large");
             return Minecraft1710PlayPackets.frame(allocator, body);
-        } finally { body.release(); }
+        });
     }
 }

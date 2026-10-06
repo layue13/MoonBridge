@@ -28,7 +28,7 @@ flowchart LR
     F --> G[PLAY / Forge 握手与转发]
 ```
 
-普通转发沿用协议 5 帧边界，不重新编码普通帧。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/KeepAliveBridge.java)。
+普通转发沿用协议 5 帧边界，不重新编码普通帧；同一次 socket 读取解码出的帧逐个写入对端，在读取完成时合并为一次 flush，读取之外转发的帧由每批一次的事件循环任务补发 flush。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/KeepAliveBridge.java)。
 
 ## 后端目录与发现所有权
 

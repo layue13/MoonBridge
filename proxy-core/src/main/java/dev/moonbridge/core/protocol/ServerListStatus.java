@@ -68,11 +68,11 @@ public final class ServerListStatus {
         if (online < 0) throw new IllegalArgumentException("online must not be negative");
         String json = jsonPrefix + online + jsonSuffix;
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        ByteBuf body = allocator.buffer(1 + ProtocolVarInt.encodedSize(bytes.length) + bytes.length);
-        ProtocolVarInt.write(body, 0);
-        ProtocolVarInt.write(body, bytes.length);
-        body.writeBytes(bytes);
-        return body;
+        return ByteBufs.fill(allocator.buffer(1 + ProtocolVarInt.encodedSize(bytes.length) + bytes.length), body -> {
+            ProtocolVarInt.write(body, 0);
+            ProtocolVarInt.write(body, bytes.length);
+            body.writeBytes(bytes);
+        });
     }
 
     private static String escapeJson(String value) {

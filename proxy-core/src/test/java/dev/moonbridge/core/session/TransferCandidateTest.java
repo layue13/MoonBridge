@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class TransferCandidateTest {
@@ -96,5 +97,20 @@ final class TransferCandidateTest {
         byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
         ProtocolVarInt.write(output, encoded.length);
         output.writeBytes(encoded);
+    }
+
+    @Test
+    void nonBufferMessagesAreReleasedAndFailTheCandidate() {
+        var failure = new AtomicReference<String>();
+        var candidate = new TransferCandidate(UUID.randomUUID(), "Player", new TransferCandidate.Listener() {
+            @Override public void ready(TransferCandidate ignored) { throw new AssertionError("not ready"); }
+            @Override public void failed(TransferCandidate ignored, String reason) { failure.set(reason); }
+        });
+        var channel = new EmbeddedChannel(candidate);
+        var holder = new io.netty.buffer.DefaultByteBufHolder(io.netty.buffer.Unpooled.buffer().writeByte(1));
+        channel.writeInbound(holder);
+        assertEquals(0, holder.refCnt());
+        assertNotNull(failure.get());
+        channel.finishAndReleaseAll();
     }
 }

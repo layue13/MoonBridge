@@ -12,13 +12,17 @@ import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
-/** Relays already negotiated protocol bytes without copying payload buffers. */
+/**
+ * Relays already negotiated protocol bytes without copying payload buffers.
+ * Frames decoded from one socket read are written to the peer and flushed together.
+ */
 public final class RawRelay {
     // Per direction: allow one maximum protocol 5 frame, including its length prefix.
     static final int MAX_PAUSED_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes() + 3;
@@ -155,6 +159,7 @@ public final class RawRelay {
 
     private static final class Side extends ChannelInboundHandlerAdapter {
         private final Channel peer;
+        private final Runnable flushTask = this::flushPeer;
         private final ArrayDeque<ByteBuf> pausedMessages = new ArrayDeque<>();
         private Consumer<ByteBuf> observer;
         private ChannelHandlerContext context;
@@ -167,6 +172,7 @@ public final class RawRelay {
         private volatile boolean detached;
         private volatile boolean closingAfterWrites;
         private boolean readsEnabled;
+        private boolean flushPending;
         private ScheduledFuture<?> closeDeadline;
         private CompletableFuture<Void> pauseComplete;
         private CompletableFuture<Void> resumeComplete;
@@ -334,7 +340,7 @@ public final class RawRelay {
             try {
                 Consumer<ByteBuf> activeObserver = observer;
                 if (activeObserver != null) activeObserver.accept(((ByteBuf) message).duplicate());
-                peer.writeAndFlush(message).addListener((ChannelFutureListener) future ->
+                peer.write(message).addListener((ChannelFutureListener) future ->
                         ctx.executor().execute(() -> {
                             writesInFlight--;
                             if (paused && writesInFlight == 0 && pauseComplete != null) {
@@ -345,11 +351,35 @@ public final class RawRelay {
                             if (!future.isSuccess() || (closingAfterWrites && writesInFlight == 0)) closePair(ctx);
                             else if (!closingAfterWrites) requestRead();
                         }));
+                scheduleFlush(ctx);
             } catch (RuntimeException failure) {
                 writesInFlight--;
                 ReferenceCountUtil.release(message);
                 closePair(ctx);
             }
+        }
+
+        @Override
+        public void channelReadComplete(ChannelHandlerContext ctx) {
+            flushPeer();
+            ctx.fireChannelReadComplete();
+        }
+
+        /** Read completion normally flushes first; the task covers frames forwarded outside a socket read. */
+        private void scheduleFlush(ChannelHandlerContext ctx) {
+            if (flushPending) return;
+            flushPending = true;
+            try {
+                ctx.executor().execute(flushTask);
+            } catch (RejectedExecutionException shutdown) {
+                flushPeer();
+            }
+        }
+
+        private void flushPeer() {
+            if (!flushPending) return;
+            flushPending = false;
+            peer.flush();
         }
 
         @Override

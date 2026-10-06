@@ -24,14 +24,9 @@ public final class MinecraftLoginDisconnect {
     public static ByteBuf encodeJson(ByteBufAllocator allocator, String componentJson) {
         Objects.requireNonNull(allocator, "allocator");
         MinecraftText.validateEncoded(componentJson);
-        ByteBuf packet = allocator.buffer();
-        try {
+        return ByteBufs.fill(allocator.buffer(), packet -> {
             ProtocolVarInt.write(packet, 0);
             ProtocolStrings.write(packet, componentJson, 32767);
-            return packet;
-        } catch (RuntimeException failure) {
-            packet.release();
-            throw failure;
-        }
+        });
     }
 }
