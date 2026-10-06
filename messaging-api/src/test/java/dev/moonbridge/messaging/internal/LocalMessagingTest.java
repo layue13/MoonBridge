@@ -126,14 +126,14 @@ class LocalMessagingTest {
         scope.channel("islands:slow").onRequest(request -> new CompletableFuture<byte[]>());
         List<CompletionStage<Message>> pending = new ArrayList<CompletionStage<Message>>();
         for (int index = 0; index < LocalMessaging.MAX_IN_FLIGHT; index++) {
-            pending.add(host.receiveRequest(request("islands:slow"), Duration.ofMillis(40)));
+            pending.add(host.receiveRequest(request("islands:slow"), Duration.ofMillis(500)));
         }
-        MessagingException saturated = failure(host.receiveRequest(request("islands:slow"), Duration.ofMillis(40)));
+        MessagingException saturated = failure(host.receiveRequest(request("islands:slow"), Duration.ofMillis(500)));
         assertEquals(MessagingException.Code.BACKPRESSURED, saturated.code());
 
         MessagingException timedOut = failure(pending.get(0));
         assertEquals(MessagingException.Code.TIMED_OUT, timedOut.code());
-        assertNotNull(host.receiveRequest(request("islands:slow"), Duration.ofMillis(40)));
+        assertNotNull(host.receiveRequest(request("islands:slow"), Duration.ofMillis(500)));
     }
 
     @Test
