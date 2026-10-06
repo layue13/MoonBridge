@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.relay.RawRelay;
 import io.netty.buffer.ByteBuf;
@@ -11,13 +11,13 @@ import io.netty.util.ReferenceCountUtil;
  * An inbound PLAY handler that sees one complete frame at a time and owns its reference counting, so
  * subclasses never call {@code release()}: {@link #transform} borrows the frame and answers what to forward.
  */
-abstract class FrameTransformHandler extends ChannelInboundHandlerAdapter {
+public abstract class FrameTransformHandler extends ChannelInboundHandlerAdapter {
     /** Returned by {@link #transform} when the frame was consumed and the relay resumes on its own later. */
-    static final ByteBuf CONSUMED = Unpooled.EMPTY_BUFFER;
+    public static final ByteBuf CONSUMED = Unpooled.EMPTY_BUFFER;
 
     private final Runnable closeSession;
 
-    FrameTransformHandler(Runnable closeSession) {
+    public FrameTransformHandler(Runnable closeSession) {
         this.closeSession = closeSession;
     }
 

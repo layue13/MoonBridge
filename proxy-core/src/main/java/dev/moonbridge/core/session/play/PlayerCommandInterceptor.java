@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import io.netty.buffer.ByteBuf;
@@ -7,10 +7,10 @@ import io.netty.channel.ChannelHandlerContext;
 import java.util.function.Predicate;
 
 /** Consumes only registered proxy commands; all other PLAY frames keep their wire bytes. */
-final class PlayerCommandInterceptor extends FrameTransformHandler {
+public final class PlayerCommandInterceptor extends FrameTransformHandler {
     private final Predicate<String> dispatch;
 
-    PlayerCommandInterceptor(Predicate<String> dispatch, Runnable closeSession) {
+    public PlayerCommandInterceptor(Predicate<String> dispatch, Runnable closeSession) {
         super(closeSession);
         this.dispatch = dispatch;
     }

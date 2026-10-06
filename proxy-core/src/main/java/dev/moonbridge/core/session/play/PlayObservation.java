@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.ProtocolProfile;
@@ -9,7 +9,7 @@ import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 
 /** PLAY facts for a session; callers run on the player's event loop. */
-final class PlayObservation implements AutoCloseable {
+public final class PlayObservation implements AutoCloseable {
     private static final int MAX_FRAME_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes();
     private final CompletableFuture<Void> ready = new CompletableFuture<>();
     private boolean joinSeen;
@@ -20,7 +20,7 @@ final class PlayObservation implements AutoCloseable {
     private OptionalInt forgeDimensionOverride = OptionalInt.empty();
     private OptionalInt entityId = OptionalInt.empty();
     /** Called after MinecraftFrameDecoder with one complete, length-prefixed frame. */
-    void observeFrame(boolean clientbound, ByteBuf frame) {
+    public void observeFrame(boolean clientbound, ByteBuf frame) {
         if (ready.isDone()) return;
         ByteBuf packet = frame.duplicate();
         int length = ProtocolVarInt.read(packet);
@@ -30,7 +30,7 @@ final class PlayObservation implements AutoCloseable {
         observePacket(clientbound, packet);
     }
 
-    void observePacket(boolean clientbound, ByteBuf packet) {
+    public void observePacket(boolean clientbound, ByteBuf packet) {
         if (ready.isDone()) return;
         int id = ProtocolVarInt.read(packet.duplicate());
         if (clientbound) {
@@ -65,10 +65,10 @@ final class PlayObservation implements AutoCloseable {
         if (joinSeen && forgeSeen && backendComplete && clientComplete) ready.complete(null);
     }
 
-    CompletableFuture<Void> ready() { return ready; }
-    boolean forgeSeen() { return forgeSeen; }
-    OptionalInt dimension() { return dimension; }
-    OptionalInt entityId() { return entityId; }
+    public CompletableFuture<Void> ready() { return ready; }
+    public boolean forgeSeen() { return forgeSeen; }
+    public OptionalInt dimension() { return dimension; }
+    public OptionalInt entityId() { return entityId; }
 
     @Override public void close() {
         if (!ready.isDone()) ready.completeExceptionally(new IllegalStateException("session closed"));

@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.relay.RawRelay;
 import io.netty.buffer.ByteBuf;

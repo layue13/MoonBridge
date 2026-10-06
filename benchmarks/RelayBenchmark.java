@@ -1,5 +1,7 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.play.KeepAliveBridge;
+
 import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.ProtocolVarInt;

@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.transfer;
 
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.buffer.ByteBuf;
@@ -9,7 +9,7 @@ import io.netty.util.ReferenceCountUtil;
 import java.util.ArrayDeque;
 
 /** Holds decoded frames on either side of the old session during backend cutover. */
-final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
+public final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     // The decoder retains the three-byte length prefix on a maximum-sized protocol 5 frame.
     private static final int MAX_BYTES = ProtocolProfile.minecraft1710().maxFrameBytes() + 3;
     private static final int MAX_MESSAGES = 1024;
@@ -22,7 +22,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     private boolean reading;
     private boolean discard;
 
-    TransferFrameBuffer(Runnable closeSession) {
+    public TransferFrameBuffer(Runnable closeSession) {
         this.closeSession = closeSession;
     }
 
@@ -31,7 +31,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** Keep reading bounded frames so a paused transfer also observes peer disconnects. */
-    void readUntilRemoved() {
+    public void readUntilRemoved() {
         ChannelHandlerContext ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must read on its channel event loop");
@@ -65,7 +65,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** Replays frames after this handler, preserving the already decoded frame boundary. */
-    void drainAndRemove() {
+    public void drainAndRemove() {
         var ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must drain on its channel event loop");
@@ -84,7 +84,7 @@ final class TransferFrameBuffer extends ChannelInboundHandlerAdapter {
     }
 
     /** After irreversible source detach, discard queued and future old-world frames. */
-    void discardFrames() {
+    public void discardFrames() {
         var ctx = context;
         if (ctx == null || !ctx.executor().inEventLoop()) {
             throw new IllegalStateException("transfer buffer must switch mode on its channel event loop");

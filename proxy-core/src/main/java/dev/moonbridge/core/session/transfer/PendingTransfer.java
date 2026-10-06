@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.transfer;
 
 import dev.moonbridge.api.TransferResult;
 

@@ -1,25 +1,25 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import java.util.concurrent.TimeUnit;
 
 /** Token bucket for proxy-owned player commands; confined to the session event loop. */
-final class CommandRateLimiter {
-    enum Decision { ADMIT, DENY, DENY_WITH_NOTICE }
+public final class CommandRateLimiter {
+    public enum Decision { ADMIT, DENY, DENY_WITH_NOTICE }
 
-    static final int BURST = 10;
-    static final long TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
-    static final long NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
+    public static final int BURST = 10;
+    public static final long TOKEN_NANOS = TimeUnit.MILLISECONDS.toNanos(200);
+    public static final long NOTICE_NANOS = TimeUnit.SECONDS.toNanos(2);
 
     private int tokens = BURST;
     private long refillNanos;
     private long lastNoticeNanos;
     private boolean noticeSent;
 
-    CommandRateLimiter(long nowNanos) {
+    public CommandRateLimiter(long nowNanos) {
         refillNanos = nowNanos;
     }
 
-    Decision admit(long nowNanos) {
+    public Decision admit(long nowNanos) {
         long elapsed = nowNanos - refillNanos;
         if (elapsed >= TOKEN_NANOS) {
             long replenished = Math.min(BURST, elapsed / TOKEN_NANOS);

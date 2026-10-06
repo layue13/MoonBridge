@@ -1,10 +1,10 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import org.junit.jupiter.api.Test;
 
-import static dev.moonbridge.core.session.CommandRateLimiter.Decision.ADMIT;
-import static dev.moonbridge.core.session.CommandRateLimiter.Decision.DENY;
-import static dev.moonbridge.core.session.CommandRateLimiter.Decision.DENY_WITH_NOTICE;
+import static dev.moonbridge.core.session.play.CommandRateLimiter.Decision.ADMIT;
+import static dev.moonbridge.core.session.play.CommandRateLimiter.Decision.DENY;
+import static dev.moonbridge.core.session.play.CommandRateLimiter.Decision.DENY_WITH_NOTICE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class CommandRateLimiterTest {

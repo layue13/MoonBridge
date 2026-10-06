@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;

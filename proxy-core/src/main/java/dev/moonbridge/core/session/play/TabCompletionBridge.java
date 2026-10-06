@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.protocol.MinecraftTabCompletion;
 import dev.moonbridge.core.relay.RawRelay;
@@ -20,7 +20,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 /** One backend generation, confined to the shared frontend/backend event loop. */
-final class TabCompletionBridge implements AutoCloseable {
+public final class TabCompletionBridge implements AutoCloseable {
     private final Channel frontend;
     private final Function<String, List<String>> roots;
     private final Function<String, Optional<CompletionStage<List<String>>>> complete;
@@ -44,13 +44,13 @@ final class TabCompletionBridge implements AutoCloseable {
     private ScheduledFuture<?> timeout;
     private CompletableFuture<?> pluginResult;
 
-    TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
+    public TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
                         Function<String, Optional<CompletionStage<List<String>>>> complete,
                         Runnable closeSession) {
         this(frontend, roots, complete, closeSession, ignored -> true);
     }
 
-    TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
+    public TabCompletionBridge(Channel frontend, Function<String, List<String>> roots,
                         Function<String, Optional<CompletionStage<List<String>>>> complete,
                         Runnable closeSession, Predicate<String> visibleRoot) {
         this.frontend = frontend;
@@ -60,8 +60,8 @@ final class TabCompletionBridge implements AutoCloseable {
         this.visibleRoot = visibleRoot;
     }
 
-    ChannelInboundHandlerAdapter frontendHandler() { return new Handler(true); }
-    ChannelInboundHandlerAdapter backendHandler() { return new Handler(false); }
+    public ChannelInboundHandlerAdapter frontendHandler() { return new Handler(true); }
+    public ChannelInboundHandlerAdapter backendHandler() { return new Handler(false); }
 
     private final class Handler extends ChannelInboundHandlerAdapter {
         private final boolean fromClient;

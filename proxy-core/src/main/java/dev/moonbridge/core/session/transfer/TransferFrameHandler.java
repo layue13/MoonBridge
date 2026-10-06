@@ -1,4 +1,7 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.transfer;
+
+import dev.moonbridge.core.session.play.FrameTransformHandler;
+import dev.moonbridge.core.session.play.PlayObservation;
 
 import dev.moonbridge.core.protocol.Minecraft1710EntityIds;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
@@ -12,8 +15,8 @@ import io.netty.channel.ChannelHandlerContext;
 import java.util.concurrent.CompletableFuture;
 
 /** Handles the few framed packets that cannot pass unchanged after a backend switch. */
-final class TransferFrameHandler extends FrameTransformHandler {
-    static final class State implements AutoCloseable {
+public final class TransferFrameHandler extends FrameTransformHandler {
+    public static final class State implements AutoCloseable {
         private final Channel frontend;
         private final Channel backend;
         private final PlayObservation observation;
@@ -78,7 +81,7 @@ final class TransferFrameHandler extends FrameTransformHandler {
     private final State state;
     private final boolean clientbound;
 
-    TransferFrameHandler(State state, boolean clientbound) {
+    public TransferFrameHandler(State state, boolean clientbound) {
         super(state.closeSession);
         this.state = state;
         this.clientbound = clientbound;

@@ -1,4 +1,4 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.play;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -9,18 +9,18 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Keeps connection-local PLAY keep-alive replies on the backend that issued them. */
-final class KeepAliveBridge extends FrameTransformHandler {
-    static final class State {
+public final class KeepAliveBridge extends FrameTransformHandler {
+    public static final class State {
         private static final int MAX_PENDING = 1024;
         private int nextClientId = ThreadLocalRandom.current().nextInt();
         private final Map<Integer, Integer> pending = new HashMap<>();
 
-        void switchBackend() {
+        public void switchBackend() {
             pending.clear();
         }
 
         /** Transforms a packet body while the login frame encoder is still installed. */
-        ByteBuf body(ByteBufAllocator allocator, ByteBuf packet, boolean fromFrontend) {
+        public ByteBuf body(ByteBufAllocator allocator, ByteBuf packet, boolean fromFrontend) {
             int start = packet.readerIndex();
             if (packet.readableBytes() == 0 || packet.getUnsignedByte(start) != 0) return packet;
             if (packet.readableBytes() != 5) throw new IllegalArgumentException("invalid keep-alive packet");
@@ -30,7 +30,7 @@ final class KeepAliveBridge extends FrameTransformHandler {
         }
 
         /** Transforms a complete length-prefixed PLAY frame without copying ordinary packets. */
-        ByteBuf frame(ByteBufAllocator allocator, ByteBuf packet, boolean fromFrontend) {
+        public ByteBuf frame(ByteBufAllocator allocator, ByteBuf packet, boolean fromFrontend) {
             int start = packet.readerIndex();
             if (packet.readableBytes() < 2 || packet.getUnsignedByte(start) != 5
                     || packet.getUnsignedByte(start + 1) != 0) return packet;
@@ -60,7 +60,7 @@ final class KeepAliveBridge extends FrameTransformHandler {
     private final boolean fromFrontend;
     private final Runnable closeSession;
 
-    KeepAliveBridge(State state, boolean fromFrontend, Runnable closeSession) {
+    public KeepAliveBridge(State state, boolean fromFrontend, Runnable closeSession) {
         super(closeSession);
         this.state = state;
         this.fromFrontend = fromFrontend;

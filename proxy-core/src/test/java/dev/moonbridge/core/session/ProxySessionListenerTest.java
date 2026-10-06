@@ -1,5 +1,7 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.play.PlayObservation;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.AccessDecision;

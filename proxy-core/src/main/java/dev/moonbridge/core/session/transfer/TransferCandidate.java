@@ -1,4 +1,6 @@
-package dev.moonbridge.core.session;
+package dev.moonbridge.core.session.transfer;
+
+import dev.moonbridge.core.session.play.PlayObservation;
 
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.MinecraftLoginSuccess;
@@ -17,8 +19,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Logs into a replacement backend while the existing player session keeps its old backend. */
-final class TransferCandidate extends ChannelInboundHandlerAdapter {
-    interface Listener {
+public final class TransferCandidate extends ChannelInboundHandlerAdapter {
+    public interface Listener {
         void ready(TransferCandidate candidate);
         void failed(TransferCandidate candidate, String reason);
     }
@@ -38,11 +40,11 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     private State state = State.LOGIN;
     private int queuedBytes;
 
-    TransferCandidate(UUID expectedId, String username, Listener listener) {
+    public TransferCandidate(UUID expectedId, String username, Listener listener) {
         this(expectedId, username, listener, false);
     }
 
-    TransferCandidate(UUID expectedId, String username, Listener listener, boolean deferLogin) {
+    public TransferCandidate(UUID expectedId, String username, Listener listener, boolean deferLogin) {
         this.expectedId = expectedId;
         this.username = username;
         this.listener = listener;
@@ -55,7 +57,7 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
     }
 
     /** Coordinated waits must not consume the destination's login budget. */
-    void loginStarted() {
+    public void loginStarted() {
         if (loginStarted) return;
         if (context == null || !context.executor().inEventLoop()) {
             throw new IllegalStateException("candidate login must start on its event loop");
@@ -141,23 +143,23 @@ final class TransferCandidate extends ChannelInboundHandlerAdapter {
         else fail(ctx, "replacement backend failed");
     }
 
-    Minecraft1710PlayPackets.JoinGame joinGame() { return joinGame; }
-    PlayObservation observation() { return observation; }
+    public Minecraft1710PlayPackets.JoinGame joinGame() { return joinGame; }
+    public PlayObservation observation() { return observation; }
 
-    List<ByteBuf> takeQueuedPackets() {
+    public List<ByteBuf> takeQueuedPackets() {
         var packets = new ArrayList<>(queued);
         queued.clear();
         queuedBytes = 0;
         return packets;
     }
 
-    void handOff() {
+    public void handOff() {
         if (state != State.READY) throw new IllegalStateException("replacement backend is not ready");
         state = State.HANDED_OFF;
         deadline.cancel(false);
     }
 
-    void close() {
+    public void close() {
         if (deadline != null) deadline.cancel(false);
         ByteBuf packet;
         while ((packet = queued.pollFirst()) != null) packet.release();
