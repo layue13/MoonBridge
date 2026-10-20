@@ -19,8 +19,5 @@ replay_pid*
 
 data/
 *.invalid-*
-deployment/performance/results/
-deployment/local-minecraft-1.7.10/bin/
-deployment/local-minecraft-1.7.10/backend-*/
-deployment/local-minecraft-1.7.10/*.pid
-deployment/local-minecraft-1.7.10/*.log
+
+.kotlin/

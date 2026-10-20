@@ -1,43 +1,43 @@
-# Transfer coordination
+# 转服协调
 
-## Contract
+## 契约
 
-Transfer coordination is optional. Without `TransferPreparingEvent` subscribers, transfers use the existing parallel login and cutover path. Ordinary PLAY forwarding does not dispatch or inspect transfer events.
+转服协调是可选的。没有 `TransferPreparingEvent` 订阅者时，转服沿用现有的并行登录与切换路径。普通 PLAY 转发不派发也不检查转服事件。
 
-After the destination TCP connection succeeds, before any destination Minecraft login bytes are written, the proxy calls the selected preparation listeners off its I/O thread. The source remains connected and usable. Listeners return `allow()`, `deny(reason)`, or `releaseSource(afterSourceClosed)`. Denial stops the transfer while preserving the source. All listeners are considered in registration order until denial; an allow cannot erase an earlier source-release requirement.
+目标 TCP 连接成功后、写入任何目标 Minecraft 登录字节之前，代理在 I/O 线程之外调用选定的准备监听器。源服保持连接且可用。监听器返回 `allow()`、`deny(reason)` 或 `releaseSource(afterSourceClosed)`。拒绝会停止转服并保留源服。所有监听器按注册顺序依次考虑，直至遇到拒绝；allow 不能抹去先前的源服释放要求。
 
-Preparation should validate and record reversible intent. It must not take a final snapshot or clear live player state: the source can still process gameplay. A plugin that records intent must reconcile abandoned intent independently; notification delivery is not a persistence guarantee.
+准备阶段应校验并记录可撤销的意图，不得做最终快照或清除在线玩家状态：源服仍可能处理玩法。记录意图的插件必须独立对账被放弃的意图；通知投递不是持久化保证。
 
-If any listener requests source release, the proxy stops forwarding new source-world operations, drains already accepted network writes, detaches the source relay, and closes the source connection. It then invokes only the callbacks attached to the selected source-release decisions, in registration order, off the I/O thread. Each callback is a `Supplier<CompletionStage<Void>>` bound to the preparation that selected it; it can capture that preparation's immutable context. There is no separate source-close event or independently subscribable notification. Socket closure does not mean the backend has processed logout or committed a save. Each required callback defines and confirms its own durable boundary through successful asynchronous completion.
+若任一监听器请求释放源服，代理停止转发新的源服世界操作，排空已接受的网络写入，摘除源服 relay 并关闭源服连接。随后仅按注册顺序、在 I/O 线程之外调用附加在所选源服释放决定上的回调。每个回调都是绑定到选择它的那次准备的 `Supplier<CompletionStage<Void>>`，可以捕获该准备的不可变上下文。没有单独的源服关闭事件或可独立订阅的通知。socket 关闭不表示后端已处理登出或完成存档。每个必需回调通过异步成功完成来定义并确认自己的持久化边界。
 
-Only after all required callbacks succeed does the proxy send the destination Handshake and LoginStart. It checks that the attempt, frontend connection, destination connection and destination registration generation are still current. Source-world packets received during the gap are discarded, never queued for replay into the destination. Existing Forge negotiation continues to permit control traffic and reject gameplay until its world boundary is ready.
+只有所有必需回调都成功后，代理才发送目标 Handshake 和 LoginStart。它会检查本次尝试、前端连接、目标连接和目标注册代次仍是当前的。间隙期间收到的源服世界数据包会被丢弃，绝不排队重放到目标。现有 Forge 协商继续放行控制流量，并在其世界边界就绪前拒绝玩法流量。
 
-## Identity and lifetime
+## 标识与生命周期
 
-`TransferContext` is an immutable snapshot containing a unique transfer ID, exact player/frontend connection identity, source and destination server snapshots, catalog registration generations, authenticated backend instance epochs (zero for static backends without an instance binding), and a total deadline. It exposes no channels, buffers, mutable sessions, database concepts or player inventory logic.
+`TransferContext` 是不可变快照，包含唯一的转服 ID、精确的玩家/前端连接身份、源服和目标服务器快照、目录注册代次、经认证的后端实例 epoch（没有实例绑定的静态后端为零）以及总期限。它不暴露通道、缓冲区、可变会话、数据库概念或玩家背包逻辑。
 
-The listener cohort is selected once per attempt. Every required source-release callback remains bound to its original registration and plugin owner. Revocation, plugin shutdown, null results, exception, timeout or overload fails the transfer; it cannot silently shrink the required cohort. Late completions cannot resume a closed or replaced attempt.
+监听器集合在每次尝试中只选定一次。每个必需的源服释放回调始终绑定到其原始注册和插件所有者。撤销、插件关闭、null 结果、异常、超时或过载都会使转服失败；它不能悄悄缩小必需的集合。迟到的完成不能恢复已关闭或已被替换的尝试。
 
-Callbacks use a separate bounded dispatcher: two workers, 128 queued tasks and at most 128 pending events. Callback stages do not block I/O threads or globally serialize unrelated transfers. No subscribers means no transfer event, event future or event timer allocation. The dispatcher is created only when subscriptions exist. A slow plugin can cause its transfer to fail; it cannot create an unbounded queue.
+回调使用单独的有界分派器：两个工作线程、128 个排队任务、至多 128 个未决事件。回调 stage 不阻塞 I/O 线程，也不全局串行化互不相关的转服。没有订阅者时不分配转服事件、事件 future 或事件计时器；分派器仅在存在订阅时创建。慢插件可能导致其转服失败，但不能造成无界队列。
 
-## Deadlines and failures
+## 期限与失败
 
-Preparation and source-release confirmation each use the configured event deadline, including queue wait. Destination login gets its own 15-second budget after login starts for coordinated transfers. TCP connection retains its five-second budget. The existing cutover and Forge negotiation budgets remain. A total deadline bounds the entire coordinated attempt.
+准备和源服释放确认各自使用配置的事件期限，包括排队等待。对协调转服，目标登录开始后另有 15 秒预算。TCP 连接保留其 5 秒预算。现有的切换和 Forge 协商预算不变。总期限约束整个协调尝试。
 
-| Failure point | Outcome |
+| 失败点 | 结果 |
 | --- | --- |
-| TCP failure, preparation denial/error/timeout | Close candidate; source continues |
-| Pause failure or partial detach | Preserve source only if its relay can be safely restored; otherwise disconnect |
-| Source released, callback error/timeout or destination failure | Disconnect frontend; never fall back to the closed source |
-| Destination registration changed | Fail this attempt; never authenticate against a replacement instance implicitly |
-| Frontend disconnect or proxy shutdown | Close candidate and release local resources; ignore late results |
+| TCP 失败，准备拒绝/出错/超时 | 关闭候选；源服继续 |
+| 暂停失败或部分摘除 | 仅当源服 relay 可安全恢复时保留源服；否则断开 |
+| 源服已释放后回调出错/超时或目标失败 | 断开前端；绝不回退到已关闭的源服 |
+| 目标注册已变化 | 本次尝试失败；绝不隐式向替换实例认证 |
+| 前端断线或代理关闭 | 关闭候选并释放本地资源；忽略迟到结果 |
 
-This opt-in sequence sacrifices the normal destination-login-before-source-close fallback window. TCP reachability does not prove whitelist, authentication, mod negotiation or gameplay readiness. `TransferResult.NETWORK_READY` retains its existing meaning; it does not certify persistence by itself.
+这一可选流程放弃了常规的“先登录目标、再关闭源服”的回退窗口。TCP 可达不证明白名单、认证、mod 协商或玩法就绪。`TransferResult.NETWORK_READY` 保持原有含义，其本身不证明持久化。
 
-## Acceptance
+## 验收
 
-Correctness tests must establish source close before confirmation, confirmation before destination login, denial preserving the source, failure after release disconnecting, old source EOF not closing the waiting frontend, cancellation and stale callbacks, exact backend generation checks, and no old-world gameplay replay. Existing vanilla and Forge transfers must remain covered.
+正确性测试必须证明：确认前源服已关闭；目标登录前已确认；拒绝保留源服；释放后失败会断开；旧源服 EOF 不会关闭等待中的前端；取消与过期回调；精确的后端代次检查；不重放旧世界玩法。现有原版和 Forge 转服必须继续覆盖。
 
-Measure ordinary PLAY forwarding against main `876de1a056a79b807a03f3877cbe6414b60e86dc`, with initial and post-transfer sessions, windows 1/16 and five repetitions. Also measure transfer throughput and p50/p99 latency at 0/1/4 participants and 1/16/64 concurrent players. Record environment, errors, allocation and retained buffering where measurable. An initial 3% default-path regression budget is a decision threshold, not a result; if measurement noise exceeds it, classify the comparison as inconclusive and improve the experiment. Passing functional tests does not establish performance superiority.
+以 main `876de1a056a79b807a03f3877cbe6414b60e86dc` 为基准测量普通 PLAY 转发，包括初始会话和转服后会话、窗口 1/16、重复五次。同时测量 0/1/4 个参与者、1/16/64 个并发玩家下的转服吞吐量和 p50/p99 延迟。在可测时记录环境、错误、分配和滞留缓冲。初始 3% 默认路径回退预算是决策阈值而非结果；若测量噪声超过该阈值，应将比较归为无定论并改进实验。功能测试通过不能证明性能更优。
 
-PlayerDataSQL integration is a separate plugin concern. These events do not implement SQL ownership, backend final-save confirmation, authoritative data loading, mod synchronization or crash recovery.
+PlayerDataSQL 集成是单独的插件问题。这些事件不实现 SQL 所有权、后端最终存档确认、权威数据加载、mod 同步或崩溃恢复。

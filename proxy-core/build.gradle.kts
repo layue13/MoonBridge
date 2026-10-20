@@ -91,6 +91,17 @@ val compilePermissionAcceptance = tasks.register<JavaCompile>("compilePermission
     options.release.set(25)
 }
 
+// The benchmarks in benchmarks/ declare proxy-core packages to reach package-private classes and are
+// normally compiled by their PowerShell runners. Compiling them here keeps them building with main.
+val compileBenchmarks = tasks.register<JavaCompile>("compileBenchmarks") {
+    group = "verification"
+    description = "Compiles the benchmarks in benchmarks/ against proxy-core."
+    source(rootProject.fileTree("benchmarks") { include("*.java") })
+    classpath = sourceSets.main.get().runtimeClasspath
+    destinationDirectory.set(layout.buildDirectory.dir("classes/benchmarks"))
+    options.release.set(25)
+}
+
 val permissionAcceptance = tasks.register<JavaExec>("permissionAcceptance") {
     group = "verification"
     description = "Loads the packaged LuckPerms plugin and verifies native permissions, commands and H2 persistence."
@@ -106,6 +117,7 @@ tasks.named("check") {
     dependsOn(installedDistHelpSmokeTest)
     dependsOn(installedDistVersionSmokeTest)
     dependsOn(permissionAcceptance)
+    dependsOn(compileBenchmarks)
 }
 
 application {

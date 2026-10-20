@@ -18,7 +18,7 @@ bash ./gradlew :proxy-core:installDist                # runnable distribution in
 
 The slow tests are the session integration tests (`ProxySessionListenerTest`, `SessionTransferTest`, `InitialRoutingTest`, `SourceReleaseTransferTest`); iterate with `--tests` and run `check` once before pushing.
 
-`.gitea/workflows/ci.yml` runs `check` and publishes Maven modules only on pushes to `main`. A GitHub PR has no CI, so a local `check` is the only verification before merge.
+`.github/workflows/verify.yml` runs `check` on every pull request; `.github/workflows/ci.yml` runs `check :proxy-core:distZip` and publishes the Maven modules on pushes to `main`. Run `check` locally before pushing anyway: it is ~7 minutes and a red PR costs a round trip.
 
 ## Modules
 
