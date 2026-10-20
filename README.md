@@ -6,6 +6,7 @@
 
 - [文档索引](docs/README.md)：按运维、插件开发和架构主题浏览。
 - [运行配置](docs/operations.md)：认证模式、监听范围、入口后端和部署约束。
+- [WebSocket 接入](docs/websocket.md)：与 TCP 并存的 WebSocket 监听，经 CDN 接入，配套 1.7.10 客户端 mod（[`client-mod/`](client-mod/README.md)）。
 - [初次登录路由](docs/initial-routing.md)：候选顺序、插件接管、期限和安全重试边界。
 - [插件开发](docs/plugins.md)：Proxy API、事件、命令、转服和初始选服。
 - [玩家权限与 LuckPerms](docs/permissions.md)：统一权限接口、命令鉴权和原生平台插件。

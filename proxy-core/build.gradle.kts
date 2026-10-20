@@ -15,6 +15,7 @@ dependencies {
     implementation(libs.findLibrary("netty-codec").get())
     implementation(libs.findLibrary("netty-transport").get())
     implementation(libs.findLibrary("netty-handler").get())
+    implementation(libs.findLibrary("netty-codec-http").get())
     implementation(libs.findLibrary("netty-resolver-dns").get())
     // Native transports are optional at runtime: NetworkTransport falls back to NIO when the
     // platform library is missing or cannot load (Windows, other CPU architectures, musl).
@@ -33,6 +34,7 @@ dependencies {
     runtimeOnly(libs.findLibrary("logback-classic").get())
     testImplementation(project(":backend-channel-client"))
     testImplementation(libs.findLibrary("logback-classic").get())
+    testImplementation(libs.findLibrary("netty-pkitesting").get())
 }
 
 val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {

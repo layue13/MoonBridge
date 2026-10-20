@@ -19,6 +19,7 @@
 | [初次登录路由](initial-routing.md) | 显式入口、插件策略、超时、重试安全边界与验收契约 |
 | [玩家操作与部署完善设计](player-operations.md) | 消息、主动断开、服务器列表配置与验收边界 |
 | [运行配置](operations.md) | 认证、接入限制、超时、启动和部署边界 |
+| [WebSocket 接入](websocket.md) | 与 TCP 并存的 WebSocket 玩家监听、CDN 部署、真实 IP 与客户端 mod |
 | [后端 Channel 消息服务](backend-channel-design.md) | 共享宿主、跨后端路由、消息身份与交付语义 |
 | [Channel 消息设计契约](channel-messaging-contract.md) | 从参与者、寻址、响应与失败语义推导 API 和验收条件 |
 | [验证方法](testing.md) | 自动化测试、烟测、真实客户端与合成性能测量 |

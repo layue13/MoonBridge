@@ -1,5 +1,7 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.channel.SessionChannels;
+import dev.moonbridge.core.websocket.WebSocketFrontend;
 import dev.moonbridge.core.auth.AuthenticatedEncryption;
 import dev.moonbridge.core.auth.MinecraftCipherDecoder;
 import dev.moonbridge.core.auth.MinecraftCipherEncoder;
@@ -18,7 +20,6 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
@@ -69,11 +70,17 @@ final class FrontendLogin {
     void guardPendingLogin() {
         ChannelPipeline pipeline = frontend.pipeline();
         if (pipeline.get(LOGIN_WAIT_GUARD) == null) {
-            pipeline.addFirst(LOGIN_WAIT_GUARD, new FrameTransformHandler(closeSession) {
+            var guard = new FrameTransformHandler(closeSession) {
                 @Override protected ByteBuf transform(ChannelHandlerContext ctx, ByteBuf frame) {
                     throw new IllegalStateException("client sent data while login was pending");
                 }
-            });
+            };
+            // Over WebSocket the guard must see the unwrapped byte stream, not TLS records or WebSocket frames.
+            if (pipeline.get(WebSocketFrontend.FRAME_ADAPTER) != null) {
+                pipeline.addAfter(WebSocketFrontend.FRAME_ADAPTER, LOGIN_WAIT_GUARD, guard);
+            } else {
+                pipeline.addFirst(LOGIN_WAIT_GUARD, guard);
+            }
         }
         frontend.config().setAutoRead(true);
     }
@@ -164,7 +171,7 @@ final class FrontendLogin {
             Arrays.fill(secret, (byte) 0);
         }
         guardPendingLogin();
-        String clientIp = ((InetSocketAddress) frontend.remoteAddress()).getAddress().getHostAddress();
+        String clientIp = SessionChannels.clientAddress(frontend).getAddress().getHostAddress();
         verification = owner.verifier().verify(loginStart.username(), serverHash, clientIp).toCompletableFuture();
         verification.whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
             verification = null;

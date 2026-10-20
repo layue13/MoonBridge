@@ -12,6 +12,8 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 netty-transport = { module = "io.netty:netty-transport", version.ref = "netty" }
 netty-codec = { module = "io.netty:netty-codec", version.ref = "netty" }
 netty-handler = { module = "io.netty:netty-handler", version.ref = "netty" }
+netty-codec-http = { module = "io.netty:netty-codec-http", version.ref = "netty" }
+netty-pkitesting = { module = "io.netty:netty-pkitesting", version.ref = "netty" }
 netty-resolver-dns = { module = "io.netty:netty-resolver-dns", version.ref = "netty" }
 netty-transport-classes-epoll = { module = "io.netty:netty-transport-classes-epoll", version.ref = "netty" }
 netty-transport-native-epoll = { module = "io.netty:netty-transport-native-epoll", version.ref = "netty" }

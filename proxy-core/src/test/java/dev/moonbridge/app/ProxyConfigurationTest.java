@@ -336,6 +336,48 @@ final class ProxyConfigurationTest {
         }
     }
 
+    @Test
+    void websocketListenerIsOptionalAndValidated() throws Exception {
+        var config = Files.createTempFile("moonbridge-websocket", ".yml");
+        try {
+            String base = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\n";
+            Files.writeString(config, base);
+            assertNull(new ProxyConfigurationLoader().load(config).websocket());
+            assertNull(new ProxyConfigurationLoader().loadWebSocket(new ProxyConfigurationLoader().load(config), config));
+
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  path: \"/mc\"\n"
+                    + "  trustedProxies: [\"127.0.0.1\", \"173.245.48.0/20\"]\n  realIpHeader: CF-Connecting-IP\n");
+            var websocket = new ProxyConfigurationLoader().load(config).websocket();
+            assertEquals("/mc", websocket.path());
+            assertEquals(10, websocket.handshakeTimeoutSeconds());
+            assertEquals(8080, websocket.listenAddress().getPort());
+            var settings = new ProxyConfigurationLoader().loadWebSocket(new ProxyConfigurationLoader().load(config), config);
+            assertEquals("/mc", settings.path());
+            assertNull(settings.tls());
+
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n");
+            assertEquals("/", new ProxyConfigurationLoader().load(config).websocket().path());
+            assertEquals("X-Forwarded-For", new ProxyConfigurationLoader().load(config).websocket().realIpHeader());
+
+            // OFFLINE keeps the loopback-only rule for the second listener too.
+            Files.writeString(config, base + "websocket:\n  listen: \"0.0.0.0:8080\"\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  path: \"mc\"\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  unknown: 1\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> new ProxyConfigurationLoader().load(config));
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  trustedProxies: [\"10.0.0.0/40\"]\n");
+            assertThrows(IllegalArgumentException.class, () -> new ProxyConfigurationLoader()
+                    .loadWebSocket(new ProxyConfigurationLoader().load(config), config));
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n"
+                    + "  tls: { certificateChain: missing.pem, privateKey: missing-key.pem }\n");
+            assertThrows(java.io.IOException.class, () -> new ProxyConfigurationLoader()
+                    .loadWebSocket(new ProxyConfigurationLoader().load(config), config));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
     private static void writePng(Path destination, int width, int height) throws Exception {
         var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         ImageIO.write(image, "PNG", destination.toFile());

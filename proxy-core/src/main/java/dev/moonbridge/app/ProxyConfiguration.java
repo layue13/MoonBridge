@@ -12,7 +12,7 @@ import java.util.Set;
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                                  Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
                                  Status status, BackendChannel backendChannel, InitialRouting initialRouting,
-                                 Transport transport) {
+                                 Transport transport, WebSocket websocket) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     /** Network I/O transport. AUTO picks epoll on Linux, kqueue on macOS and NIO elsewhere. */
@@ -30,6 +30,10 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                 && !isLiteralLoopback(listen)) {
             throw new IllegalArgumentException("OFFLINE requires a literal loopback listen IP or allowOfflinePublicAccess: true");
         }
+        if (websocket != null && authentication == Authentication.OFFLINE && !allowOfflinePublicAccess
+                && !isLiteralLoopback(websocket.listen())) {
+            throw new IllegalArgumentException("OFFLINE requires a literal loopback websocket.listen IP or allowOfflinePublicAccess: true");
+        }
         backends = backends == null ? List.of() : List.copyOf(backends);
         plugins = plugins == null ? new Plugins("plugins", Map.of(), null) : plugins;
         initialRouting = initialRouting == null ? new InitialRouting(List.of(), null) : initialRouting;
@@ -45,6 +49,14 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                 throw new IllegalArgumentException("duplicate backend: " + backend.name());
             }
         }
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                              Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                              Status status, BackendChannel backendChannel, InitialRouting initialRouting,
+                              Transport transport) {
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
+                backendChannel, initialRouting, transport, null);
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends) {
@@ -93,6 +105,41 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             timeoutSeconds = timeoutSeconds == null ? 15 : timeoutSeconds;
             if (timeoutSeconds < 1 || timeoutSeconds > 120) {
                 throw new IllegalArgumentException("initialRouting.timeoutSeconds must be between 1 and 120");
+            }
+        }
+    }
+
+    /**
+     * Optional second player listener that accepts Minecraft over WebSocket, for players behind a CDN.
+     * The TCP {@code listen} keeps working; both share {@code maxConnections}.
+     */
+    public record WebSocket(String listen, String path, Tls tls, List<String> trustedProxies, String realIpHeader,
+                            Integer handshakeTimeoutSeconds) {
+        public WebSocket {
+            if (listen == null || listen.isBlank()) throw new IllegalArgumentException("websocket.listen is required");
+            if (parseAddress(listen).getPort() == 0) {
+                throw new IllegalArgumentException("websocket.listen port must be positive");
+            }
+            path = path == null ? "/" : path;
+            if (!path.startsWith("/") || path.contains("?") || path.contains("#") || path.chars().anyMatch(c -> c <= ' ')) {
+                throw new IllegalArgumentException("websocket.path must be an absolute path without query or spaces");
+            }
+            trustedProxies = trustedProxies == null ? List.of() : List.copyOf(trustedProxies);
+            realIpHeader = realIpHeader == null ? "X-Forwarded-For" : realIpHeader;
+            handshakeTimeoutSeconds = handshakeTimeoutSeconds == null ? 10 : handshakeTimeoutSeconds;
+            if (handshakeTimeoutSeconds < 1 || handshakeTimeoutSeconds > 60) {
+                throw new IllegalArgumentException("websocket.handshakeTimeoutSeconds must be between 1 and 60");
+            }
+        }
+
+        public InetSocketAddress listenAddress() { return parseAddress(listen); }
+    }
+
+    /** PEM certificate chain and unencrypted PKCS#8 private key, relative to the configuration file. */
+    public record Tls(String certificateChain, String privateKey) {
+        public Tls {
+            if (certificateChain == null || certificateChain.isBlank() || privateKey == null || privateKey.isBlank()) {
+                throw new IllegalArgumentException("websocket.tls requires certificateChain and privateKey");
             }
         }
     }

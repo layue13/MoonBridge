@@ -2,6 +2,15 @@ listen: "127.0.0.1:25577"
 authentication: OFFLINE
 maxConnections: 4096
 # transport: AUTO # AUTO picks epoll on Linux, kqueue on macOS, NIO elsewhere; NIO, EPOLL or KQUEUE force one.
+# Optional: also accept players over WebSocket (e.g. behind a CDN) next to the TCP listener above.
+# Clients need the MoonBridge WebSocket client mod and connect to ws://host:port/path or wss://host/path.
+# websocket:
+#   listen: "127.0.0.1:8080"
+#   path: "/mc"
+#   # tls: { certificateChain: "certs/fullchain.pem", privateKey: "certs/privkey.pem" } # PEM, PKCS#8 key; omit when the CDN or a reverse proxy terminates TLS
+#   trustedProxies: ["127.0.0.1"] # only these peers may supply the player IP header; add your CDN's published ranges
+#   realIpHeader: "X-Forwarded-For" # or CF-Connecting-IP / X-Real-IP
+#   handshakeTimeoutSeconds: 10
 status:
   motd: "MoonBridge"
   maxPlayers: 100

@@ -1,6 +1,8 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.core.session.channel.SessionFrameEncoder;
+import dev.moonbridge.core.websocket.WebSocketFrontend;
 
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.event.Event;
@@ -97,6 +99,9 @@ public final class ProxySessionListener implements Players {
     private int maxConnections = 4096;
     private ServerListStatus serverListStatus = ServerListStatus.defaultStatus();
     private volatile Channel listener;
+    private SocketAddress webSocketBindAddress;
+    private WebSocketFrontend.Settings webSocketSettings;
+    private volatile Channel webSocketListener;
     private volatile boolean closed;
     private boolean started;
     private volatile CompletableFuture<Void> shutdown;
@@ -335,6 +340,21 @@ public final class ProxySessionListener implements Players {
     }
     Duration eventTimeout() { return eventTimeout; }
 
+    /**
+     * Adds a second player listener that accepts Minecraft over WebSocket, next to the TCP listener.
+     * Both share the connection limit, the session index and every later stage of the session.
+     */
+    public synchronized void setWebSocket(SocketAddress bindAddress, WebSocketFrontend.Settings settings) {
+        if (started || closed || webSocketSettings != null) {
+            throw new IllegalStateException("WebSocket listener must be configured once before listener start");
+        }
+        webSocketBindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
+        webSocketSettings = Objects.requireNonNull(settings, "settings");
+    }
+
+    /** The bound WebSocket listener once start() has completed, or null when none is configured. */
+    public Channel webSocketChannel() { return webSocketListener; }
+
     public synchronized CompletionStage<Channel> start() {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("listener is closed"));
         if (started) return CompletableFuture.failedFuture(new IllegalStateException("listener already started"));
@@ -348,27 +368,45 @@ public final class ProxySessionListener implements Players {
                     @Override protected void initChannel(SocketChannel channel) {
                         Session session = registerSession(channel);
                         if (session == null) return;
-                        if (hasSubscribers(ConnectionAdmissionEvent.class)) {
-                            channel.pipeline().addLast("connection-admission", new ConnectionGate(events,
-                                    eventTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
-                        }
-                        channel.pipeline().addLast("minecraft-frame-decoder", new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
-                                dev.moonbridge.core.protocol.ProtocolProfile.minecraft1710(), true,
-                                dev.moonbridge.core.protocol.ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
-                        channel.pipeline().addLast("minecraft-frame-encoder", new SessionFrameEncoder());
-                        channel.pipeline().addLast("initial-session", session);
+                        installMinecraft(channel, session);
                     }
                 });
+        ChannelFuture tcpBind = bootstrap.bind(bindAddress);
+        listener = tcpBind.channel();
+        CompletableFuture<Channel> tcp = boundChannel(tcpBind);
+        if (webSocketSettings == null) return tcp;
+        WebSocketFrontend.Settings settings = webSocketSettings;
+        ServerBootstrap webSocket = new ServerBootstrap()
+                .group(boss, workers)
+                .channel(transport.serverChannel())
+                .childOption(io.netty.channel.ChannelOption.TCP_NODELAY, true)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override protected void initChannel(SocketChannel channel) {
+                        // The slot is taken at accept so pending upgrades count against maxConnections;
+                        // closePair returns it if the connection ends before the session is installed.
+                        Session session = registerSession(channel);
+                        if (session == null) return;
+                        channel.closeFuture().addListener(ignored -> session.closePair());
+                        WebSocketFrontend.install(channel, settings, (upgraded, address) -> {
+                            SessionChannels.setClientAddress(upgraded, address);
+                            installMinecraft(upgraded, session);
+                        });
+                    }
+                });
+        ChannelFuture webSocketBind = webSocket.bind(webSocketBindAddress);
+        webSocketListener = webSocketBind.channel();
+        return tcp.thenCombine(boundChannel(webSocketBind), (tcpChannel, webSocketChannel) -> tcpChannel);
+    }
+
+    private CompletableFuture<Channel> boundChannel(ChannelFuture bind) {
         CompletableFuture<Channel> result = new CompletableFuture<>();
-        ChannelFuture bind = bootstrap.bind(bindAddress);
-        listener = bind.channel();
         bind.addListener(future -> {
             if (future.isSuccess()) {
                 if (closed) {
                     bind.channel().close();
                     result.completeExceptionally(new IllegalStateException("listener closed during bind"));
                 } else {
-                    result.complete(listener);
+                    result.complete(bind.channel());
                 }
             } else {
                 result.completeExceptionally(future.cause());
@@ -378,8 +416,21 @@ public final class ProxySessionListener implements Players {
         return result;
     }
 
+    /** The Minecraft pipeline behind the transport, identical for TCP and upgraded WebSocket channels. */
+    private void installMinecraft(Channel channel, Session session) {
+        if (hasSubscribers(ConnectionAdmissionEvent.class)) {
+            channel.pipeline().addLast("connection-admission", new ConnectionGate(events,
+                    eventTimeout.plusSeconds(1), session::connectionAccepted, session::closePair));
+        }
+        channel.pipeline().addLast("minecraft-frame-decoder", new dev.moonbridge.core.protocol.MinecraftFrameDecoder(
+                dev.moonbridge.core.protocol.ProtocolProfile.minecraft1710(), true,
+                dev.moonbridge.core.protocol.ProtocolProfile.MAX_LOGIN_FRAME_BYTES));
+        channel.pipeline().addLast("minecraft-frame-encoder", new SessionFrameEncoder());
+        channel.pipeline().addLast("initial-session", session);
+    }
+
     /** Serializes admission with close() so every accepted session is either closed or rejected. */
-    private synchronized Session registerSession(SocketChannel channel) {
+    private synchronized Session registerSession(Channel channel) {
         if (closed || connectionCount.get() >= maxConnections) {
             channel.close();
             return null;
@@ -438,6 +489,8 @@ public final class ProxySessionListener implements Players {
         sessionBindingSecrets = Map.of();
         Channel current = listener;
         if (current != null) current.close();
+        Channel webSocket = webSocketListener;
+        if (webSocket != null) webSocket.close();
         allSessions.forEach(Session::closePair);
         backendResolver.close();
         shutdown = new CompletableFuture<>();

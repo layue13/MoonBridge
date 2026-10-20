@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import dev.moonbridge.core.protocol.ServerListStatus;
+import dev.moonbridge.core.websocket.ClientAddressPolicy;
+import dev.moonbridge.core.websocket.WebSocketFrontend;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 
 import javax.imageio.ImageIO;
 import java.io.ByteArrayInputStream;
@@ -13,6 +17,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Base64;
 
 /** Strict YAML loader; unknown settings are errors during this redesign. */
@@ -31,6 +36,28 @@ public final class ProxyConfigurationLoader {
         var status = configuration.status();
         String favicon = status.icon() == null ? null : loadFavicon(configPath, status.icon());
         return new ServerListStatus(status.motd(), status.maxPlayers(), favicon);
+    }
+
+    /** Builds the WebSocket listener settings, loading TLS material relative to the YAML file; null if disabled. */
+    public WebSocketFrontend.Settings loadWebSocket(ProxyConfiguration configuration, Path configPath) throws IOException {
+        var websocket = configuration.websocket();
+        if (websocket == null) return null;
+        SslContext tls = null;
+        if (websocket.tls() != null) {
+            Path directory = configPath.toAbsolutePath().normalize().getParent();
+            if (directory == null) throw new IOException("configuration file has no parent directory");
+            Path chain = directory.resolve(websocket.tls().certificateChain()).normalize();
+            Path key = directory.resolve(websocket.tls().privateKey()).normalize();
+            try {
+                tls = SslContextBuilder.forServer(chain.toFile(), key.toFile()).build();
+            } catch (IOException | IllegalArgumentException failure) {
+                throw new IOException("could not load websocket.tls (PEM chain and unencrypted PKCS#8 key): "
+                        + failure.getMessage(), failure);
+            }
+        }
+        return new WebSocketFrontend.Settings(websocket.path(), tls,
+                new ClientAddressPolicy(websocket.trustedProxies(), websocket.realIpHeader()),
+                Duration.ofSeconds(websocket.handshakeTimeoutSeconds()));
     }
 
     private static String loadFavicon(Path configPath, String configuredPath) throws IOException {

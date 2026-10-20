@@ -1,5 +1,6 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.api.AccessDecision;
 import dev.moonbridge.api.event.ConnectionAdmissionEvent;
 import dev.moonbridge.core.event.EventDispatcher;
@@ -10,7 +11,6 @@ import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -38,10 +38,21 @@ final class ConnectionGate extends ChannelInboundHandlerAdapter {
         this.closeSession = closeSession;
     }
 
+    /** A WebSocket frontend adds the gate after the upgrade, when the channel is already active. */
+    @Override public void handlerAdded(ChannelHandlerContext ctx) {
+        if (ctx.channel().isActive()) begin(ctx);
+    }
+
     @Override public void channelActive(ChannelHandlerContext ctx) {
+        begin(ctx);
+        ctx.fireChannelActive();
+    }
+
+    private void begin(ChannelHandlerContext ctx) {
+        if (request != null || finished) return;
         try {
             deadline = ctx.executor().schedule(this::deny, timeout.toNanos(), TimeUnit.NANOSECONDS);
-            request = Objects.requireNonNull(events.dispatch(new ConnectionAdmissionEvent((InetSocketAddress) ctx.channel().remoteAddress())),
+            request = Objects.requireNonNull(events.dispatch(new ConnectionAdmissionEvent(SessionChannels.clientAddress(ctx.channel()))),
                     "connection check stage").toCompletableFuture();
             request.whenComplete((decision, failure) -> {
                 try {
@@ -79,7 +90,6 @@ final class ConnectionGate extends ChannelInboundHandlerAdapter {
             LOGGER.debug("Could not start connection access check", failure);
             deny();
         }
-        ctx.fireChannelActive();
     }
 
     @Override public void channelRead(ChannelHandlerContext ctx, Object message) {

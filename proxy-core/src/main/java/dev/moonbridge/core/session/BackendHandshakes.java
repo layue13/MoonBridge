@@ -1,5 +1,6 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.core.auth.VerifiedProfile;
 import dev.moonbridge.core.forwarding.BungeeLegacyForwarding;
@@ -9,7 +10,6 @@ import dev.moonbridge.messaging.session.ForwardedSessionProof;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 
-import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +46,6 @@ final class BackendHandshakes {
                     backendName, backendEpoch, UUID.randomUUID(), expiresAt, secret);
         }
         return BungeeLegacyForwarding.encode(frontend.alloc(), handshake,
-                (InetSocketAddress) frontend.remoteAddress(), profile, proof);
+                SessionChannels.clientAddress(frontend), profile, proof);
     }
 }
