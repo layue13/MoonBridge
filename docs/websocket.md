@@ -32,7 +32,7 @@ websocket:
 | --- | --- |
 | `listen` | 必填，`host:port`，端口须大于 0。`OFFLINE` 模式下与 TCP `listen` 相同，必须是字面量回环 IP，除非设置 `allowOfflinePublicAccess: true`。 |
 | `path` | 升级请求的路径，须以 `/` 开头，不含查询串和空白。 |
-| `tls` | 可选。配置后监听端直接提供 `wss://`；PEM 证书链与**未加密的 PKCS#8** 私钥，路径相对于配置文件。PKCS#1 私钥（`BEGIN RSA PRIVATE KEY`）可用 `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem` 转换。不配置时为明文 `ws://`，由 CDN 或反向代理终结 TLS。 |
+| `tls` | 可选。客户端 mod 只用 TLS 1.2（Minecraft 自带的 Netty 无法完成 TLS 1.3 握手），因此任何 TLS 终端都不能只开放 TLS 1.3。配置后监听端直接提供 `wss://`；PEM 证书链与**未加密的 PKCS#8** 私钥，路径相对于配置文件。PKCS#1 私钥（`BEGIN RSA PRIVATE KEY`）可用 `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem` 转换。不配置时为明文 `ws://`，由 CDN 或反向代理终结 TLS。 |
 | `trustedProxies` | IP 或 CIDR 列表。仅当 TCP 对端属于该列表时才读取真实 IP 头；为空时始终使用 TCP 对端地址。 |
 | `realIpHeader` | 真实 IP 头名称，大小写不敏感。`X-Forwarded-For` 从右往左取第一个不属于 `trustedProxies` 的地址（全部可信时取最左项）；其他头必须恰好出现一次且是 IP 字面量。可信来源发送了格式错误的头时拒绝连接，不会回退。 |
 | `handshakeTimeoutSeconds` | 从建连到升级完成的期限。 |
@@ -103,5 +103,7 @@ Cloudflare 侧：
 - 错误路径返回 404、文本帧关闭连接；
 - 未升级连接占用并归还 `maxConnections` 名额，以及升级期限；
 - 由配置加载 PEM 证书后提供 `wss://`。
+
+另用客户端 mod 自己的管线（Netty 4.0.10，Java 8 与 21）对已安装的 MoonBridge 发行包实测过 `ws://` 与 `wss://` 的状态查询和登录阶段断开消息，以及错误路径的 404。
 
 没有覆盖：真实 CDN 链路、真实客户端游戏内体验、经 WebSocket 的延迟与吞吐。

@@ -66,6 +66,9 @@ public final class WebSocketPipeline {
         SSLEngine engine = tls.createSSLEngine(address.host(), address.port());
         engine.setUseClientMode(true);
         SSLParameters params = engine.getSSLParameters();
+        // Minecraft's Netty 4.0.10 SslHandler predates TLS 1.3 and never completes a TLS 1.3 handshake
+        // (JDK 8u261+ offers it by default), so offer TLS 1.2 only; CDNs and the proxy all accept it.
+        params.setProtocols(new String[] { "TLSv1.2" });
         params.setEndpointIdentificationAlgorithm("HTTPS");
         if (!address.isIpLiteral()) {
             params.setServerNames(Collections.singletonList(new SNIHostName(address.host())));

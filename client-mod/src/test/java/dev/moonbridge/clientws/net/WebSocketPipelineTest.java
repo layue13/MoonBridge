@@ -402,6 +402,8 @@ class WebSocketPipelineTest {
                 .getServerNames());
         assertEquals("mc.example.com", engine.getPeerHost());
         assertEquals(443, engine.getPeerPort());
+        // Netty 4.0.10's SslHandler hangs in a TLS 1.3 handshake, so TLS 1.3 must never be offered.
+        assertEquals(Collections.singletonList("TLSv1.2"), Arrays.asList(engine.getEnabledProtocols()));
         ch.close();
 
         SSLEngine literal = WebSocketPipeline
