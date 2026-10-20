@@ -1,0 +1,10 @@
+// Plain JUnit 5 tests for the Minecraft-free networking code (dev.moonbridge.clientws.net).
+tasks.named("test", Test) {
+    useJUnitPlatform()
+    // Netty 4.0.10 only logs leaks; paranoid mode makes every leaked buffer show up in the test output.
+    systemProperty "io.netty.leakDetectionLevel", "paranoid"
+    testLogging {
+        events "failed"
+        exceptionFormat "full"
+    }
+}
