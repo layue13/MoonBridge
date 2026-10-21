@@ -4,13 +4,13 @@ MoonBridge 当前区分本地开发版本、CI 发布的不可变开发构件和
 
 ## CI 发布流程
 
-`.gitea/workflows/ci.yml` 在推送 `main` 或手动触发时运行。工作流以 CI run ID、attempt 和提交的前 12 位 SHA 生成版本 `0.1.0-dev.<run-id>.<attempt>.<commit>`，然后按顺序运行：
+`.github/workflows/ci.yml` 在推送 `main` 或手动触发时运行。工作流以 CI run ID、attempt 和提交的前 12 位 SHA 生成版本 `0.1.0-dev.<run-id>.<attempt>.<commit>`，然后按顺序运行：
 
 1. 使用 JDK 25 运行 `gradlew check :proxy-core:distZip`。
 2. 将 JAR 和发行 ZIP 上传为名为 `moonbridge-development` 的 CI 工件，保留 30 天。
 3. 执行 `gradlew publish`，发布七个 Maven 模块。
 
-Maven 发布需要 Gitea Actions secrets `MAVEN_USER` 和 `MAVEN_PASSWORD`。验证构建和发行 ZIP 的步骤先运行；凭据缺失会使发布步骤失败。CI 成功状态是发布结果的依据；CI 工件下载和 Maven 包仓库是不同交付物。工作流不创建 Git Release，也不表示已有稳定版本。
+Maven 发布需要 CI secrets `MAVEN_USER` 和 `MAVEN_PASSWORD`。验证构建和发行 ZIP 的步骤先运行；凭据缺失会使发布步骤失败。CI 成功状态是发布结果的依据；CI 工件下载和 Maven 包仓库是不同交付物。工作流不创建 Git Release，也不表示已有稳定版本。
 
 本地 Gradle 默认版本为 `0.1.0-SNAPSHOT`。如需本地构建另一个版本，可在 Gradle 命令中传入 `-PreleaseVersion=<version>`；不要将本地 SNAPSHOT 当作不可变的 Maven 发布版本。
 

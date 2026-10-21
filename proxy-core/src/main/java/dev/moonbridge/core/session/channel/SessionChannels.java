@@ -10,6 +10,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.resolver.AddressResolverGroup;
+import io.netty.util.AttributeKey;
 import io.netty.util.NetUtil;
 
 import java.net.InetSocketAddress;
@@ -22,7 +23,21 @@ public final class SessionChannels {
     static final String ENCRYPTED_FRAME_DECODER = "encrypted-frame-decoder";
     static final String FRAME_ENCODER = "minecraft-frame-encoder";
 
+    private static final AttributeKey<InetSocketAddress> CLIENT_ADDRESS =
+            AttributeKey.valueOf(SessionChannels.class, "client-address");
+
     private SessionChannels() { }
+
+    /** Records the player address a front proxy reported, for a frontend that is not a direct TCP peer. */
+    public static void setClientAddress(Channel frontend, InetSocketAddress address) {
+        frontend.attr(CLIENT_ADDRESS).set(address);
+    }
+
+    /** The address that identifies the player: a trusted forwarded address if any, else the TCP peer. */
+    public static InetSocketAddress clientAddress(Channel frontend) {
+        InetSocketAddress forwarded = frontend.attr(CLIENT_ADDRESS).get();
+        return forwarded != null ? forwarded : (InetSocketAddress) frontend.remoteAddress();
+    }
 
     public static boolean isTcpAddress(URI address) {
         return "tcp".equalsIgnoreCase(address.getScheme()) && address.getHost() != null

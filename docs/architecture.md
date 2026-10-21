@@ -14,11 +14,13 @@
 
 `ProxySessionListener` 负责接入限额、监听器生命周期和 UUID 到当前会话的索引；每个 `Session` 持有该连接的前端/后端通道和协议状态。玩家身份由 UUID 与连接代次组成。插件查询使用不可变 `PlayerView`；异步工作返回时会核对当前连接身份，避免旧连接结果作用于重连后的同 UUID 玩家。在线列表来自活动会话，不另存一份可竞争的玩家状态。
 
+玩家可经 TCP `listen` 或可选的 WebSocket 监听接入。WebSocket 连接先完成（可选 TLS 与）HTTP 升级，在可信代理来源时记录真实 IP 头给出的地址，然后由 `WebSocketFrameAdapter` 把二进制消息还原为 TCP 字节流；之后的管线与 TCP 完全相同，见 [WebSocket 接入](websocket.md)。
+
 连接首先派发 `ConnectionAdmissionEvent`（如有订阅），再解析 Handshake/Login Start。在线模式完成加密与 `ONLINE_BUNGEE` 会话验证，离线模式生成离线身份；随后派发 `PlayerAdmissionEvent`（如有订阅）、执行异步初始选服，再连接后端并写入 Login Start。后端 Login Success 校验通过后发布在线玩家视图，并派发 `ServerConnectedEvent`，再向客户端提交登录成功并进入双向转发。此时初次 PLAY/Forge 握手可能尚未完成；转服还要等待该握手就绪。身份冲突、协议错误、登录阶段失败和断线会关闭本次连接并释放索引与资源。登录失败原因可以编码成客户端断开消息；网络关闭或帧处理错误则清理连接。曾发布的玩家关闭时恰好派发一次 `PlayerDisconnectedEvent`。
 
 ```mermaid
 flowchart LR
-    A[TCP 建连] --> B{ConnectionAdmissionEvent 决策}
+    A[TCP 建连或 WebSocket 升级] --> B{ConnectionAdmissionEvent 决策}
     B -->|允许| C[协议与身份验证]
     B -->|拒绝或失败| X[关闭连接]
     C --> D{PlayerAdmissionEvent 决策}
@@ -68,7 +70,8 @@ flowchart LR
 | `core.session` | `ProxySessionListener`（监听与会话索引）；`Session`（每个玩家连接一个，Netty handler 与生命周期）及其委托：`FrontendLogin`（握手、状态、加密、Mojang 验证）、`InitialRouter`（放置决策与首个后端拨号）、`ClientControl`（代发聊天与有序断开）、`BackendHandshakes` |
 | `core.session.transfer` | `TransferCoordinator` 转服状态机，经 `TransferHost` 接口读取会话状态，自己持有全部转服状态 |
 | `core.session.play` | PLAY 阶段逐帧 handler（Keep Alive、命令拦截、Tab 补全）与中继启动缓冲 |
-| `core.session.channel` | 后端拨号与 pipeline 查找辅助 |
+| `core.session.channel` | 后端拨号、pipeline 查找辅助与玩家地址（`clientAddress`） |
+| `core.websocket` | WebSocket 前端：升级、可信代理真实 IP（`ClientAddressPolicy`）、二进制消息与字节流互转；不依赖 `session` |
 | `core.relay` | `RawRelay` 帧转发热路径 |
 | `core.plugin` | `PluginHost` 生命周期，分出 `EventRouter`、`CommandService`、`PlacementService`、`PluginContextImpl` |
 | `core.control` | 后端控制通道：`BackendControlService` 接入，`LeaseRegistry`、`InboundRouter`、`BackendExchange`、`OutboundWriter` |

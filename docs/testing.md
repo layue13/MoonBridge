@@ -14,7 +14,7 @@ sh smoke/container-channel.sh
 
 `smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
 
-`.gitea/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew check :proxy-core:distZip`，再上传 CI 工件并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、七个坐标和发行 ZIP 见[发布与依赖版本](publishing.md)。
+`.github/workflows/verify.yml` 在每个 Pull Request 上运行 `gradlew check`。`.github/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew check :proxy-core:distZip`，再上传 CI 工件并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、七个坐标和发行 ZIP 见[发布与依赖版本](publishing.md)。
 
 `check` 包含 `permissionAcceptance`：使用发行包中的实际 LuckPerms JAR、隔离插件类加载器和临时 H2 数据库，验证原生命令、授权/拒绝/未设置、组继承、临时节点到期、后端上下文、连接代次隔离及关闭后重新打开数据库。输出位于 `proxy-core/build/permission-acceptance/run-*/`，成功标记为 `PERMISSION_ACCEPTANCE_PASS`。它使用 API 玩家探针，不连接真实 Minecraft 客户端，也不证明外部 SQL/Redis 联调成功；真实会话的权限准备和释放由 TCP 生命周期测试另行覆盖。
 
@@ -24,38 +24,12 @@ sh smoke/container-channel.sh
 
 安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](../smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](../smoke/results/2026-09-26-uranium-login-stalls.md)。
 
-## 玩家操作与服务器列表验证记录（2026-09-26）
+## 历史验证记录
 
-完成[玩家操作设计](player-operations.md)的首批实现后，运行 `./gradlew.bat check --offline` 通过。最终报告共 194 项测试（API 7、核心 174、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。
+带日期的逐轮验证结果放在 [`records/`](records/)，与 `smoke/results/`、`benchmarks/results/` 一样只证明各自注明的提交和环境：
 
-本轮新增或扩展的验证包括：完整连接身份校验；PLAY 消息与普通包连续转发；未就绪、连接不可写及 64 条未完成消息上限；消息排空后主动断开；重复断开与调用方取消；准入/选服等待期间的 LOGIN 断开；Login Success 写入未完成时的 PLAY 包顺序；断开写入失败或停滞时的有界清理；转服暂停期间断开的候选后端与索引释放。在线协议测试用实际 RSA/AES 链路核对加密消息与断开，身份验证器仍为注入实现。
-
-服务器列表测试核对默认/自定义 MOTD、展示人数与实时在线人数、非 BMP 字符、JSON 转义、完整响应长度、PNG 文件/尺寸/路径校验，以及经真实 TCP 管线的 STATUS 与 Ping/Pong。插件宿主关闭时先终止事件派发再撤销订阅，避免排队准入链跳过已撤销策略而返回允许。文档相对链接检查通过。
-
-本轮没有使用真实 Mojang 登录会话、目标整合包或生产负载；没有进行性能对比。远端 CI 的执行结果单独记录在 PR 中，本地通过不表示 Runner 或部署环境已验收。
-
-## 统一事件模型验证记录（2026-09-26）
-
-统一为 `Event<R>` / `EventListener<E,R>` 后运行 `./gradlew.bat check --offline`。最终报告共 178 项测试（API 7、核心 158、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。
-
-本轮覆盖统一订阅的类型推断、准入的允许/拒绝/空结果/异常/超时/过载、异步通知按监听器和事件顺序完成、通知超时后的队列推进、空通知 stage 的异常隔离，以及取消后停止监听器链、取消回调离开调用线程、宿主关闭后迟到 stage 的取消。既有合成 TCP 登录、身份验证顺序、转服提交/断线通知、命令与普通 PLAY 转发回归通过。文档相对链接检查通过。
-
-本轮没有运行目标整合包、真实 Mojang 在线服务或事件吞吐基准。测试中的在线身份验证器为注入实现；这些结果验证功能与并发边界，不能推出性能收益、零开销或生产容量。
-## 历史类型化事件验证记录（2026-09-26）
-
-以下结果针对当时的事件 API 与派发实现。运行 `./gradlew.bat check --offline` 的报告共 174 项测试（API 7、核心 154、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本和配置校验通过。这些数字只对应当时的实现；当前统一 `Event<R>` / `EventListener<E,R>` 模型的验证见上一节。
-
-当时的覆盖包括认证前/认证后拒绝、加密断开消息、异步等待与取消、超时和容量上限，启动阶段注册与冻结、异步准入期间注销订阅、通知顺序/异常隔离/有界队列、启动失败时撤销订阅。合成 TCP 流程还核对首次进入后端、转服提交与断线通知，以及失败/同服转服和重复关闭不会多发通知。普通 PLAY 聊天与代理命令回归通过。
-
-这轮旧模型验证没有运行吞吐对比或目标整合包测试；在线认证测试使用注入的会话验证器。它不能推出统一事件系统无开销或已达到生产容量。
-
-## 历史访问检查验证记录（2026-09-26）
-
-以下记录验证的是 2026-09-26 当时基于专用访问钩子的实现。它是历史结果；类型化事件 API 的验证见上一节。
-
-新增访问检查时先运行 `./gradlew.bat check --offline --rerun-tasks`；最后的并发清理修正后，再运行 `./gradlew.bat check --offline`，重新执行受影响的核心测试与发行包烟测。最终报告共 167 项测试（API 6、核心 148、DNS 6、Agent 7），失败、错误和跳过均为 0；安装包帮助、版本与核心配置校验通过。
-
-新增覆盖包括协议解析前的 IP 拒绝、身份建立后的玩家拒绝、异步等待期间的数据回放、加密登录断开消息、断线取消、超时、异常、工作队列与未决 stage 容量上限，以及进入 PLAY 后不重复调用访问检查。在线身份测试使用注入的会话验证器，未连接真实 Mojang 服务。本次未测量接入吞吐或真实数据库延迟；以下基准均保留各自的历史版本与验证范围。
+- [2026-09-26 验证记录](records/2026-09-26-validation-log.md)：玩家操作与服务器列表、统一事件模型、历史类型化事件与访问检查。
+- [2026-09-27 富文本与命令补全验证](records/2026-09-27-rich-text-completion.md)。
 
 ## 泄漏闸门与变异检查
 
@@ -112,15 +86,7 @@ sh smoke/container-channel.sh
 
 `-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
 
-原 stop-and-wait 小样本见 `benchmarks/results/proxy-session-benchmark-smoke-2026-09-25.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
-
-## 富文本与命令补全验证（2026-09-27）
-
-实现设计见[消息与命令补全](messages-and-completion.md)。本地 `gradlew check` 通过：217 项测试（API 7、核心 197、DNS 6、Agent 7），失败、错误、跳过均为 0；发行包帮助、版本、配置校验通过。
-
-新增验证包含组件构造与旧版 JSON 字段、模板变量作为文字插入、消息深度/节点/字节限制；根命令与后端候选合并、参数补全、原始后端回复透传；超时、迟到回复隔离、队列上限、转服代次切换、插件注销/关闭与取消回调线程。真实 TCP 测试同时核对富文本命令回复和补全，转服测试核对切换前后的补全上下文。
-
-此外用 Java 8 加载本机 Uranium 的实际组件解析器读取当前发行包生成的 JSON，核对正文、点击命令和悬浮文字通过。未启动真实客户端进行视觉/鼠标交互验收；没有测量本次改动的吞吐收益。最终远端 CI 按对应 PR 检查项记录。
+原 stop-and-wait 小样本见 `benchmarks/results/2026-09-25-proxy-session-benchmark-smoke.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 
 ## 后端宿主真实服务端验收
 

@@ -190,7 +190,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         CompletableFuture<AccessDecision> request;
         try {
             request = Objects.requireNonNull(owner.dispatchEvent(
-                    new PlayerAdmissionEvent(view, (InetSocketAddress) frontend.remoteAddress(),
+                    new PlayerAdmissionEvent(view, SessionChannels.clientAddress(frontend),
                             login.verifiedProfile() != null)),
                     "player admission stage").toCompletableFuture();
         } catch (RuntimeException failure) {

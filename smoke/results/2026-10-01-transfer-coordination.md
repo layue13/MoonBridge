@@ -55,4 +55,4 @@ All six pass markers were present, including `asyncBarrier=true persistenceVerif
 
 ## Limits
 
-The synthetic protocol client is not a real Prism visual/gameplay test. The smoke callback confirms only its deliberate asynchronous barrier; it does not observe a database commit. Additional mod inventories, a production Uranium build, arbitrary plugin behavior and PlayerDataSQL crash recovery are outside this result. Performance evidence and its uncertainty are recorded separately in [the benchmark report](../../benchmarks/results/transfer-coordination-validation.md).
+The synthetic protocol client is not a real Prism visual/gameplay test. The smoke callback confirms only its deliberate asynchronous barrier; it does not observe a database commit. Additional mod inventories, a production Uranium build, arbitrary plugin behavior and PlayerDataSQL crash recovery are outside this result. Performance evidence and its uncertainty are recorded separately in [the benchmark report](../../benchmarks/results/2026-10-01-transfer-coordination-validation.md).

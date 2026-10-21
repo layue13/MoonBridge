@@ -45,6 +45,7 @@ public final class ProxyMain {
                 Path configPath = Path.of(arguments[1]);
                 var configuration = loader.load(configPath);
                 loader.loadServerListStatus(configuration, configPath);
+                loader.loadWebSocket(configuration, configPath);
                 StaticBackends.register(configuration, new InMemoryBackendCatalog());
                 System.out.println("Valid core configuration and static backends: " + configuration.listen()
                         + " (enabled plugin settings are checked at startup)");
@@ -72,6 +73,7 @@ public final class ProxyMain {
         var configuration = loader.load(configPath);
         UUID proxyEpoch = UUID.randomUUID();
         var serverListStatus = loader.loadServerListStatus(configuration, configPath);
+        var webSocket = loader.loadWebSocket(configuration, configPath);
         var catalog = new InMemoryBackendCatalog();
         StaticBackends.register(configuration, catalog);
         Duration placementTimeout = Duration.ofSeconds(configuration.initialRouting().timeoutSeconds());
@@ -92,6 +94,7 @@ public final class ProxyMain {
         listener.setSessionBinding(proxyEpoch, sessionBindingSecrets(configuration));
         listener.setServerListStatus(serverListStatus);
         listener.setInitialServers(configuration.initialRouting().servers());
+        if (webSocket != null) listener.setWebSocket(configuration.websocket().listenAddress(), webSocket);
         try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout, proxyEpoch);
              var control = configuration.backendChannel() == null ? null
                      : new BackendControlService(configuration.backendChannel(), catalog,
@@ -110,6 +113,10 @@ public final class ProxyMain {
             listener.setCommandVisibility(plugins::commandVisible);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
+            if (webSocket != null) {
+                LOGGER.info("Listening for WebSocket{} on {}{}", webSocket.tls() == null ? "" : " (TLS)",
+                        listener.webSocketChannel().localAddress(), webSocket.path());
+            }
             var shutdown = new Thread(() -> {
                 try {
                     listener.close().toCompletableFuture().join();

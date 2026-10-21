@@ -2,7 +2,7 @@
 
 业务插件通过命名 channel 与 proxy 或指定 backend 通信。每个后端由一个宿主持有认证控制连接，多个插件共享；proxy 内置路由，后端之间通信不需要另写代理转发插件，也不依赖在线玩家。
 
-模型推导、失败语义及验收条件见 [设计契约](channel-messaging-v2.md)。消息服务与 Minecraft PLAY 转发独立；现有后端注册、心跳租约和游戏地址目录继续由控制服务维护。
+模型推导、失败语义及验收条件见 [设计契约](channel-messaging-contract.md)。消息服务与 Minecraft PLAY 转发独立；现有后端注册、心跳租约和游戏地址目录继续由控制服务维护。
 
 ```mermaid
 flowchart LR

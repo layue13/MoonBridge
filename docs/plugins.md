@@ -99,7 +99,7 @@ interface EventListener<E extends Event<R>, R> {
 
 ### 玩家准入
 
-`ConnectionAdmissionEvent(InetSocketAddress remoteAddress)` 在 TCP 建连后、Minecraft 协议解析前触发，适用于来源地址策略，包括状态查询连接。地址是代理接受连接时看到的实际 TCP socket peer；若代理前有网络中继，地址就是该中继。拒绝或准入检查失败时直接关闭 TCP，因此客户端尚无 Login Disconnect 可显示。`PlayerAdmissionEvent(PlayerView player, InetSocketAddress remoteAddress, boolean authenticated)` 在身份建立后、初始选服和后端登录前触发。在线代理模式下，核心仍先执行 `ONLINE_BUNGEE` 会话验证；事件在验证成功后派发，`authenticated` 为 `true`。离线模式在生成客户端名字和离线 UUID 后派发，`authenticated` 为 `false`。因此该事件可供 Ban、白名单等准入策略使用，不能替代认证提供者或改变核心认证过程。拒绝会发送 Login Disconnect。
+`ConnectionAdmissionEvent(InetSocketAddress remoteAddress)` 在 TCP 建连后、Minecraft 协议解析前触发，适用于来源地址策略，包括状态查询连接。地址是代理接受连接时看到的实际 TCP socket peer；若代理前有网络中继，地址就是该中继。经 [WebSocket 监听](websocket.md)接入的连接在 HTTP 升级完成后才触发该事件，地址在对端属于 `websocket.trustedProxies` 时取自配置的真实 IP 头，否则仍是 socket peer；`PlayerAdmissionEvent`、Mojang 会话验证和 Bungee 转发使用同一地址。拒绝或准入检查失败时直接关闭 TCP，因此客户端尚无 Login Disconnect 可显示。`PlayerAdmissionEvent(PlayerView player, InetSocketAddress remoteAddress, boolean authenticated)` 在身份建立后、初始选服和后端登录前触发。在线代理模式下，核心仍先执行 `ONLINE_BUNGEE` 会话验证；事件在验证成功后派发，`authenticated` 为 `true`。离线模式在生成客户端名字和离线 UUID 后派发，`authenticated` 为 `false`。因此该事件可供 Ban、白名单等准入策略使用，不能替代认证提供者或改变核心认证过程。拒绝会发送 Login Disconnect。
 
 多个准入监听器按注册顺序运行；允许策略运行全部监听器，首个拒绝即停止并拒绝玩家。空 stage、空结果、异常、超时或过载均失败关闭；内部错误不会把详细异常发送给客户端。准入请求使用有界队列，容量 128，最多 1024 个未决请求。`plugins.eventTimeoutSeconds` 默认 5 秒，范围 1–30 秒；每个准入事件的所有监听器共享同一个事件期限。准入事件只在接入和登录阶段触发，不进入 PLAY 包热路径。
 
