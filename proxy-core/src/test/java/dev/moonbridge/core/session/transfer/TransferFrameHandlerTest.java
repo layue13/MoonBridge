@@ -4,7 +4,7 @@ import dev.moonbridge.core.session.play.PlayObservation;
 
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
-import dev.moonbridge.core.relay.RawRelay;
+import dev.moonbridge.core.session.play.RawRelay;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;

@@ -7,7 +7,7 @@ plugins {
 val runtimeJavaHome = System.getProperty("java.home")
 
 dependencies {
-    implementation(project(":messaging-protocol"))
+    implementation(project(":messaging"))
     // The plugin contract is the only stable external boundary. Everything else
     // in this project remains an implementation package of the proxy core.
     api(project(":proxy-plugin-api"))
@@ -32,7 +32,7 @@ dependencies {
     implementation(libs.findLibrary("adventure-gson").get())
     implementation(libs.findLibrary("adventure-plain").get())
     runtimeOnly(libs.findLibrary("logback-classic").get())
-    testImplementation(project(":backend-channel-client"))
+    testImplementation(project(":backend"))
     testImplementation(libs.findLibrary("logback-classic").get())
     testImplementation(libs.findLibrary("netty-pkitesting").get())
 }
@@ -86,13 +86,6 @@ val installedDistVersionSmokeTest = tasks.register<Exec>("installedDistVersionSm
     }
 }
 
-val compilePermissionAcceptance = tasks.register<JavaCompile>("compilePermissionAcceptance") {
-    source(rootProject.file("smoke/PermissionAcceptance.java"))
-    classpath = sourceSets.main.get().runtimeClasspath
-    destinationDirectory.set(layout.buildDirectory.dir("classes/permissionAcceptance"))
-    options.release.set(25)
-}
-
 // The benchmarks in benchmarks/ declare proxy-core packages to reach package-private classes and are
 // normally compiled by their PowerShell runners. Compiling them here keeps them building with main.
 val compileBenchmarks = tasks.register<JavaCompile>("compileBenchmarks") {
@@ -104,21 +97,33 @@ val compileBenchmarks = tasks.register<JavaCompile>("compileBenchmarks") {
     options.release.set(25)
 }
 
-val permissionAcceptance = tasks.register<JavaExec>("permissionAcceptance") {
-    group = "verification"
-    description = "Loads the packaged LuckPerms plugin and verifies native permissions, commands and H2 persistence."
-    dependsOn(tasks.named("installDist"), compilePermissionAcceptance)
-    classpath = sourceSets.main.get().runtimeClasspath + files(compilePermissionAcceptance.flatMap { it.destinationDirectory })
-    mainClass.set("PermissionAcceptance")
-    args(layout.buildDirectory.dir("install/moonbridge").get().asFile.absolutePath,
-        layout.buildDirectory.dir("permission-acceptance").get().asFile.absolutePath)
+// permissionAcceptance needs the LuckPerms plugin, which is only built with -Pluckperms.
+val luckPerms = rootProject.findProject(":luckperms-moonbridge")
+if (luckPerms != null) {
+    val compilePermissionAcceptance = tasks.register<JavaCompile>("compilePermissionAcceptance") {
+        source(rootProject.file("smoke/PermissionAcceptance.java"))
+        classpath = sourceSets.main.get().runtimeClasspath
+        destinationDirectory.set(layout.buildDirectory.dir("classes/permissionAcceptance"))
+        options.release.set(25)
+    }
+
+    val permissionAcceptance = tasks.register<JavaExec>("permissionAcceptance") {
+        group = "verification"
+        description = "Loads the packaged LuckPerms plugin and verifies native permissions, commands and H2 persistence."
+        dependsOn(tasks.named("installDist"), compilePermissionAcceptance)
+        classpath = sourceSets.main.get().runtimeClasspath + files(compilePermissionAcceptance.flatMap { it.destinationDirectory })
+        mainClass.set("PermissionAcceptance")
+        args(layout.buildDirectory.dir("install/moonbridge").get().asFile.absolutePath,
+            layout.buildDirectory.dir("permission-acceptance").get().asFile.absolutePath)
+    }
+
+    tasks.named("check") { dependsOn(permissionAcceptance) }
 }
 
 tasks.named("check") {
     dependsOn(installedDistSmokeTest)
     dependsOn(installedDistHelpSmokeTest)
     dependsOn(installedDistVersionSmokeTest)
-    dependsOn(permissionAcceptance)
     dependsOn(compileBenchmarks)
 }
 
@@ -147,8 +152,10 @@ distributions {
     main {
         contents {
             from(rootProject.file("README.md"))
-            from(project(":luckperms-moonbridge").tasks.named("pluginJar")) {
-                into("plugins")
+            if (luckPerms != null) {
+                from(luckPerms.tasks.named("pluginJar")) {
+                    into("plugins")
+                }
             }
             from(rootProject.file("docs")) {
                 into("docs")
@@ -162,21 +169,8 @@ distributions {
             from("src/main/resources/config") {
                 into("config")
             }
-            from(project(":backend-channel-client").tasks.named("jar")) {
-                into("backend-client")
-            }
-            from(project(":messaging-api").tasks.named("jar")) {
-                into("backend-client")
-            }
-            from(project(":messaging-protocol").tasks.named("jar")) {
-                into("backend-client")
-            }
-            from(project(":backend-bukkit").tasks.named("jar")) {
-                into("backend-host")
-            }
-            from(listOf(project(":backend-bukkit-api").tasks.named("jar"),
-                project(":messaging-api").tasks.named("jar"))) {
-                into("backend-api")
+            from(project(":backend").tasks.named("jar")) {
+                into("backend")
             }
         }
     }

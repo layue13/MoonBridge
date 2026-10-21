@@ -5,7 +5,7 @@ import dev.moonbridge.api.MessageResult;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.protocol.MinecraftLoginDisconnect;
 import dev.moonbridge.core.protocol.MinecraftText;
-import dev.moonbridge.core.relay.RawRelay;
+import dev.moonbridge.core.session.play.RawRelay;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import net.kyori.adventure.text.Component;

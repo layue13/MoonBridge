@@ -29,18 +29,14 @@ jobs:
       - name: Set development version
         run: echo "ORG_GRADLE_PROJECT_releaseVersion=0.1.0-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT:-1}.${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
 
-      - name: Check and assemble distribution
-        run: bash ./gradlew --no-daemon check :proxy-core:distZip
+      - name: Check and assemble the release
+        run: bash ./gradlew --no-daemon -Pluckperms check release
 
       - name: Upload build outputs
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: moonbridge-development
-          path: |
-            **/build/libs/*.jar
-            !luckperms-moonbridge/build/libs/*-engine.jar
-            !vendor/**/build/libs/*.jar
-            proxy-core/build/distributions/*.zip
+          path: build/release/
           if-no-files-found: error
           retention-days: 30
 
@@ -75,4 +71,4 @@ jobs:
           fi
 
       - name: Publish all Maven modules
-        run: bash ./gradlew --no-daemon publish
+        run: bash ./gradlew --no-daemon -Pluckperms publish

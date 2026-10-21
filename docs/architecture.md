@@ -6,6 +6,7 @@
 
 - `proxy-plugin-api` 定义插件外部接口：生命周期、玩家/服务器只读视图、后端注册、类型化事件、初始选服、命令和转服。核心实现位于 `proxy-core`；可选发现器位于 `plugins/`。
 - `ProxyMain` 读取严格 YAML 配置，先注册静态后端，再加载配置启用的插件，连接插件选服回调，最后启动 Netty 监听器。插件以 `META-INF/services/dev.moonbridge.api.Plugin` 声明，通过独立类加载器加载。
+- 后端一侧只有两个 Java 8 模块：`messaging`（消息 API 与线协议，代理与后端共用）和 `backend`（Bukkit/Uranium 共享宿主 `MoonBridgeBackend`、其服务 API 与控制通道客户端，打成一个 JAR）。`luckperms-moonbridge` 是可选的原生权限插件（`-Pluckperms` 构建）；`client-mod/` 是独立构建的 1.7.10 客户端 WebSocket mod。
 - 核心支持 Minecraft 1.7.10（协议 5）登录和转发。`OFFLINE` 信任客户端提交的名字；`ONLINE_BUNGEE` 在代理执行加密与会话验证，并将身份转发给受信任的旧版 Bungee 后端。
 
 入口可从 [`ProxyMain`](../proxy-core/src/main/java/dev/moonbridge/app/ProxyMain.java)、[`ProxySessionListener`](../proxy-core/src/main/java/dev/moonbridge/core/session/ProxySessionListener.java) 和 [`PluginHost`](../proxy-core/src/main/java/dev/moonbridge/core/plugin/PluginHost.java) 追踪。
@@ -30,7 +31,7 @@ flowchart LR
     F --> G[PLAY / Forge 握手与转发]
 ```
 
-普通转发沿用协议 5 帧边界，不重新编码普通帧；同一次 socket 读取解码出的帧逐个写入对端，在读取完成时合并为一次 flush，读取之外转发的帧由每批一次的事件循环任务补发 flush。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/relay/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/play/KeepAliveBridge.java)。
+普通转发沿用协议 5 帧边界，不重新编码普通帧；同一次 socket 读取解码出的帧逐个写入对端，在读取完成时合并为一次 flush，读取之外转发的帧由每批一次的事件循环任务补发 flush。前后端通道绑定同一 Netty EventLoop，会话控制状态在该循环串行变更。Keep Alive ID 由代理转换并跟踪未完成请求；必要的玩家实体 ID 数据包在转服后改写。通道不可写时通过暂停对端读取施加背压。实现见 [`Session`](../proxy-core/src/main/java/dev/moonbridge/core/session/Session.java)、[`RawRelay`](../proxy-core/src/main/java/dev/moonbridge/core/session/play/RawRelay.java) 与 [`KeepAliveBridge`](../proxy-core/src/main/java/dev/moonbridge/core/session/play/KeepAliveBridge.java)。
 
 ## 后端目录与发现所有权
 
@@ -69,10 +70,11 @@ flowchart LR
 |---|---|
 | `core.session` | `ProxySessionListener`（监听与会话索引）；`Session`（每个玩家连接一个，Netty handler 与生命周期）及其委托：`FrontendLogin`（握手、状态、加密、Mojang 验证）、`InitialRouter`（放置决策与首个后端拨号）、`ClientControl`（代发聊天与有序断开）、`BackendHandshakes` |
 | `core.session.transfer` | `TransferCoordinator` 转服状态机，经 `TransferHost` 接口读取会话状态，自己持有全部转服状态 |
-| `core.session.play` | PLAY 阶段逐帧 handler（Keep Alive、命令拦截、Tab 补全）与中继启动缓冲 |
-| `core.session.channel` | 后端拨号、pipeline 查找辅助与玩家地址（`clientAddress`） |
+| `core.session.play` | PLAY 阶段数据通路：`RawRelay` 帧转发热路径、逐帧 handler（Keep Alive、命令拦截、Tab 补全）与中继启动缓冲 |
+| `core.session.channel` | `NetworkTransport`（epoll/kqueue/NIO 选择）、后端拨号、pipeline 查找辅助与玩家地址（`clientAddress`） |
 | `core.websocket` | WebSocket 前端：升级、可信代理真实 IP（`ClientAddressPolicy`）、二进制消息与字节流互转；不依赖 `session` |
-| `core.relay` | `RawRelay` 帧转发热路径 |
+| `core.auth` | 在线认证与加密、Mojang 会话验证、Bungee 旧版身份转发（`BungeeLegacyForwarding`） |
+| `core.event` | 会话调用插件运行时的端口：`EventDispatcher`、转服准备、`PermissionService` |
 | `core.plugin` | `PluginHost` 生命周期，分出 `EventRouter`、`CommandService`、`PlacementService`、`PluginContextImpl` |
 | `core.control` | 后端控制通道：`BackendControlService` 接入，`LeaseRegistry`、`InboundRouter`、`BackendExchange`、`OutboundWriter` |
 

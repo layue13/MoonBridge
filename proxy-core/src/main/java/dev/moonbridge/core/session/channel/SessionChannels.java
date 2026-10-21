@@ -1,6 +1,5 @@
 package dev.moonbridge.core.session.channel;
 
-import dev.moonbridge.core.net.NetworkTransport;
 import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.bootstrap.Bootstrap;

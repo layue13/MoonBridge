@@ -4,7 +4,7 @@ import org.gradle.jvm.toolchain.JavaLanguageVersion
 plugins {
     id("moonbridge.java-library-conventions")
     id("com.gradleup.shadow") version "9.6.1"
-    `maven-publish`
+    id("moonbridge.publishing-conventions")
 }
 
 val hostBridgeCompileClasspath = configurations.create("hostBridgeCompileClasspath") {
@@ -143,17 +143,6 @@ publishing {
                         url.set("https://github.com/LuckPerms/LuckPerms/blob/master/LICENSE.txt")
                     }
                 }
-            }
-        }
-    }
-    repositories {
-        maven {
-            name = "giteaPackages"
-            url = uri(providers.environmentVariable("MAVEN_URL")
-                .orElse("https://git.nest.potatolab.uk:8443/api/packages/layue13/maven").get())
-            credentials {
-                username = providers.environmentVariable("MAVEN_USER").orElse("NONE").get()
-                password = providers.environmentVariable("MAVEN_PASSWORD").orElse("NONE").get()
             }
         }
     }

@@ -16,8 +16,8 @@ if ($serverJars.Count -ne 1) { throw 'Expected exactly one Uranium server JAR.' 
 $serverJar = $serverJars[0]
 $serverHash = (Get-FileHash -LiteralPath $serverJar.FullName -Algorithm SHA256).Hash
 $dist = Join-Path $repo 'proxy-core/build/install/moonbridge'
-$hostJars = @(Get-ChildItem (Join-Path $dist 'backend-host') -Filter 'moonbridge-backend-bukkit-*.jar')
-if ($hostJars.Count -ne 1) { throw 'Build the renamed host and installDist first.' }
+$hostJars = @(Get-ChildItem (Join-Path $dist 'backend') -Filter 'moonbridge-backend-*.jar')
+if ($hostJars.Count -ne 1) { throw 'Build the backend jar and installDist first.' }
 $run = Join-Path $repo ('build/backend-uranium-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $run | Out-Null
 Write-Output "ACCEPTANCE_DIRECTORY=$run"
@@ -43,8 +43,8 @@ $probeClasses = Join-Path $run 'probe-classes'
 $proxyClasses = Join-Path $run 'proxy-classes'
 New-Item -ItemType Directory -Force $controlDir, $proxyPlugins, $probeClasses, $proxyClasses | Out-Null
 $proxyClasspath = Join-Path $dist 'lib/*'
-# Business plugins compile against public API artifacts only, never the host/transport.
-$backendApiClasspath = Join-Path $dist 'backend-api/*'
+# Business plugins compile against the backend jar (compileOnly) and depend on MoonBridgeBackend at runtime.
+$backendApiClasspath = Join-Path $dist 'backend/*'
 & (Join-Path $Java8Home 'bin/javac.exe') -cp "$backendApiClasspath;$BukkitApiJar" -d $probeClasses `
     (Join-Path $PSScriptRoot 'BackendAcceptancePlugin.java') (Join-Path $PSScriptRoot 'BackendObserverPlugin.java')
 if ($LASTEXITCODE -ne 0) { throw 'Bukkit probe compilation failed.' }

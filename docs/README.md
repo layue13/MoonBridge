@@ -23,6 +23,7 @@
 | [后端 Channel 消息服务](backend-channel-design.md) | 共享宿主、跨后端路由、消息身份与交付语义 |
 | [Channel 消息设计契约](channel-messaging-contract.md) | 从参与者、寻址、响应与失败语义推导 API 和验收条件 |
 | [验证方法](testing.md) | 自动化测试、烟测、真实客户端与合成性能测量 |
+| [发行物与安装位置](release-layout.md) | `gradlew release` 产出的服务器包、后端插件、客户端 mod 各装在哪里 |
 | [发布与依赖版本](publishing.md) | 本地 SNAPSHOT、CI 不可变版本、Maven 构件和发行包的区别 |
 
 ## 当前可引用的验证记录

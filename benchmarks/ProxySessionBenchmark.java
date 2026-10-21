@@ -49,8 +49,8 @@ public final class ProxySessionBenchmark {
         int commandInterceptor = intArg(args, "command-interceptor", 1);
         int burst = intArg(args, "burst", 1);
         String mode = modeArg(args);
-        var transport = dev.moonbridge.core.net.NetworkTransport.select(
-                dev.moonbridge.core.net.NetworkTransport.Preference.valueOf(
+        var transport = dev.moonbridge.core.session.channel.NetworkTransport.select(
+                dev.moonbridge.core.session.channel.NetworkTransport.Preference.valueOf(
                         stringArg(args, "transport", "auto").toUpperCase(java.util.Locale.ROOT)));
         boolean afterTransfer = mode.equals("post-transfer");
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000

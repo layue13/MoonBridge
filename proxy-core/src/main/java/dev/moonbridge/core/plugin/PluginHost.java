@@ -14,7 +14,7 @@ import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.control.BackendChannelTransport;
 import dev.moonbridge.core.event.EventDispatcher;
-import dev.moonbridge.core.permission.PermissionService;
+import dev.moonbridge.core.event.PermissionService;
 import dev.moonbridge.core.event.TransferPreparation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -6,33 +6,40 @@ MoonBridge is a session proxy for Minecraft 1.7.10 Forge (protocol 5): login/aut
 
 ## Build and test
 
-JDK 25 is required (Gradle toolchain; the daemon JVM is pinned to 25). `gradlew` is not executable in a fresh Linux checkout, so use `bash ./gradlew` (`.\gradlew.bat` on Windows). The LuckPerms plugin builds from a submodule: run `git submodule update --init --recursive` first.
+JDK 25 is required (Gradle toolchain; the daemon JVM is pinned to 25). Use `./gradlew` (`.\gradlew.bat` on Windows).
+
+The LuckPerms platform plugin compiles LuckPerms from the `vendor/luckperms` submodule, which is slow and download-heavy, so it is opt-in: `-Pluckperms` includes `luckperms-moonbridge`, its tests, `permissionAcceptance` and the plugin in the distribution (run `git submodule update --init --recursive` first). CI always passes it; run it locally when touching permissions, plugin loading or the distribution layout.
 
 ```sh
-bash ./gradlew check                                  # everything CI runs, ~7 min: tests, installed-dist smoke tests, permissionAcceptance
-bash ./gradlew :proxy-core:test                       # proxy-core tests only
-bash ./gradlew :proxy-core:test --tests '*RawRelayTest'                 # one class
-bash ./gradlew :proxy-core:test --tests '*RawRelayTest.methodName'      # one method
-bash ./gradlew :proxy-core:installDist                # runnable distribution in proxy-core/build/install/moonbridge
+./gradlew check                                       # tests, installed-dist smoke tests, benchmark compile
+./gradlew -Pluckperms check                           # what CI runs, ~7 min: adds the LuckPerms plugin and permissionAcceptance
+./gradlew release                                     # build/release: server zip, backend jar, client mod (-PskipClientMod to omit it)
+./gradlew :proxy-core:test                            # proxy-core tests only
+./gradlew :proxy-core:test --tests '*RawRelayTest'     # one class
+./gradlew :proxy-core:test --tests '*RawRelayTest.m'   # one method
+./gradlew :proxy-core:installDist                     # runnable distribution in proxy-core/build/install/moonbridge
 ```
 
 The slow tests are the session integration tests (`ProxySessionListenerTest`, `SessionTransferTest`, `InitialRoutingTest`, `SourceReleaseTransferTest`); iterate with `--tests` and run `check` once before pushing.
 
-`.github/workflows/verify.yml` runs `check` on every pull request; `.github/workflows/ci.yml` runs `check :proxy-core:distZip` and publishes the Maven modules on pushes to `main`. Run `check` locally before pushing anyway: it is ~7 minutes and a red PR costs a round trip.
+`.github/workflows/verify.yml` runs `-Pluckperms check` and builds `client-mod/` on every pull request; `.github/workflows/ci.yml` runs `-Pluckperms check release`, uploads `build/release/` and publishes the Maven modules on pushes to `main`. Run `-Pluckperms check` locally before pushing anyway when the change can affect it: a red PR costs a round trip.
 
 ## Modules
 
 - `proxy-core` — the proxy runtime (`dev.moonbridge.app` = startup/config, `dev.moonbridge.core.*` = everything else). The only module that uses Netty.
 - `proxy-plugin-api` — the stable plugin boundary. Plugins are discovered with `META-INF/services/dev.moonbridge.api.Plugin` and loaded in separate class loaders by `PluginHost`.
-- `messaging-api`, `messaging-protocol`, `backend-channel-client`, `backend-bukkit-api`, `backend-bukkit` — backend side. These compile with `--release 8` (Java 8 backends such as Uranium) and must not pull in newer APIs.
-- `luckperms-moonbridge` — native LuckPerms platform plugin, built from `vendor/luckperms` via the included build `luckperms-moonbridge/upstream-build`. `proxy-core:check` depends on it (`permissionAcceptance`).
-- `proxy-build-logic` — Kotlin convention plugins shared by all modules.
+- `messaging` — message envelope, channel API and wire codec shared by the proxy and backends.
+- `backend` — the Bukkit/Uranium host plugin `MoonBridgeBackend` (its jar bundles `messaging`), its service API (`dev.moonbridge.bukkit`) and the control channel client (`dev.moonbridge.backendchannel`). Business plugins compile against this jar `compileOnly`.
+- `messaging` and `backend` use `moonbridge.java8-library-conventions` (`--release 8`, for Java 8 backends such as Uranium) and must not pull in newer APIs.
+- `luckperms-moonbridge` — native LuckPerms platform plugin, built from `vendor/luckperms` via the included build `luckperms-moonbridge/upstream-build`; only included with `-Pluckperms`.
+- `client-mod/` — the 1.7.10 Forge WebSocket client mod. A separate Gradle build (GTNH template, RetroFuturaGradle, Mixins) with its own wrapper: `cd client-mod && ./gradlew build`. Its `net` package is free of Minecraft classes and uses Minecraft's bundled Netty 4.0.10.
+- `proxy-build-logic` — Kotlin convention plugins: `java-library`, `java8-library`, `application`, and `publishing-conventions` (shared package repository; set `moonbridgePublication { artifactId ... }` for a standard publication).
 
 ## Architecture that spans files
 
 **Session threading.** `ProxySessionListener` owns the listener, event loops and the UUID→session index. Each `Session` (one per player connection) confines its mutable state to the frontend event loop, and its backend channels are created on that same loop (`SessionChannels.backendBootstrap` enforces it). Login verification, backend DNS and plugin callbacks run off that loop and re-enter it by posting a task; results are checked against the current connection identity so a stale async result cannot act on a reconnected player. Plugin work goes through bounded pools that reject when full.
 
-**Session layout.** `core.session` holds `Session` (the Netty handler and lifecycle owner) plus the pieces it delegates to: `FrontendLogin` (handshake, status, encryption, Mojang verification), `InitialRouter` (placement decision and first backend dial), `BackendHandshakes`. `core.session.transfer` is `TransferCoordinator`, which reaches the session only through the `TransferHost` port (Session supplies it as an adapter) and owns all transfer state. `core.session.play` has the per-frame PLAY handlers and relay start-up buffering; `core.session.channel` has backend dialing, pipeline lookups and `clientAddress` (the player IP: a trusted forwarded address or the socket peer; use it instead of `remoteAddress()`). `core.websocket` is the optional WebSocket frontend; after the upgrade the pipeline behind `WebSocketFrameAdapter` is the same as for TCP. Dependencies point one way: `session` -> `transfer` -> `play`/`channel`.
+**Session layout.** `core.session` holds `Session` (the Netty handler and lifecycle owner) plus the pieces it delegates to: `FrontendLogin` (handshake, status, encryption, Mojang verification), `InitialRouter` (placement decision and first backend dial), `BackendHandshakes`. `core.session.transfer` is `TransferCoordinator`, which reaches the session only through the `TransferHost` port (Session supplies it as an adapter) and owns all transfer state. `core.session.play` has the PLAY data path (`RawRelay`, the per-frame handlers, relay start-up buffering); `core.session.channel` has `NetworkTransport`, backend dialing, pipeline lookups and `clientAddress` (the player IP: a trusted forwarded address or the socket peer; use it instead of `remoteAddress()`). `core.websocket` is the optional WebSocket frontend; after the upgrade the pipeline behind `WebSocketFrameAdapter` is the same as for TCP. Dependencies point one way: `session` -> `transfer` -> `play`/`channel`.
 
 **Data path.** After login, `RawRelay` forwards already-framed PLAY frames between the two channels without copying. Per-frame concerns are separate inbound handlers (`KeepAliveBridge`, `PlayerCommandInterceptor`, `TabCompletionBridge`, `TransferFrameHandler`) in front of the relay. Backpressure works by pausing reads on the source when the peer is not writable; the relay flushes once per read batch (`channelReadComplete`).
 

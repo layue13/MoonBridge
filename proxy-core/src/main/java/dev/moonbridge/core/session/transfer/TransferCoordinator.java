@@ -12,7 +12,7 @@ import dev.moonbridge.core.protocol.ByteBufs;
 import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
-import dev.moonbridge.core.relay.RawRelay;
+import dev.moonbridge.core.session.play.RawRelay;
 import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.core.session.play.KeepAliveBridge;
 import dev.moonbridge.core.session.play.PlayObservation;
