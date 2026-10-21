@@ -3,7 +3,7 @@ package dev.moonbridge.core.session;
 import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.core.auth.VerifiedProfile;
-import dev.moonbridge.core.forwarding.BungeeLegacyForwarding;
+import dev.moonbridge.core.auth.BungeeLegacyForwarding;
 import dev.moonbridge.core.protocol.MinecraftHandshake;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.messaging.session.ForwardedSessionProof;

@@ -1,11 +1,9 @@
-package dev.moonbridge.core.forwarding;
+package dev.moonbridge.core.auth;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import dev.moonbridge.core.auth.ProfileProperty;
-import dev.moonbridge.core.auth.VerifiedProfile;
 import dev.moonbridge.core.protocol.MinecraftHandshake;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.buffer.ByteBuf;

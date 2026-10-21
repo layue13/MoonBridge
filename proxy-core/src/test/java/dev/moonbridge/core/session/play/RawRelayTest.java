@@ -1,4 +1,4 @@
-package dev.moonbridge.core.relay;
+package dev.moonbridge.core.session.play;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;

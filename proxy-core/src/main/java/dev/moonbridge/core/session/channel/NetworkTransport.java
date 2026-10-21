@@ -1,4 +1,4 @@
-package dev.moonbridge.core.net;
+package dev.moonbridge.core.session.channel;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.IoEventLoop;

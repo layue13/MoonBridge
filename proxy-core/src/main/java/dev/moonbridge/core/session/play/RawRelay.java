@@ -1,4 +1,4 @@
-package dev.moonbridge.core.relay;
+package dev.moonbridge.core.session.play;
 
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.buffer.ByteBuf;

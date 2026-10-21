@@ -1,4 +1,4 @@
-package dev.moonbridge.core.permission;
+package dev.moonbridge.core.event;
 
 import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.api.PlayerView;

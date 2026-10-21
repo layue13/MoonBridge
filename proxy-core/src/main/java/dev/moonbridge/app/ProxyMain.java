@@ -1,6 +1,6 @@
 package dev.moonbridge.app;
 
-import dev.moonbridge.core.net.NetworkTransport;
+import dev.moonbridge.core.session.channel.NetworkTransport;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 import dev.moonbridge.core.control.BackendControlService;
 import dev.moonbridge.core.auth.MojangSessionVerifier;

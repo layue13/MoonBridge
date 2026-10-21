@@ -4,7 +4,7 @@ import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.api.event.TransferContext;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.event.TransferPreparation;
-import dev.moonbridge.core.relay.RawRelay;
+import dev.moonbridge.core.session.play.RawRelay;
 import io.netty.channel.Channel;
 
 import java.util.concurrent.CompletableFuture;

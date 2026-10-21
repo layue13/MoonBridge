@@ -5,7 +5,7 @@ import dev.moonbridge.core.session.play.KeepAliveBridge;
 import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
-import dev.moonbridge.core.relay.RawRelay;
+import dev.moonbridge.core.session.play.RawRelay;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;

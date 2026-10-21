@@ -1,4 +1,4 @@
-package dev.moonbridge.core.net;
+package dev.moonbridge.core.session.channel;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;

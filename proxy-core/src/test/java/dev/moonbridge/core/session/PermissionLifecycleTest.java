@@ -14,7 +14,7 @@ import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 import dev.moonbridge.core.event.EventDispatcher;
-import dev.moonbridge.core.permission.PermissionService;
+import dev.moonbridge.core.event.PermissionService;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;

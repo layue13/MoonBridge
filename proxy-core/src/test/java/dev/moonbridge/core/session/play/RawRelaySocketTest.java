@@ -1,4 +1,4 @@
-package dev.moonbridge.core.relay;
+package dev.moonbridge.core.session.play;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;

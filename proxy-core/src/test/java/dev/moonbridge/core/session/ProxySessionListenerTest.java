@@ -2384,7 +2384,7 @@ final class ProxySessionListenerTest {
                     backendDone.get(5, TimeUnit.SECONDS);
                     var relayField = Session.class.getDeclaredField("relay");
                     relayField.setAccessible(true);
-                    var relay = (dev.moonbridge.core.relay.RawRelay.Link) relayField.get(session);
+                    var relay = (dev.moonbridge.core.session.play.RawRelay.Link) relayField.get(session);
                     assertTrue(relay.hasPendingClientboundWrites());
                     backendChannel.eventLoop().submit(() -> backendChannel.pipeline()
                             .fireExceptionCaught(new IOException("backend read failed"))).get(5, TimeUnit.SECONDS);

@@ -3,7 +3,7 @@ package dev.moonbridge.core.plugin;
 import dev.moonbridge.messaging.internal.LocalMessaging;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.core.backend.BackendCatalog;
-import dev.moonbridge.core.permission.PermissionService;
+import dev.moonbridge.core.event.PermissionService;
 
 import java.util.UUID;
 

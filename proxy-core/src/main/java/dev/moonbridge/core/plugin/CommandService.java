@@ -13,7 +13,7 @@ import dev.moonbridge.api.Players;
 import dev.moonbridge.api.Plugin;
 import dev.moonbridge.api.permission.PermissionResult;
 import net.kyori.adventure.text.Component;
-import dev.moonbridge.core.permission.PermissionService;
+import dev.moonbridge.core.event.PermissionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
