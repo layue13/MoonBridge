@@ -55,13 +55,14 @@ context.commands().register("island", "example.command.island", invocation -> {
 
 ## LuckPerms 平台插件
 
-`luckperms-moonbridge` 使用固定版本的官方 LuckPerms 公共核心，并实现 MoonBridge 平台适配。上游源码在 Git 子模块 `vendor/luckperms`，构建前运行：
+`luckperms-moonbridge` 使用固定版本的官方 LuckPerms 公共核心，并实现 MoonBridge 平台适配。上游源码在 Git 子模块 `vendor/luckperms`。编译它较慢且依赖很多，因此默认构建不包含该插件，需要显式开启：
 
 ```sh
 git submodule update --init --recursive
+./gradlew -Pluckperms check release      # 构建插件、运行 permissionAcceptance，并放进发行包
 ```
 
-发行包在 `plugins/` 提供插件 JAR。修改 `config/moonbridge.yml`，替换默认的 `enabled: {}`：
+带 `-Pluckperms` 构建的发行包（CI 和正式发布均如此）在 `plugins/` 提供插件 JAR。修改 `config/moonbridge.yml`，替换默认的 `enabled: {}`：
 
 ```yaml
 plugins:

@@ -6,6 +6,7 @@
 
 - `proxy-plugin-api` 定义插件外部接口：生命周期、玩家/服务器只读视图、后端注册、类型化事件、初始选服、命令和转服。核心实现位于 `proxy-core`；可选发现器位于 `plugins/`。
 - `ProxyMain` 读取严格 YAML 配置，先注册静态后端，再加载配置启用的插件，连接插件选服回调，最后启动 Netty 监听器。插件以 `META-INF/services/dev.moonbridge.api.Plugin` 声明，通过独立类加载器加载。
+- 后端一侧只有两个 Java 8 模块：`messaging`（消息 API 与线协议，代理与后端共用）和 `backend`（Bukkit/Uranium 共享宿主 `MoonBridgeBackend`、其服务 API 与控制通道客户端，打成一个 JAR）。`luckperms-moonbridge` 是可选的原生权限插件（`-Pluckperms` 构建）；`client-mod/` 是独立构建的 1.7.10 客户端 WebSocket mod。
 - 核心支持 Minecraft 1.7.10（协议 5）登录和转发。`OFFLINE` 信任客户端提交的名字；`ONLINE_BUNGEE` 在代理执行加密与会话验证，并将身份转发给受信任的旧版 Bungee 后端。
 
 入口可从 [`ProxyMain`](../proxy-core/src/main/java/dev/moonbridge/app/ProxyMain.java)、[`ProxySessionListener`](../proxy-core/src/main/java/dev/moonbridge/core/session/ProxySessionListener.java) 和 [`PluginHost`](../proxy-core/src/main/java/dev/moonbridge/core/plugin/PluginHost.java) 追踪。

@@ -5,7 +5,7 @@
 ```powershell
 .\gradlew.bat check
 .\gradlew.bat :proxy-core:installedDistSmokeTest
-.\gradlew.bat :proxy-core:permissionAcceptance
+.\gradlew.bat -Pluckperms :proxy-core:permissionAcceptance
 .\smoke\container-network.ps1
 sh smoke/container-channel.sh
 ```
@@ -14,9 +14,9 @@ sh smoke/container-channel.sh
 
 `smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
 
-`.github/workflows/verify.yml` 在每个 Pull Request 上运行 `gradlew check`。`.github/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew check :proxy-core:distZip`，再上传 CI 工件并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、七个坐标和发行 ZIP 见[发布与依赖版本](publishing.md)。
+`.github/workflows/verify.yml` 在每个 Pull Request 上运行 `gradlew -Pluckperms check`，并单独构建、测试 `client-mod/`。`.github/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew -Pluckperms check release`，再上传 `build/release/` 并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、Maven 坐标和发行物 见[发布与依赖版本](publishing.md)。
 
-`check` 包含 `permissionAcceptance`：使用发行包中的实际 LuckPerms JAR、隔离插件类加载器和临时 H2 数据库，验证原生命令、授权/拒绝/未设置、组继承、临时节点到期、后端上下文、连接代次隔离及关闭后重新打开数据库。输出位于 `proxy-core/build/permission-acceptance/run-*/`，成功标记为 `PERMISSION_ACCEPTANCE_PASS`。它使用 API 玩家探针，不连接真实 Minecraft 客户端，也不证明外部 SQL/Redis 联调成功；真实会话的权限准备和释放由 TCP 生命周期测试另行覆盖。
+带 `-Pluckperms` 时 `check` 包含 `permissionAcceptance`（本地默认 `check` 不编译 LuckPerms，因此不含这一项；CI 始终开启）：使用发行包中的实际 LuckPerms JAR、隔离插件类加载器和临时 H2 数据库，验证原生命令、授权/拒绝/未设置、组继承、临时节点到期、后端上下文、连接代次隔离及关闭后重新打开数据库。输出位于 `proxy-core/build/permission-acceptance/run-*/`，成功标记为 `PERMISSION_ACCEPTANCE_PASS`。它使用 API 玩家探针，不连接真实 Minecraft 客户端，也不证明外部 SQL/Redis 联调成功；真实会话的权限准备和释放由 TCP 生命周期测试另行覆盖。
 
 如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](../smoke/results/2026-09-25-local-uranium.md)。初次路由的当前 `ProxyMain` 协议探针结果另见[路由验收](../smoke/results/2026-09-27-initial-routing.md)。真实客户端记录见下段和其单独的历史验收档案；它们不应与当前路由分支的完整模组包验收混为一谈。
 
@@ -90,7 +90,7 @@ sh smoke/container-channel.sh
 
 ## 后端宿主真实服务端验收
 
-`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `MoonBridgeBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。Bukkit 业务插件只使用发行包 `backend-api/` 中的 API JAR 和服务器 Bukkit API 编译，编译路径不包含宿主及传输 SDK，并在实际插件加载器下验证服务类身份一致。
+`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `MoonBridgeBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。Bukkit 业务插件以发行包 `backend/` 中的 JAR 和服务器 Bukkit API 编译（compileOnly，运行时依赖 `MoonBridgeBackend`），并在实际插件加载器下验证服务类身份一致。
 
 ```powershell
 .\gradlew.bat check :proxy-core:installDist

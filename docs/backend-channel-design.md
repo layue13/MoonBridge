@@ -25,7 +25,7 @@ flowchart LR
 
 ## 后端插件接入
 
-在 Bukkit/Uranium 后端安装一次 `backend-bukkit` 生成的 `moonbridge-backend-bukkit` JAR，插件名为 `MoonBridgeBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
+在 Bukkit/Uranium 后端安装一次 `backend` 模块生成的 `moonbridge-backend` JAR（发行包 `backend/` 目录），插件名为 `MoonBridgeBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
 
 消费者 `plugin.yml` 声明：
 
@@ -33,7 +33,7 @@ flowchart LR
 depend: [MoonBridgeBackend]
 ```
 
-消费者依赖独立的 `uk.potatolab.moonbridge:backend-bukkit-api`，它传递依赖平台无关的 `messaging-api`。源码默认 `0.1.0-SNAPSHOT` 是本地开发版本；使用已发布构件时，必须将示例中的 `<published-version>` 替换为 CI 成功发布的准确不可变版本。`backend-bukkit` 是部署到服务器的宿主实现，`backend-channel-client` 是其他平台实现宿主时使用的传输 SDK，普通业务插件不依赖它们。发布版本及构件列表见[发布与依赖版本](publishing.md)。
+消费者对 `uk.potatolab.moonbridge:backend` 使用 `compileOnly`，它就是服务器上安装的那个 JAR，传递依赖平台无关的 `messaging`。业务插件只应使用 `dev.moonbridge.bukkit` 中的 `BukkitMessagingService`、`BukkitSessionService`、`BackendPlayerSession` 和 `dev.moonbridge.messaging` 的公共 API；`dev.moonbridge.backendchannel` 是宿主内部的控制通道客户端，只有在其他平台自行实现宿主时才直接使用。源码默认 `0.1.0-SNAPSHOT` 是本地开发版本；使用已发布构件时，必须将示例中的 `<published-version>` 替换为 CI 成功发布的准确不可变版本。发布版本及构件列表见[发布与依赖版本](publishing.md)。
 
 Gradle 示例（Bukkit API 仍由业务插件按目标服务器版本自行声明）：
 
@@ -42,11 +42,11 @@ repositories {
     maven("https://git.nest.potatolab.uk:8443/api/packages/layue13/maven")
 }
 dependencies {
-    compileOnly("uk.potatolab.moonbridge:backend-bukkit-api:<published-version>")
+    compileOnly("uk.potatolab.moonbridge:backend:<published-version>")
 }
 ```
 
-Maven 使用同一坐标并设置 `<scope>provided</scope>`。本地开发可改用 `0.1.0-SNAPSHOT`，但不要把它当作已发布版本。发行包的 `backend-api/` 也包含编译所需的 API JAR，适合隔离构建环境直接编译。本例中的 Bukkit API 仍由业务插件按目标服务器版本自行声明为 `compileOnly` / `provided`。不要把 API、SDK 或宿主实现重新打包进业务插件 JAR，也不要把 API JAR 单独放进服务器 `plugins/`；运行时由 `MoonBridgeBackend` 提供同一份 API 类和服务实现。
+Maven 使用同一坐标并设置 `<scope>provided</scope>`。本地开发可改用 `0.1.0-SNAPSHOT`，但不要把它当作已发布版本。隔离构建环境也可以直接对发行包 `backend/` 中的 JAR 编译。本例中的 Bukkit API 仍由业务插件按目标服务器版本自行声明为 `compileOnly` / `provided`。不要把这个 JAR 重新打包进业务插件；运行时由服务器 `plugins/` 中的 `MoonBridgeBackend` 提供唯一一份 API 类和服务实现。
 
 ```java
 import dev.moonbridge.bukkit.BukkitMessagingService;
@@ -116,7 +116,7 @@ HMAC 挑战认证本身不加密链路；跨机器使用私有加密链路或可
 
 本次构建、244 项回归和实际 Java 8 进程的结果见 [2026-09-27 验证记录](../smoke/results/2026-09-27-channel-messaging.md)。
 
-安装发行包的 `backend-host/` 提供可直接安装的共享宿主 JAR；`backend-client/` 提供非 Bukkit 宿主所需的 SDK、消息 API 和协议三个 JAR。运行 `:proxy-core:installDist` 后，可用实际 JDK 8 运行独立进程验收：
+安装发行包的 `backend/` 提供共享宿主 JAR；它同时包含非 Bukkit 宿主所需的控制通道客户端、消息 API 和协议。运行 `:proxy-core:installDist` 后，可用实际 JDK 8 运行独立进程验收：
 
 ```powershell
 .\smoke\channel-java8.ps1 -Java8Home 'C:\path\to\jdk8' -Java25Home 'C:\path\to\jdk25'

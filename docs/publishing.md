@@ -6,9 +6,9 @@ MoonBridge 当前区分本地开发版本、CI 发布的不可变开发构件和
 
 `.github/workflows/ci.yml` 在推送 `main` 或手动触发时运行。工作流以 CI run ID、attempt 和提交的前 12 位 SHA 生成版本 `0.1.0-dev.<run-id>.<attempt>.<commit>`，然后按顺序运行：
 
-1. 使用 JDK 25 运行 `gradlew check :proxy-core:distZip`。
-2. 将 JAR 和发行 ZIP 上传为名为 `moonbridge-development` 的 CI 工件，保留 30 天。
-3. 执行 `gradlew publish`，发布七个 Maven 模块。
+1. 使用 JDK 25 运行 `gradlew -Pluckperms check release`。
+2. 将 `build/release/`（服务器包、后端插件、客户端 mod，见[发行物与安装位置](release-layout.md)）上传为名为 `moonbridge-development` 的 CI 工件，保留 30 天。
+3. 执行 `gradlew -Pluckperms publish`，发布四个 Maven 模块。
 
 Maven 发布需要 CI secrets `MAVEN_USER` 和 `MAVEN_PASSWORD`。验证构建和发行 ZIP 的步骤先运行；凭据缺失会使发布步骤失败。CI 成功状态是发布结果的依据；CI 工件下载和 Maven 包仓库是不同交付物。工作流不创建 Git Release，也不表示已有稳定版本。
 
@@ -21,14 +21,13 @@ Maven 坐标统一使用 group `uk.potatolab.moonbridge` 和 CI 所报版本：
 | Artifact ID | 用途 |
 | --- | --- |
 | `proxy-plugin-api` | Proxy 插件 API |
-| `messaging-api` | 跨节点消息公共 API |
-| `messaging-protocol` | 消息传输协议 |
-| `backend-channel-client` | 非 Bukkit 后端宿主使用的传输 SDK |
-| `backend-bukkit-api` | Bukkit 业务插件编译时使用的服务 API |
-| `backend-bukkit` | 部署在 Bukkit/Uranium 服务端的共享宿主实现 |
+| `messaging` | 跨节点消息公共 API 与线协议（Java 8） |
+| `backend` | 后端共享宿主 `MoonBridgeBackend`（Bukkit/Uranium 插件，Java 8），含其服务 API 与控制通道客户端；业务插件对它 `compileOnly` |
 | `luckperms-moonbridge` | Proxy 原生 LuckPerms 插件；不是业务插件的编译 API |
 
-七个模块均随同一次 CI 发布使用相同版本。业务插件通常将 `backend-bukkit-api` 和目标服务器的 Bukkit API 作为 `compileOnly` / Maven `provided` 依赖；服务器提供 Bukkit API，`MoonBridgeBackend` 宿主提供运行时消息 API 和服务。普通业务插件不应依赖宿主/传输 SDK 实现，也不应把任何 API JAR 打包进插件。非 Bukkit 宿主才需要 `backend-channel-client` 及消息 API/协议；见[后端接入说明](backend-channel-design.md)。
+四个模块均随同一次 CI 发布使用相同版本。业务插件将 `backend` 和目标服务器的 Bukkit API 作为 `compileOnly` / Maven `provided` 依赖；服务器提供 Bukkit API，`MoonBridgeBackend` 宿主提供运行时消息 API 和服务。不要把 `backend` 打包进插件。非 Bukkit 宿主也使用 `backend` 中的控制通道客户端；见[后端接入说明](backend-channel-design.md)。
+
+旧坐标 `messaging-api`、`messaging-protocol`、`backend-channel-client`、`backend-bukkit-api`、`backend-bukkit` 已停止发布：前两者合并为 `messaging`，后三者合并为 `backend`，包名与类名不变，只需替换依赖坐标并重新编译。
 
 包仓库地址为 `https://git.nest.potatolab.uk:8443/api/packages/layue13/maven`。消费者应从成功 CI 记录中复制实际版本；以下 `<published-version>` 只是需替换的说明占位符：
 
@@ -38,14 +37,14 @@ repositories {
 }
 
 dependencies {
-    compileOnly("uk.potatolab.moonbridge:backend-bukkit-api:<published-version>")
+    compileOnly("uk.potatolab.moonbridge:backend:<published-version>")
 }
 ```
 
 ```xml
 <dependency>
   <groupId>uk.potatolab.moonbridge</groupId>
-  <artifactId>backend-bukkit-api</artifactId>
+  <artifactId>backend</artifactId>
   <version>&lt;published-version&gt;</version>
   <scope>provided</scope>
 </dependency>

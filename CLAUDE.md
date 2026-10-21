@@ -6,27 +6,34 @@ MoonBridge is a session proxy for Minecraft 1.7.10 Forge (protocol 5): login/aut
 
 ## Build and test
 
-JDK 25 is required (Gradle toolchain; the daemon JVM is pinned to 25). `gradlew` is not executable in a fresh Linux checkout, so use `bash ./gradlew` (`.\gradlew.bat` on Windows). The LuckPerms plugin builds from a submodule: run `git submodule update --init --recursive` first.
+JDK 25 is required (Gradle toolchain; the daemon JVM is pinned to 25). Use `./gradlew` (`.\gradlew.bat` on Windows).
+
+The LuckPerms platform plugin compiles LuckPerms from the `vendor/luckperms` submodule, which is slow and download-heavy, so it is opt-in: `-Pluckperms` includes `luckperms-moonbridge`, its tests, `permissionAcceptance` and the plugin in the distribution (run `git submodule update --init --recursive` first). CI always passes it; run it locally when touching permissions, plugin loading or the distribution layout.
 
 ```sh
-bash ./gradlew check                                  # everything CI runs, ~7 min: tests, installed-dist smoke tests, permissionAcceptance
-bash ./gradlew :proxy-core:test                       # proxy-core tests only
-bash ./gradlew :proxy-core:test --tests '*RawRelayTest'                 # one class
-bash ./gradlew :proxy-core:test --tests '*RawRelayTest.methodName'      # one method
-bash ./gradlew :proxy-core:installDist                # runnable distribution in proxy-core/build/install/moonbridge
+./gradlew check                                       # tests, installed-dist smoke tests, benchmark compile
+./gradlew -Pluckperms check                           # what CI runs, ~7 min: adds the LuckPerms plugin and permissionAcceptance
+./gradlew release                                     # build/release: server zip, backend jar, client mod (-PskipClientMod to omit it)
+./gradlew :proxy-core:test                            # proxy-core tests only
+./gradlew :proxy-core:test --tests '*RawRelayTest'     # one class
+./gradlew :proxy-core:test --tests '*RawRelayTest.m'   # one method
+./gradlew :proxy-core:installDist                     # runnable distribution in proxy-core/build/install/moonbridge
 ```
 
 The slow tests are the session integration tests (`ProxySessionListenerTest`, `SessionTransferTest`, `InitialRoutingTest`, `SourceReleaseTransferTest`); iterate with `--tests` and run `check` once before pushing.
 
-`.github/workflows/verify.yml` runs `check` on every pull request; `.github/workflows/ci.yml` runs `check :proxy-core:distZip` and publishes the Maven modules on pushes to `main`. Run `check` locally before pushing anyway: it is ~7 minutes and a red PR costs a round trip.
+`.github/workflows/verify.yml` runs `-Pluckperms check` and builds `client-mod/` on every pull request; `.github/workflows/ci.yml` runs `-Pluckperms check release`, uploads `build/release/` and publishes the Maven modules on pushes to `main`. Run `-Pluckperms check` locally before pushing anyway when the change can affect it: a red PR costs a round trip.
 
 ## Modules
 
 - `proxy-core` — the proxy runtime (`dev.moonbridge.app` = startup/config, `dev.moonbridge.core.*` = everything else). The only module that uses Netty.
 - `proxy-plugin-api` — the stable plugin boundary. Plugins are discovered with `META-INF/services/dev.moonbridge.api.Plugin` and loaded in separate class loaders by `PluginHost`.
-- `messaging-api`, `messaging-protocol`, `backend-channel-client`, `backend-bukkit-api`, `backend-bukkit` — backend side. These compile with `--release 8` (Java 8 backends such as Uranium) and must not pull in newer APIs.
-- `luckperms-moonbridge` — native LuckPerms platform plugin, built from `vendor/luckperms` via the included build `luckperms-moonbridge/upstream-build`. `proxy-core:check` depends on it (`permissionAcceptance`).
-- `proxy-build-logic` — Kotlin convention plugins shared by all modules.
+- `messaging` — message envelope, channel API and wire codec shared by the proxy and backends.
+- `backend` — the Bukkit/Uranium host plugin `MoonBridgeBackend` (its jar bundles `messaging`), its service API (`dev.moonbridge.bukkit`) and the control channel client (`dev.moonbridge.backendchannel`). Business plugins compile against this jar `compileOnly`.
+- `messaging` and `backend` use `moonbridge.java8-library-conventions` (`--release 8`, for Java 8 backends such as Uranium) and must not pull in newer APIs.
+- `luckperms-moonbridge` — native LuckPerms platform plugin, built from `vendor/luckperms` via the included build `luckperms-moonbridge/upstream-build`; only included with `-Pluckperms`.
+- `client-mod/` — the 1.7.10 Forge WebSocket client mod. A separate Gradle build (GTNH template, RetroFuturaGradle, Mixins) with its own wrapper: `cd client-mod && ./gradlew build`. Its `net` package is free of Minecraft classes and uses Minecraft's bundled Netty 4.0.10.
+- `proxy-build-logic` — Kotlin convention plugins: `java-library`, `java8-library`, `application`, and `publishing-conventions` (shared package repository; set `moonbridgePublication { artifactId ... }` for a standard publication).
 
 ## Architecture that spans files
 

@@ -18,18 +18,19 @@
 需要 JDK 25。发行包不包含 Minecraft 后端；要完成玩家登录，需要一个 Minecraft 1.7.10 后端，且 `initialRouting.servers` 中至少一个名称能解析到它（随附配置为 `lobby` → `127.0.0.1:25565`）。
 
 ```sh
-git submodule update --init --recursive
-bash ./gradlew check :proxy-core:installDist          # Windows: .\gradlew.bat check :proxy-core:installDist
+./gradlew check :proxy-core:installDist                # Windows: .\gradlew.bat check :proxy-core:installDist
 cd proxy-core/build/install/moonbridge
 bin/moonbridge --validate-config config/moonbridge.yml   # Windows: bin\moonbridge.bat
 bin/moonbridge --config config/moonbridge.yml
 ```
 
+需要全部部署物（服务器包、后端插件、客户端 mod）时运行 `./gradlew release`，说明见[发行物与安装位置](docs/release-layout.md)。LuckPerms 平台插件从 `vendor/luckperms` 子模块编译，默认不构建；需要时先 `git submodule update --init --recursive`，再加 `-Pluckperms`。
+
 默认配置为 `OFFLINE`，仅监听 `127.0.0.1:25577`。公开部署使用 `ONLINE_BUNGEE` 并限制玩家直连后端；认证、监听、入口候选和后端地址见[运行配置](docs/operations.md)。发行包根目录附带 `docs/` 与按日期归档的 `smoke/results/`、`benchmarks/results/`。
 
 ## 后端插件开发
 
-服务器安装 `moonbridge-backend-bukkit` JAR（插件名 `MoonBridgeBackend`）。业务插件对 `backend-bukkit-api` 使用 `compileOnly` / `provided`，并通过 `BukkitMessagingService` 获取共享消息服务；无需依赖宿主实现或创建网络连接。源码当前的 `0.1.0-SNAPSHOT` 仅是本地开发构件版本；发布依赖应使用发布工作流提供的不可变版本。API 与完整示例见[后端插件接入](docs/backend-channel-design.md#后端插件接入)。
+服务器安装 `moonbridge-backend` JAR（插件名 `MoonBridgeBackend`）。业务插件对同一个构件 `uk.potatolab.moonbridge:backend` 使用 `compileOnly` / `provided`，并通过 `BukkitMessagingService` 获取共享消息服务；无需创建网络连接。源码当前的 `0.1.0-SNAPSHOT` 仅是本地开发构件版本；发布依赖应使用发布工作流提供的不可变版本。API 与完整示例见[后端插件接入](docs/backend-channel-design.md#后端插件接入)。
 
 从 StrataProxy 升级见[迁移说明](docs/operations.md#从-strataproxy-迁移)；历史验收记录保留当时的名称与构件路径。
 

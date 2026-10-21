@@ -22,7 +22,7 @@
 
 MoonBridge 是破坏性改名，旧包名/API、启动程序和配置文件没有兼容别名。升级时将 `strataproxy` 启动程序改为 `moonbridge`、将 `strataproxy.yml` 迁移为 `moonbridge.yml`，并检查 `dev.strataproxy` Java 导入改为 `dev.moonbridge`。旧配置中的 `plugins.initialPlacementTimeoutSeconds` 改为 `initialRouting.timeoutSeconds`；首次登录入口应显式写入 `initialRouting.servers`，不要依赖注册顺序。
 
-后端宿主插件从 `StrataProxyBackend` 改为 `MoonBridgeBackend`。更新业务插件 `plugin.yml` 的 `depend`、安装新的宿主 JAR，并将旧插件配置迁移到新宿主插件的数据目录。消费者需重新编译；已删除的 `backendChannels()` API 应迁移到 `messaging()`，Bukkit 业务插件改用 `backend-bukkit-api` 提供的 `BukkitMessagingService`。迁移后的依赖和宿主接法见[后端 Channel 接入](backend-channel-design.md#后端插件接入)。
+后端宿主插件从 `StrataProxyBackend` 改为 `MoonBridgeBackend`。更新业务插件 `plugin.yml` 的 `depend`、安装新的宿主 JAR，并将旧插件配置迁移到新宿主插件的数据目录。消费者需重新编译；已删除的 `backendChannels()` API 应迁移到 `messaging()`，Bukkit 业务插件改用 `backend` 构件提供的 `BukkitMessagingService`。迁移后的依赖和宿主接法见[后端 Channel 接入](backend-channel-design.md#后端插件接入)。
 
 ## 服务器列表
 
@@ -74,6 +74,6 @@ Docker 容器间的监听、服务名和地址配置见[配置与部署](backend
 - 登录、认证和协议：`proxy-core/src/test/java/dev/moonbridge/core/auth/` 与 `proxy-core/src/test/java/dev/moonbridge/core/protocol/`
 - 会话、断开、转服与缓冲：`proxy-core/src/test/java/dev/moonbridge/core/session/`，重点包括 `SessionTransferTest`、`SessionTransferDispatchTest`、`transfer/TransferFrameBufferTest`
 - 插件生命周期、访问检查和 API：`proxy-core/src/test/java/dev/moonbridge/core/plugin/PluginHostTest.java`、`proxy-core/src/test/java/dev/moonbridge/core/session/ProxySessionListenerTest.java`、`proxy-core/src/test/java/dev/moonbridge/app/ProxyConfigurationTest.java` 与 `proxy-plugin-api/src/test/`
-- 控制通道：`proxy-core/src/test/java/dev/moonbridge/core/control/` 与 `backend-channel-client/src/test/`
+- 控制通道：`proxy-core/src/test/java/dev/moonbridge/core/control/` 与 `backend/src/test/`
 
 仓库另有本地 Uranium 协议探针和 Prism Forge 客户端记录，见 [`smoke/results`](../smoke/results/2026-09-25-local-uranium.md)、[转服记录](../smoke/results/2026-09-25-local-uranium-transfer.md) 和 [真实客户端记录](../smoke/results/2026-09-25-prism-forge-client.md)。这些记录支持其明确写出的单机环境、软件版本和探针路径。已知也出现过真实 Forge 客户端转服候选后端登录停滞，见[调查记录](../smoke/results/2026-09-26-uranium-login-stalls.md)；已有成功样例不构成稳定性或生产验收。
