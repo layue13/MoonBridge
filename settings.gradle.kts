@@ -27,15 +27,19 @@ dependencyResolutionManagement {
 
 rootProject.name = "moonbridge"
 
-includeBuild("luckperms-moonbridge/upstream-build")
-
 include(
     "proxy-core",
     "proxy-plugin-api",
-    "backend-channel-client",
-    "messaging-api",
-    "messaging-protocol",
-    "backend-bukkit",
-    "backend-bukkit-api",
-    "luckperms-moonbridge",
+    "messaging",
+    "backend",
 )
+
+// The LuckPerms platform plugin compiles LuckPerms itself from the vendor/luckperms submodule, which is
+// slow and pulls a large dependency tree, so it is opt-in: pass -Pluckperms (CI and release builds do).
+if (providers.gradleProperty("luckperms").map { it != "false" }.getOrElse(false)) {
+    check(file("vendor/luckperms/build.gradle").isFile) {
+        "-Pluckperms needs the LuckPerms sources: run git submodule update --init --recursive"
+    }
+    includeBuild("luckperms-moonbridge/upstream-build")
+    include("luckperms-moonbridge")
+}

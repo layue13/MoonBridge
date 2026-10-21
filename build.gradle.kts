@@ -10,15 +10,17 @@ allprojects {
     version = releaseVersion
 }
 
+val luckPerms = findProject(":luckperms-moonbridge")
+val published = listOfNotNull(":proxy-plugin-api", ":messaging", ":backend", luckPerms?.path)
+
 tasks.register("check") {
     group = "verification"
-    dependsOn(":proxy-plugin-api:check", ":messaging-api:check", ":messaging-protocol:check",
-        ":backend-channel-client:check", ":backend-bukkit-api:check", ":backend-bukkit:check", ":proxy-core:check",
-        ":luckperms-moonbridge:check")
+    description = "Runs every module's checks (add -Pluckperms to include the LuckPerms plugin)."
+    dependsOn(subprojects.map { "${it.path}:check" })
 }
 
 tasks.register("publish") {
     group = "publishing"
-    dependsOn(":proxy-plugin-api:publish", ":messaging-api:publish", ":messaging-protocol:publish",
-        ":backend-channel-client:publish", ":backend-bukkit-api:publish", ":backend-bukkit:publish", ":luckperms-moonbridge:publish")
+    description = "Publishes the Maven modules (CI passes -Pluckperms so the LuckPerms plugin is included)."
+    dependsOn(published.map { "$it:publish" })
 }
