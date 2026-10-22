@@ -1,5 +1,8 @@
 package dev.moonbridge.core.control;
 
+import dev.moonbridge.core.log.LogText;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import dev.moonbridge.app.ProxyConfiguration;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.core.backend.BackendHandle;
@@ -21,6 +24,7 @@ import static dev.moonbridge.core.control.ControlProtocol.*;
 
 /** Backend leases: who is registered, on which connection, until when. All state is guarded by one lock. */
 final class LeaseRegistry {
+    private static final Logger LOGGER = LoggerFactory.getLogger("moonbridge.servers");
     private final ProxyConfiguration.BackendChannel configuration;
     private final BackendCatalog catalog;
     private final BooleanSupplier closed;
@@ -99,7 +103,11 @@ final class LeaseRegistry {
         synchronized (lock) {
             long now = System.nanoTime();
             for (Lease lease : java.util.List.copyOf(byInstance.values())) {
-                if (lease.expiresAtNanos <= now) removeLease(lease);
+                if (lease.expiresAtNanos <= now) {
+                    LOGGER.info("Control-channel lease for server {} (instance {}) expired without a heartbeat",
+                            LogText.clean(lease.name), LogText.clean(lease.instanceId));
+                    removeLease(lease);
+                }
             }
         }
     }

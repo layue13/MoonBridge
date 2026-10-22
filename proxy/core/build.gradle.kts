@@ -88,6 +88,7 @@ if (luckPerms != null) {
         dependsOn(tasks.named("installDist"), compilePermissionAcceptance)
         classpath = sourceSets.main.get().runtimeClasspath + files(compilePermissionAcceptance.flatMap { it.destinationDirectory })
         mainClass.set("PermissionAcceptance")
+        systemProperty("moonbridge.logDir", layout.buildDirectory.dir("permission-acceptance/logs").get().asFile.absolutePath)
         args(layout.buildDirectory.dir("install/moonbridge").get().asFile.absolutePath,
             layout.buildDirectory.dir("permission-acceptance").get().asFile.absolutePath)
     }

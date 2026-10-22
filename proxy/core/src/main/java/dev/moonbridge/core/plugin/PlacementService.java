@@ -1,5 +1,6 @@
 package dev.moonbridge.core.plugin;
 
+import dev.moonbridge.core.log.Overload;
 import dev.moonbridge.api.InitialPlacementHandler;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.PlayerView;
@@ -137,6 +138,7 @@ final class PlacementService {
                 if (decided.get()) callbacks.remove(invocation);
             }
         } catch (RejectedExecutionException overloaded) {
+            Overload.rejected("initial placement");
             if (decided.compareAndSet(false, true)) {
                 result.completeExceptionally(new PluginOverloadedException(overloaded));
             }

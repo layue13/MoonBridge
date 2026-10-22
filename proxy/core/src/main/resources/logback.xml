@@ -1,11 +1,32 @@
 <configuration>
+    <!-- docs/logging.md describes what is logged at each level. Log files live in ./logs next to moonbridge.jar;
+         start with -Dmoonbridge.logDir=/var/log/moonbridge to put them elsewhere. -->
+    <property name="LOG_DIR" value="${moonbridge.logDir:-logs}" />
+    <property name="PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n" />
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <pattern>${PATTERN}</pattern>
         </encoder>
     </appender>
+
+    <!-- logs/latest.log is today's log; earlier days are kept compressed as logs/yyyy-MM-dd.log.gz for 14 days. -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/latest.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+        </encoder>
+    </appender>
+
     <logger name="io.netty" level="WARN" />
     <root level="INFO">
         <appender-ref ref="CONSOLE" />
+        <appender-ref ref="FILE" />
     </root>
 </configuration>

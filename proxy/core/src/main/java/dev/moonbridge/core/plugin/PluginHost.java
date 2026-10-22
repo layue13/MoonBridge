@@ -240,6 +240,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 } finally {
                     loaded.context.endEventRegistration();
                 }
+                LOGGER.info("Plugin {} enabled", loaded.owner.id());
             }
             selectPermissionProvider();
             events.freeze();
@@ -377,6 +378,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         Thread.ofVirtual().name("moonbridge-plugin-disable-" + loaded.owner.id()).start(stop);
         try {
             stop.get(remaining, TimeUnit.NANOSECONDS);
+            LOGGER.info("Plugin {} disabled", loaded.owner.id());
         } catch (TimeoutException timeout) {
             stop.cancel(true);
             LOGGER.warn("Plugin {} onDisable exceeded shutdown deadline", loaded.owner.id());

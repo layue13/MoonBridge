@@ -1,0 +1,12 @@
+<configuration>
+    <!-- Tests log to the console only, so a test run never writes log files into the source tree. -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <logger name="io.netty" level="WARN" />
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>

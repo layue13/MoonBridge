@@ -55,6 +55,9 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import dev.moonbridge.api.TransferStatus;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Mutable session control state is confined to the frontend event loop. */
 @ChannelHandler.Sharable
@@ -79,6 +82,9 @@ final class Session extends ChannelInboundHandlerAdapter {
     private final TransitionBuffer transitionBuffer =
             new TransitionBuffer(MAX_TRANSITION_BUFFER_FRAMES, MAX_TRANSITION_BUFFER_BYTES);
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Why the session ended, for the operator log; the first reason recorded wins. */
+    private final AtomicReference<String> endReason = new AtomicReference<>();
+    private long publishedAtNanos;
     private boolean frontendPlayPhase;
     private volatile boolean disconnecting;
     private TabCompletionBridge tabCompletion;
@@ -96,8 +102,8 @@ final class Session extends ChannelInboundHandlerAdapter {
     Session(ProxySessionListener owner, Channel frontend) {
         this.owner = owner;
         this.frontend = frontend;
-        this.login = new FrontendLogin(owner, frontend, this::closePair, () -> closed.get() || disconnecting,
-                this::beginLogin);
+        this.login = new FrontendLogin(owner, frontend, this::closePair, this::closeBecause,
+                () -> closed.get() || disconnecting, this::beginLogin);
         this.router = new InitialRouter(owner, frontend, () -> closed.get() || disconnecting,
                 new InitialRouter.Listener() {
                     @Override public void connected(Channel channel, BackendView target) {
@@ -145,7 +151,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         } catch (RuntimeException failure) {
             LOGGER.debug("Closing session after {} frame handling failed",
                     ctx.channel() == frontend ? "client" : "backend", failure);
-            closePair();
+            closeBecause(ctx.channel() == frontend ? "client sent an invalid packet" : "server sent an invalid packet");
         } finally {
             packet.release();
         }
@@ -154,7 +160,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void beginLogin(UUID uuid, String username) {
         identity = new PlayerIdentity(uuid, owner.allocateConnectionId());
         if (!owner.claimIdentity(uuid, this)) {
-            closePair();
+            closeBecause("this account is already connected");
             return;
         }
         identityClaimed = true;
@@ -271,6 +277,7 @@ final class Session extends ChannelInboundHandlerAdapter {
     private void disconnectLogin(String reason) { disconnectLogin(Component.text(reason)); }
 
     private void disconnectLogin(Component message) {
+        endBecause(PlainTextComponentSerializer.plainText().serialize(message));
         String reason;
         try { reason = MinecraftText.encodeReason(message); }
         catch (RuntimeException invalid) {
@@ -290,7 +297,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                     if (login.loginStart() != null && !loginDisconnectStarted && !published) {
                         disconnectLogin("Login timed out.");
                     } else {
-                        closePair();
+                        closeBecause("timed out");
                     }
                 },
                 timeout.toNanos(), TimeUnit.NANOSECONDS);
@@ -302,10 +309,11 @@ final class Session extends ChannelInboundHandlerAdapter {
         int id = ProtocolVarInt.read(input);
         if (id == 1) { // Encryption Request means backend is not in offline mode.
             LOGGER.debug("Backend requested encryption for player {}", view.username());
-            closePair();
+            closeBecause("server " + selected.handle().id().value() + " is in online mode; backends must run offline behind the proxy");
             return;
         }
         if (id == 0) { // Login Disconnect.
+            endBecause("kicked by server " + selected.handle().id().value() + " during login");
             loginDisconnectStarted = true;
             disconnecting = true;
             if (tabCompletion != null) tabCompletion.close();
@@ -317,20 +325,20 @@ final class Session extends ChannelInboundHandlerAdapter {
         }
         if (id != 2 || published) {
             LOGGER.debug("Unexpected backend login packet {} for player {}", id, view.username());
-            closePair();
+            closeBecause("server sent an unexpected login packet");
             return;
         }
         MinecraftLoginSuccess success = MinecraftLoginSuccess.decode(packet);
         if (!success.username().equals(view.username())) {
             LOGGER.debug("Backend login name mismatch for player {}: {}", view.username(), success.username());
-            closePair();
+            closeBecause("server reported a different player name");
             return;
         }
         UUID expected = owner.onlineMode() ? login.verifiedProfile().uuid()
                 : UUID.nameUUIDFromBytes(("OfflinePlayer:" + success.username()).getBytes(StandardCharsets.UTF_8));
         if (!expected.equals(success.playerId())) {
             LOGGER.debug("Backend login UUID mismatch for player {}", view.username());
-            closePair();
+            closeBecause("server reported a different player UUID; check its forwarding settings");
             return;
         }
         allowFrontendPlayFrames();
@@ -338,7 +346,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         keepAlives = new KeepAliveBridge.State();
         if (initialLoginDeadline != null) initialLoginDeadline.cancel(false);
         initialPlayDeadline = frontend.eventLoop().schedule(() -> {
-            if (!closed.get() && !playObservation.ready().isDone()) closePair();
+            if (!closed.get() && !playObservation.ready().isDone()) closeBecause("server did not finish the join in time");
         }, owner.initialPlayTimeout().toNanos(), TimeUnit.NANOSECONDS);
         playObservation.ready().whenComplete((ignored, failure) -> {
             if (closed.get()) return;
@@ -349,7 +357,10 @@ final class Session extends ChannelInboundHandlerAdapter {
         });
         view = new PlayerView(identity, view.username(), selected.handle().id().value());
         published = true;
+        publishedAtNanos = System.nanoTime();
         owner.sessionPublished();
+        owner.connectionLog().connected(view.username(), identity.playerId(), SessionChannels.clientAddress(frontend),
+                SessionChannels.isWebSocket(frontend), selected.handle().id().value());
         owner.serverConnected(view, Optional.empty());
         if (closed.get() || disconnecting) return;
         relayStarting = true;
@@ -502,6 +513,9 @@ final class Session extends ChannelInboundHandlerAdapter {
                 if (pipeline.get("minecraft-frame-encoder") != null) pipeline.remove("minecraft-frame-encoder");
                 if (pipeline.get("session-lifecycle") == null) pipeline.addLast("session-lifecycle", new ChannelInboundHandlerAdapter() {
                     @Override public void channelInactive(ChannelHandlerContext ctx) {
+                        // The side whose close reaches this handler first is the one that ended the session.
+                        if (ctx.channel() == frontend) endBecause("client disconnected");
+                        else if (ctx.channel() == backend) endBecause("server closed the connection");
                         if (ctx.channel() == frontend || (ctx.channel() == backend
                                 && (relay == null || !relay.hasPendingClientboundWrites()))) closePair();
                         ctx.fireChannelInactive();
@@ -511,7 +525,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                         if (ctx.channel() == backend && relay != null && relay.hasPendingClientboundWrites()) {
                             ctx.close();
                         } else if (ctx.channel() == frontend || ctx.channel() == backend) {
-                            closePair();
+                            closeBecause(ctx.channel() == frontend ? "client connection error" : "server connection error");
                         }
                     }
                 });
@@ -529,7 +543,35 @@ final class Session extends ChannelInboundHandlerAdapter {
                 backendName, backendEpoch);
     }
 
-    CompletionStage<TransferResult> transferTo(String backendName) { return transfers.transferTo(backendName); }
+    CompletionStage<TransferResult> transferTo(String backendName) {
+        return transfers.transferTo(backendName).whenComplete((result, failure) -> {
+            // A move that happened is logged at cutover; here only a move that did not, while the player stays.
+            if (closed.get() || disconnecting || !published) return;
+            if (result != null && result.status() == TransferStatus.NETWORK_READY) return;
+            String reason = failure != null ? "transfer failed"
+                    : result.detail().orElse(result.status().name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
+            owner.connectionLog().moveFailed(view.username(), backendName, reason, view.currentServer().orElse(null));
+        });
+    }
+
+    /** Records why the session is ending, if nothing earlier did. */
+    void endBecause(String reason) { endReason.compareAndSet(null, reason); }
+
+    void closeBecause(String reason) {
+        endBecause(reason);
+        closePair();
+    }
+
+    private void logEnd() {
+        String reason = endReason.get();
+        if (published) {
+            owner.connectionLog().left(view.username(), view.currentServer().orElse(null),
+                    Duration.ofNanos(System.nanoTime() - publishedAtNanos), reason == null ? "connection closed" : reason);
+        } else if (login.loginStart() != null) {
+            owner.connectionLog().loginFailed(login.loginStart().username(), SessionChannels.clientAddress(frontend),
+                    reason == null ? "connection closed during login" : reason);
+        }
+    }
 
     void closePair() {
         if (!closed.compareAndSet(false, true)) return;
@@ -556,6 +598,7 @@ final class Session extends ChannelInboundHandlerAdapter {
                 owner.releasePermissions(identity);
                 owner.releaseIdentity(identity.playerId(), this);
             }
+            logEnd();
             if (published) {
                 owner.sessionUnpublished();
                 owner.playerDisconnected(view);
@@ -590,6 +633,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             disconnectLogin("Selected server closed during login.");
             return;
         }
+        endBecause(ctx.channel() == frontend ? "client disconnected" : "server closed the connection");
         if (ctx.channel() != backend || !loginDisconnectStarted) closePair();
     }
 
@@ -601,7 +645,7 @@ final class Session extends ChannelInboundHandlerAdapter {
         LOGGER.debug("{} channel exception for player {}", ctx.channel() == frontend ? "Client" : "Backend",
                 view == null ? "<unknown>" : view.username(), cause);
         if (ctx.channel() == backend && loginDisconnectStarted) ctx.close();
-        else closePair();
+        else closeBecause(ctx.channel() == frontend ? "client connection error" : "server connection error");
     }
 
     Optional<PlayerView> onlineView() {
@@ -651,6 +695,7 @@ final class Session extends ChannelInboundHandlerAdapter {
             playObservation = observation;
             relay = link;
             view = new PlayerView(identity, view.username(), selected.handle().id().value());
+            owner.connectionLog().moved(view.username(), previousServer.orElse(null), selected.handle().id().value());
             owner.serverConnected(view, previousServer);
         }
     }

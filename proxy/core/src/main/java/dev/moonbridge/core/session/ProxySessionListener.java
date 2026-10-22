@@ -1,5 +1,7 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.log.ConnectionLog;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import dev.moonbridge.core.session.channel.SessionChannels;
 import dev.moonbridge.core.session.channel.SessionFrameEncoder;
 import dev.moonbridge.core.websocket.WebSocketFrontend;
@@ -84,6 +86,7 @@ public final class ProxySessionListener implements Players {
     private volatile Map<String, byte[]> sessionBindingSecrets = Map.of();
     private final AtomicInteger onlineCount = new AtomicInteger();
     private final AtomicInteger connectionCount = new AtomicInteger();
+    private volatile ConnectionLog connectionLog = new ConnectionLog(true);
     private volatile Function<PlayerView, CompletionStage<Optional<PlacementDecision>>> placement;
     private List<String> initialServers = List.of();
     private boolean initialServersConfigured;
@@ -310,6 +313,14 @@ public final class ProxySessionListener implements Players {
 
     ServerListStatus serverListStatus() { return serverListStatus; }
 
+    /** Sets how player events are logged, notably whether player addresses appear; defaults to showing them. */
+    public synchronized void setConnectionLog(ConnectionLog log) {
+        if (started || closed) throw new IllegalStateException("Connection log must be configured before listener start");
+        connectionLog = Objects.requireNonNull(log, "log");
+    }
+
+    ConnectionLog connectionLog() { return connectionLog; }
+
     /** Installs the plugin event runtime before start; events without subscribers skip dispatch. */
     public synchronized void setEvents(EventDispatcher events, Duration timeout) {
         if (started || closed || this.events != null) {
@@ -432,6 +443,7 @@ public final class ProxySessionListener implements Players {
     /** Serializes admission with close() so every accepted session is either closed or rejected. */
     private synchronized Session registerSession(Channel channel) {
         if (closed || connectionCount.get() >= maxConnections) {
+            if (!closed) ConnectionLog.connectionLimitReached();
             channel.close();
             return null;
         }
@@ -479,6 +491,7 @@ public final class ProxySessionListener implements Players {
         if (session == null || !session.matchesIdentity(identity)) {
             return CompletableFuture.completedFuture(DisconnectResult.NOT_CONNECTED);
         }
+        session.endBecause("disconnected by a plugin: " + PlainTextComponentSerializer.plainText().serialize(reason));
         return session.disconnectEncoded(encoded);
     }
 
@@ -491,7 +504,7 @@ public final class ProxySessionListener implements Players {
         if (current != null) current.close();
         Channel webSocket = webSocketListener;
         if (webSocket != null) webSocket.close();
-        allSessions.forEach(Session::closePair);
+        allSessions.forEach(session -> session.closeBecause("proxy shutting down"));
         backendResolver.close();
         shutdown = new CompletableFuture<>();
         boss.shutdownGracefully().addListener(first -> workers.shutdownGracefully().addListener(second -> {

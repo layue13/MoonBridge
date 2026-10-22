@@ -1,5 +1,6 @@
 package dev.moonbridge.core.plugin;
 
+import dev.moonbridge.core.log.Overload;
 import dev.moonbridge.api.event.Event;
 
 import java.time.Duration;
@@ -61,6 +62,7 @@ final class AsyncEventDispatcher implements AutoCloseable {
             if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is closed"));
             if (listeners.isEmpty()) return CompletableFuture.completedFuture(policy.defaultResult().get());
             if (pending.size() >= policy.maxPending()) {
+                Overload.rejected("plugin event");
                 return CompletableFuture.failedFuture(new PluginOverloadedException(
                         new RejectedExecutionException("pending event limit reached")));
             }
@@ -164,6 +166,7 @@ final class AsyncEventDispatcher implements AutoCloseable {
                 if (settled.get() && workers.remove(task)) task.cancel(false);
             } catch (RejectedExecutionException overloaded) {
                 invocation.compareAndSet(task, null);
+                Overload.rejected("plugin event");
                 fail(new PluginOverloadedException(overloaded));
             }
         }

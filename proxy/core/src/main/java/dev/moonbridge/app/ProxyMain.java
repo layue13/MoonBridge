@@ -4,6 +4,7 @@ import dev.moonbridge.core.session.channel.NetworkTransport;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 import dev.moonbridge.core.control.BackendControlService;
 import dev.moonbridge.core.auth.MojangSessionVerifier;
+import dev.moonbridge.core.log.ConnectionLog;
 import dev.moonbridge.core.plugin.PluginHost;
 import dev.moonbridge.core.session.ProxySessionListener;
 import org.slf4j.Logger;
@@ -80,6 +81,9 @@ public final class ProxyMain {
     private static void runProxy(Path configPath) throws Exception {
         var loader = new ProxyConfigurationLoader();
         var configuration = loader.load(configPath);
+        String version = ProxyMain.class.getPackage().getImplementationVersion();
+        LOGGER.info("Starting MoonBridge {} on Java {} with {} authentication", version == null ? "development" : version,
+                Runtime.version(), configuration.authentication());
         UUID proxyEpoch = UUID.randomUUID();
         var serverListStatus = loader.loadServerListStatus(configuration, configPath);
         var webSocket = loader.loadWebSocket(configuration, configPath);
@@ -103,6 +107,7 @@ public final class ProxyMain {
         listener.setSessionBinding(proxyEpoch, sessionBindingSecrets(configuration));
         listener.setServerListStatus(serverListStatus);
         listener.setInitialServers(configuration.initialRouting().servers());
+        listener.setConnectionLog(new ConnectionLog(configuration.logging().playerAddresses()));
         if (webSocket != null) listener.setWebSocket(configuration.websocket().listenAddress(), webSocket);
         try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout, proxyEpoch);
              var control = configuration.backendChannel() == null ? null
@@ -122,11 +127,15 @@ public final class ProxyMain {
             listener.setCommandVisibility(plugins::commandVisible);
             var serverChannel = listener.start().toCompletableFuture().join();
             LOGGER.info("Listening on {}", serverChannel.localAddress());
+            LOGGER.info("Ready: {} server(s) in the catalog, {} plugin(s) enabled, backend control channel {}",
+                    catalog.snapshot().size(), configuration.plugins().enabled().size(),
+                    control == null ? "off" : "on " + configuration.backendChannel().listen());
             if (webSocket != null) {
                 LOGGER.info("Listening for WebSocket{} on {}{}", webSocket.tls() == null ? "" : " (TLS)",
                         listener.webSocketChannel().localAddress(), webSocket.path());
             }
             var shutdown = new Thread(() -> {
+                LOGGER.info("Shutting down with {} player(s) online", listener.online().size());
                 try {
                     listener.close().toCompletableFuture().join();
                 } finally {
@@ -134,7 +143,10 @@ public final class ProxyMain {
                         if (control != null) control.close();
                     } finally {
                         try { plugins.close(); }
-                        finally { if (verifierWorkers != null) verifierWorkers.shutdownNow(); }
+                        finally {
+                            if (verifierWorkers != null) verifierWorkers.shutdownNow();
+                            LOGGER.info("Stopped");
+                        }
                     }
                 }
             }, "moonbridge-shutdown");

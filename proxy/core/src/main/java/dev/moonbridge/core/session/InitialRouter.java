@@ -1,5 +1,6 @@
 package dev.moonbridge.core.session;
 
+import dev.moonbridge.core.log.ConnectionLog;
 import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendView;
@@ -110,6 +111,7 @@ final class InitialRouter {
             connect = bootstrap.connect(SessionChannels.socketAddress(target.address()));
         } catch (RuntimeException failure) {
             LOGGER.debug("Initial backend dial could not start for {} to {}", username, target.address(), failure);
+            ConnectionLog.serverUnreachable(target.handle().id().value(), target.address());
             dialNext();
             return;
         }
@@ -133,6 +135,7 @@ final class InitialRouter {
         if (!connect.isSuccess()) {
             LOGGER.debug("Initial backend connection failed for player {} to {}", username, target.address(),
                     connect.cause());
+            ConnectionLog.serverUnreachable(target.handle().id().value(), target.address());
             retry(connect);
             return;
         }
@@ -148,6 +151,7 @@ final class InitialRouter {
         }
         dialing = null;
         candidates = List.of();
+        ConnectionLog.serverReachable(current.handle().id().value());
         listener.connected(connect.channel(), current);
     }
 

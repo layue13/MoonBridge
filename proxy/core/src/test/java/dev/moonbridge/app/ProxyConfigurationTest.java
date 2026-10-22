@@ -404,6 +404,20 @@ final class ProxyConfigurationTest {
     }
 
     @Test
+    void playerAddressesAreLoggedUnlessTurnedOff() throws Exception {
+        var config = Files.createTempFile("moonbridge-logging", ".yml");
+        try {
+            String base = "listen: \"127.0.0.1:25577\"\nauthentication: OFFLINE\nbackends: []\n";
+            Files.writeString(config, base);
+            assertTrue(new ProxyConfigurationLoader().load(config).logging().playerAddresses());
+            Files.writeString(config, base + "logging:\n  playerAddresses: false\n");
+            assertEquals(false, new ProxyConfigurationLoader().load(config).logging().playerAddresses());
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
     void validateConfigRejectsConflictingSecretsForOneBackendName() throws Exception {
         var config = Files.createTempFile("moonbridge-conflicting-secrets", ".yml");
         try {
