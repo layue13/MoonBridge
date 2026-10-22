@@ -1047,13 +1047,16 @@ class PluginHostTest {
     void placementFailuresOnlyFailTheirOwnRequest() {
         RecoveringPlacementPlugin plugin = new RecoveringPlacementPlugin();
         BackendCatalog catalog = new InMemoryBackendCatalog();
-        PluginHost host = new PluginHost(catalog, players(), Duration.ofMillis(40));
+        // The timeout has to outlast dispatch to the plugin worker even on a loaded CI machine; with 40 ms it could
+        // fire before the handler ran, leaving nothing to cancel and shifting every later call by one.
+        PluginHost host = new PluginHost(catalog, players(), Duration.ofMillis(500));
         host.load(List.of(plugin));
         host.enable();
 
         CompletionException failure = assertThrows(CompletionException.class,
                 () -> host.placeInitial(PLAYER).toCompletableFuture().join());
         assertInstanceOf(PlacementTimeoutException.class, failure.getCause());
+        assertEquals(1, plugin.calls.get(), "the timed-out request must have reached the plugin");
         assertTrue(plugin.firstDecision.isCancelled(), "timed-out placement should cancel unfinished plugin work");
         assertTrue(catalog.find(new dev.moonbridge.core.backend.BackendId("placement")).isPresent());
         CompletionException transientFailure = assertThrows(CompletionException.class,

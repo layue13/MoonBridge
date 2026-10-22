@@ -92,12 +92,12 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
     }
 
     static ProofProperty stripForwardedProof(Player player) {
-        Object profile = invokeNoArg(player, "getProfile");
-        if (profile == null) profile = invokeNoArg(player, "getGameProfile");
+        Object profile = invoke(player, GET_PROFILE);
+        if (profile == null) profile = invoke(player, GET_GAME_PROFILE);
         if (profile == null) return ProofProperty.unavailable();
-        Object properties = invokeNoArg(profile, "getProperties");
+        Object properties = invoke(profile, GET_PROPERTIES);
         if (properties == null) return ProofProperty.unavailable();
-        Object matches = invoke(properties, "get", new Class<?>[]{Object.class}, ForwardedSessionProof.PROPERTY_NAME);
+        Object matches = invoke(properties, MULTIMAP_GET, ForwardedSessionProof.PROPERTY_NAME);
         if (!(matches instanceof Iterable<?>)) return ProofProperty.unavailable();
         Collection<Object> propertiesToRemove = new java.util.ArrayList<Object>();
         Collection<String> values = new java.util.ArrayList<>(2);
@@ -105,40 +105,74 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         for (Object property : (Iterable<?>) matches) {
             if (property == null) return ProofProperty.failed(true);
             propertiesToRemove.add(property);
-            Object value = invokeNoArg(property, "getValue");
+            Object value = invoke(property, GET_VALUE);
             if (value instanceof String && ((String) value).length() <= 2048) values.add((String) value);
             else allValuesValid = false;
         }
         for (Object property : propertiesToRemove) {
-            Object removed = invoke(properties, "remove", new Class<?>[]{Object.class, Object.class},
-                    ForwardedSessionProof.PROPERTY_NAME, property);
+            Object removed = invoke(properties, MULTIMAP_REMOVE, ForwardedSessionProof.PROPERTY_NAME, property);
             if (!Boolean.TRUE.equals(removed)) return ProofProperty.failed(true);
         }
-        Object remaining = invoke(properties, "get", new Class<?>[]{Object.class},
-                ForwardedSessionProof.PROPERTY_NAME);
+        Object remaining = invoke(properties, MULTIMAP_GET, ForwardedSessionProof.PROPERTY_NAME);
         if (!(remaining instanceof Iterable<?>) || ((Iterable<?>) remaining).iterator().hasNext())
             return ProofProperty.failed(!propertiesToRemove.isEmpty());
         return ProofProperty.removed(propertiesToRemove.size() == 1 && allValuesValid && values.size() == 1
                 ? values.iterator().next() : null);
     }
 
-    private static Object invokeNoArg(Object receiver, String methodName) {
+    /**
+     * A public method this class calls reflectively: the GameProfile types differ between Bukkit builds, so the
+     * backend does not compile against them. Instances are lookup keys compared by identity.
+     */
+    private static final class MethodRef {
+        final String name;
+        final Class<?>[] parameterTypes;
+
+        MethodRef(String name, Class<?>... parameterTypes) {
+            this.name = name;
+            this.parameterTypes = parameterTypes;
+        }
+    }
+
+    private static final MethodRef GET_PROFILE = new MethodRef("getProfile");
+    private static final MethodRef GET_GAME_PROFILE = new MethodRef("getGameProfile");
+    private static final MethodRef GET_PROPERTIES = new MethodRef("getProperties");
+    private static final MethodRef GET_VALUE = new MethodRef("getValue");
+    private static final MethodRef MULTIMAP_GET = new MethodRef("get", Object.class);
+    private static final MethodRef MULTIMAP_REMOVE = new MethodRef("remove", Object.class, Object.class);
+
+    /**
+     * Lookups resolved once per receiver class, including misses, so a join does not search methods again. ClassValue
+     * keeps the cache from holding a reloaded plugin's classes.
+     */
+    private static final ClassValue<Map<MethodRef, Optional<Method>>> METHODS =
+            new ClassValue<Map<MethodRef, Optional<Method>>>() {
+                @Override protected Map<MethodRef, Optional<Method>> computeValue(Class<?> type) {
+                    return new ConcurrentHashMap<MethodRef, Optional<Method>>();
+                }
+            };
+
+    private static Object invoke(Object receiver, MethodRef reference, Object... args) {
         if (receiver == null) return null;
+        Map<MethodRef, Optional<Method>> methods = METHODS.get(receiver.getClass());
+        Optional<Method> method = methods.get(reference);
+        if (method == null) {
+            method = lookup(receiver.getClass(), reference);
+            methods.put(reference, method);
+        }
+        if (!method.isPresent()) return null;
         try {
-            Method method = receiver.getClass().getMethod(methodName);
-            return method.invoke(receiver);
+            return method.get().invoke(receiver, args);
         } catch (ReflectiveOperationException | RuntimeException unavailable) {
             return null;
         }
     }
 
-    private static Object invoke(Object receiver, String methodName, Class<?>[] parameterTypes, Object... args) {
-        if (receiver == null) return null;
+    private static Optional<Method> lookup(Class<?> type, MethodRef reference) {
         try {
-            Method method = receiver.getClass().getMethod(methodName, parameterTypes);
-            return method.invoke(receiver, args);
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return null;
+            return Optional.of(type.getMethod(reference.name, reference.parameterTypes));
+        } catch (NoSuchMethodException | RuntimeException unavailable) {
+            return Optional.empty();
         }
     }
 
