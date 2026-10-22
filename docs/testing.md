@@ -86,6 +86,8 @@ sh testing/smoke/container-channel.sh
 
 `-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../testing/benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../testing/benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
 
+`--websocket 1`（直接运行 Java 时）让代理阶段的客户端通过 `ws://` 连接代理的 WebSocket 监听器：完成升级后，客户端每次 flush 发送一条带掩码的二进制消息，读取时按 RFC 6455 拆出服务器消息的负载。直接阶段仍用 TCP 连接同一个模拟后端，所以代理/直连之比混入了 WebSocket 客户端自身的开销；比较 WebSocket 路径时以代理 I/O 线程每帧 CPU 为准。[2026-10-22 WebSocket 合并记录](../testing/benchmarks/results/2026-10-22-websocket-coalescing.md)用它比较了逐帧消息与按 flush 合并。
+
 原 stop-and-wait 小样本见 `testing/benchmarks/results/2026-09-25-proxy-session-benchmark-smoke.md`；Window 参数的小样本和 Window=1/16 重复测量见 `testing/benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 
 ## 后端宿主真实服务端验收

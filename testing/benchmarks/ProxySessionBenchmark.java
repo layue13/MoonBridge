@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 public final class ProxySessionBenchmark {
     private static final int IO_TIMEOUT_MILLIS = 30_000;
     private static final int SETUP_TIMEOUT_SECONDS = 20;
+    private static final String WEBSOCKET_PATH = "/mc";
 
     private ProxySessionBenchmark() { }
 
@@ -48,6 +49,7 @@ public final class ProxySessionBenchmark {
         int window = intArg(args, "window", 1);
         int commandInterceptor = intArg(args, "command-interceptor", 1);
         int burst = intArg(args, "burst", 1);
+        int webSocket = intArg(args, "websocket", 0);
         String mode = modeArg(args);
         var transport = dev.moonbridge.core.session.channel.NetworkTransport.select(
                 dev.moonbridge.core.session.channel.NetworkTransport.Preference.valueOf(
@@ -56,7 +58,8 @@ public final class ProxySessionBenchmark {
         if (connections < 1 || connections > 32 || messages < 1 || messages > 100_000
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
                 || repeats < 1 || repeats > 10 || window < 1 || window > 1024
-                || (commandInterceptor != 0 && commandInterceptor != 1) || burst < 1 || burst > 256) {
+                || (commandInterceptor != 0 && commandInterceptor != 1) || burst < 1 || burst > 256
+                || (webSocket != 0 && webSocket != 1)) {
             throw new IllegalArgumentException("bounds: connections 1..32, messages 1..100000, warmup 0..10000, "
                     + "payload 5..1048576, repeats 1..10, window 1..1024, burst 1..256");
         }
@@ -83,14 +86,26 @@ public final class ProxySessionBenchmark {
             proxy.setPlacement(player -> java.util.concurrent.CompletableFuture.completedFuture(
                     Optional.of(PlacementDecision.select("bench"))));
             if (commandInterceptor == 1) proxy.setCommandDispatcher((player, message, reply, admission) -> false);
+            if (webSocket == 1) {
+                proxy.setWebSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+                        new dev.moonbridge.core.websocket.WebSocketFrontend.Settings(WEBSOCKET_PATH, null,
+                                dev.moonbridge.core.websocket.ClientAddressPolicy.direct(), Duration.ofSeconds(10)));
+            }
             try {
-                int proxyPort = ((InetSocketAddress) proxy.start().toCompletableFuture()
+                int tcpPort = ((InetSocketAddress) proxy.start().toCompletableFuture()
                         .get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS).localAddress()).getPort();
+                // Proxy clients use the WebSocket listener when it is enabled; direct clients always use plain TCP,
+                // because the fake backend is a Minecraft TCP server.
+                int proxyPort = webSocket == 1
+                        ? ((InetSocketAddress) proxy.webSocketChannel().localAddress()).getPort() : tcpPort;
                 System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
                                 + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
-                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d transport=%s%n",
+                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d transport=%s "
+                                + "proxy_frontend=%s%n",
                         mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats,
-                        commandInterceptor, burst, transport.name());
+                        commandInterceptor, burst, transport.name(), webSocket == 1 ? "websocket" : "tcp");
+                if (webSocket == 1) System.out.println("Proxy clients connect over plain ws:// and send one masked binary "
+                        + "message per client flush; direct clients use TCP to the same fake backend.");
                 if (burst > 1) System.out.println("Each roundtrip writes " + burst + " frames in one client write; "
                         + "the fake backend echoes them with one flush. Window counts bursts.");
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
@@ -104,14 +119,14 @@ public final class ProxySessionBenchmark {
                 for (int round = 0; round < repeats; round++) {
                     if (proxyFirst) {
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst);
+                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst);
+                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
                     } else {
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst);
+                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst);
+                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
                     }
                     proxyFirst = !proxyFirst;
                 }
@@ -123,14 +138,15 @@ public final class ProxySessionBenchmark {
 
     private static void runPhase(String name, int port, int connections, int messages, int warmup, int window,
                                  byte[] playFrame, byte[] playPayload, ProxySessionListener proxy,
-                                 boolean afterTransfer, int burst) throws Exception {
+                                 boolean afterTransfer, int burst, boolean webSocket) throws Exception {
         List<ClientWorker> clients = new ArrayList<>();
         CountDownLatch prepared = new CountDownLatch(connections);
         CountDownLatch begin = new CountDownLatch(1);
         CountDownLatch finished = new CountDownLatch(connections);
         for (int i = 0; i < connections; i++) {
             ClientWorker client = new ClientWorker(name, i, port, messages, warmup, window, playFrame,
-                    playPayload, prepared, begin, finished, clients, proxy, afterTransfer, burst);
+                    playPayload, prepared, begin, finished, clients, proxy, afterTransfer, burst,
+                    webSocket && name.startsWith("proxy"));
             clients.add(client);
         }
         for (ClientWorker client : clients) {
@@ -197,6 +213,7 @@ public final class ProxySessionBenchmark {
         final ProxySessionListener proxy;
         final boolean afterTransfer;
         final int burst;
+        final boolean webSocket;
         volatile Exception failure;
         volatile Socket socket;
         long[] latencies;
@@ -204,11 +221,12 @@ public final class ProxySessionBenchmark {
 
         ClientWorker(String phase, int index, int port, int messages, int warmup, int window, byte[] playFrame,
                      byte[] playPayload, CountDownLatch prepared, CountDownLatch begin, CountDownLatch finished,
-                     List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer, int burst) {
+                     List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer, int burst,
+                     boolean webSocket) {
             this.phase = phase; this.index = index; this.port = port; this.messages = messages;
             this.warmup = warmup; this.window = window; this.playFrame = playFrame.clone(); this.playPayload = playPayload;
             this.prepared = prepared; this.begin = begin; this.finished = finished; this.peers = peers;
-            this.proxy = proxy; this.afterTransfer = afterTransfer; this.burst = burst;
+            this.proxy = proxy; this.afterTransfer = afterTransfer; this.burst = burst; this.webSocket = webSocket;
         }
 
         @Override public void run() {
@@ -217,8 +235,16 @@ public final class ProxySessionBenchmark {
                 socket.setTcpNoDelay(true);
                 socket.setSoTimeout(IO_TIMEOUT_MILLIS);
                 socket.connect(new InetSocketAddress("127.0.0.1", port), 5000);
-                DataInputStream input = new DataInputStream(socket.getInputStream());
-                DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+                DataInputStream input;
+                DataOutputStream output;
+                if (webSocket) {
+                    var streams = new WebSocketStreams(socket, port);
+                    input = new DataInputStream(streams.input);
+                    output = new DataOutputStream(streams.output);
+                } else {
+                    input = new DataInputStream(socket.getInputStream());
+                    output = new DataOutputStream(socket.getOutputStream());
+                }
                 String username = "B" + (phase.startsWith("proxy") ? "P" : "D") + index + "X";
                 sendHandshakeAndLogin(output, username);
                 readLoginSuccess(input, username);
@@ -294,6 +320,107 @@ public final class ProxySessionBenchmark {
         void closeSocket() {
             Socket current = socket;
             if (current != null) try { current.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    /**
+     * A minimal RFC 6455 client over a blocking socket, enough for the benchmark: the output buffers writes and sends
+     * them as one masked binary message per flush, as the client mod sends one message per vanilla write; the input
+     * yields the payload of the server's binary messages as one continuous byte stream.
+     */
+    private static final class WebSocketStreams {
+        final java.io.OutputStream output;
+        final java.io.InputStream input;
+
+        WebSocketStreams(Socket socket, int port) throws IOException {
+            var raw = new java.io.BufferedOutputStream(socket.getOutputStream(), 64 * 1024);
+            var in = new java.io.BufferedInputStream(socket.getInputStream(), 64 * 1024);
+            byte[] key = new byte[16];
+            new java.security.SecureRandom().nextBytes(key);
+            raw.write(("GET " + WEBSOCKET_PATH + " HTTP/1.1\r\nHost: 127.0.0.1:" + port + "\r\nUpgrade: websocket\r\n"
+                    + "Connection: Upgrade\r\nSec-WebSocket-Key: " + java.util.Base64.getEncoder().encodeToString(key)
+                    + "\r\nSec-WebSocket-Version: 13\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            raw.flush();
+            var response = new StringBuilder();
+            while (!response.toString().endsWith("\r\n\r\n")) {
+                int next = in.read();
+                if (next < 0) throw new EOFException("WebSocket upgrade response ended early");
+                response.append((char) next);
+            }
+            if (!response.toString().startsWith("HTTP/1.1 101")) {
+                throw new IOException("WebSocket upgrade refused: " + response.toString().lines().findFirst().orElse(""));
+            }
+            byte[] mask = new byte[4];
+            new java.util.Random(port).nextBytes(mask);
+            output = new java.io.OutputStream() {
+                private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
+
+                @Override public void write(int value) { pending.write(value); }
+                @Override public void write(byte[] bytes, int offset, int length) { pending.write(bytes, offset, length); }
+
+                @Override public void flush() throws IOException {
+                    if (pending.size() == 0) return;
+                    byte[] payload = pending.toByteArray();
+                    pending.reset();
+                    raw.write(0x82); // FIN, binary
+                    if (payload.length < 126) {
+                        raw.write(0x80 | payload.length);
+                    } else if (payload.length <= 0xFFFF) {
+                        raw.write(0x80 | 126);
+                        raw.write(payload.length >>> 8);
+                        raw.write(payload.length);
+                    } else {
+                        raw.write(0x80 | 127);
+                        for (int shift = 56; shift >= 0; shift -= 8) raw.write((int) ((long) payload.length >>> shift));
+                    }
+                    raw.write(mask);
+                    for (int i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+                    raw.write(payload);
+                    raw.flush();
+                }
+            };
+            input = new java.io.InputStream() {
+                private long remaining;
+
+                private boolean nextMessage() throws IOException {
+                    while (remaining == 0) {
+                        int first = in.read();
+                        if (first < 0) return false;
+                        int second = in.read();
+                        if (second < 0) throw new EOFException("WebSocket frame header ended early");
+                        int opcode = first & 0x0F;
+                        long length = second & 0x7F;
+                        if (length == 126) length = (in.read() << 8) | in.read();
+                        else if (length == 127) {
+                            length = 0;
+                            for (int i = 0; i < 8; i++) length = (length << 8) | in.read();
+                        }
+                        if ((second & 0x80) != 0) throw new IOException("server frames must not be masked");
+                        if (opcode == 0x8) return false;
+                        if (opcode == 0x2 || opcode == 0x0) {
+                            remaining = length;
+                        } else if (in.skip(length) != length) {
+                            throw new EOFException("WebSocket control frame ended early");
+                        }
+                    }
+                    return true;
+                }
+
+                @Override public int read() throws IOException {
+                    if (!nextMessage()) return -1;
+                    int value = in.read();
+                    if (value >= 0) remaining--;
+                    return value;
+                }
+
+                @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                    if (length == 0) return 0;
+                    if (!nextMessage()) return -1;
+                    int read = in.read(bytes, offset, (int) Math.min(length, remaining));
+                    if (read > 0) remaining -= read;
+                    return read;
+                }
+            };
         }
     }
 
@@ -536,7 +663,7 @@ public final class ProxySessionBenchmark {
         int found = fallback;
         boolean seen = false;
         List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window",
-                "mode", "command-interceptor", "burst", "transport");
+                "mode", "command-interceptor", "burst", "transport", "websocket");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);
