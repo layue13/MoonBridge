@@ -105,6 +105,12 @@ tasks.named<ShadowJar>("shadowJar") {
     }
 }
 
+tasks.processResources {
+    val pluginVersion = project.version.toString()
+    inputs.property("pluginVersion", pluginVersion)
+    filesMatching("META-INF/moonbridge-plugin.yml") { expand("version" to pluginVersion) }
+}
+
 tasks.jar { enabled = false }
 
 val pluginJar = tasks.register<Jar>("pluginJar") {

@@ -1,0 +1,4 @@
+# Lets other plugins declare `dependencies: [{ id: luckperms }]`; see docs/plugins.md.
+id: luckperms
+version: "${version}"
+main: dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin

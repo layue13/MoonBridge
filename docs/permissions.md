@@ -73,7 +73,7 @@ plugins:
       proxy-id: "proxy-1"
 ```
 
-插件数据位于 `plugins/data/dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin/`；LuckPerms 的存储与规则配置使用此目录中的配置文件。不要同时启用另一个权限提供者。
+该插件的描述文件 id 为 `luckperms`，也可以写成 `enabled: { luckperms: { proxy-id: "proxy-1" } }`；其他插件可以在 `dependencies` 中声明它，见[依赖其他插件](plugins.md#依赖其他插件)。插件数据位于 `plugins/data/dev.moonbridge.luckperms.LuckPermsMoonBridgePlugin/`；LuckPerms 的存储与规则配置使用此目录中的配置文件。不要同时启用另一个权限提供者。
 
 新配置默认使用共享 MariaDB 13.0.2，启用插件前需创建权限数据库并填写连接信息。单机开发与内部验收可显式选择 H2。首次启动会由 LuckPerms 自身的依赖管理器下载带固定校验值的运行库，缓存到数据目录的 `libs/`；离线部署应先在可联网环境完成启动并带上该缓存。插件 JAR 也作为 `uk.potatolab.moonbridge:luckperms-moonbridge` 发布，版本与同次构建的 MoonBridge API 一致。
 

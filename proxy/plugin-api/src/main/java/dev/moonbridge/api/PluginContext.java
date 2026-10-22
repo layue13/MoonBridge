@@ -22,6 +22,12 @@ public interface PluginContext {
 
     Events events();
 
+    /** Services this plugin offers to its dependents, and those its dependencies offer to it. */
+    PluginServices services();
+
+    /** The plugins loaded with a descriptor, including this one's own. */
+    Plugins plugins();
+
     /** Returns this plugin's lifecycle-owned message channel scope. */
     Messaging messaging();
 

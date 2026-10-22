@@ -10,6 +10,48 @@
 
 关闭或插件失败时，宿主移除该插件的事件订阅、后端与命令注册。关闭时，宿主先终止未决访问请求并停止接收新回调，再逆序调用 `onDisable()`。所有关闭钩子共享 10 秒期限；插件忽略中断时仍可能继续运行，因此插件必须自行停止数据库/调度器等资源。随后关闭类加载器。当前没有插件热卸载或热加载入口。
 
+## 依赖其他插件
+
+插件之间默认互相隔离：每个 JAR 有自己的类加载器，只能看到插件 API 和自己的类。要让一个插件使用另一个插件的类和服务，两边都在 JAR 中放一个 `META-INF/moonbridge-plugin.yml`：
+
+```yaml
+id: islands                 # 小写字母、数字和连字符，最多 64 个字符，全局唯一
+version: 1.2.0
+main: com.example.islands.IslandsPlugin
+dependencies:
+  - id: economy             # 必需：未安装或未在 plugins.enabled 中启用时启动失败
+  - id: luckperms
+    optional: true          # 可选：存在时先加载，不存在时忽略
+```
+
+- 有描述文件时以 `main` 为入口，不再读取该 JAR 的 `META-INF/services`；没有描述文件的插件照旧加载，但既不能依赖别人，也不能被依赖。
+- `plugins.enabled` 可以用 id（`islands:`）或实现类全名作键，同一个插件不能两种写法同时出现。数据目录仍按实现类全名，已有数据不需要迁移。
+- 加载顺序：依赖先于依赖它的插件执行 `onLoad` 和 `onEnable`，`onDisable` 反过来；互不依赖的插件保持 JAR 文件名顺序。
+- 启动时检查并给出准确原因后失败：`Plugin islands requires economy, which is not installed`、`… which is installed but not enabled in plugins.enabled`、`Plugin dependency cycle: a -> b -> a`、两个 JAR 使用同一 id、描述文件字段不合法（带 JAR 名和字段）。
+- 类可见性：先查插件 API、JDK 和日志等共享类，再查插件自己的 JAR 和 `addLibrary` 加入的库，最后查声明的依赖（以及依赖的依赖）。只有声明过的依赖可见，自带的库不会被其他插件的同名类替换。资源文件不共享。
+
+依赖方通过类型化服务取得对方的实现，而不是直接持有对方的 `Plugin` 实例。提供方发布接口，在 `onLoad` 中注册实现：
+
+```java
+// economy 插件
+public interface EconomyApi { long balance(UUID player); }
+
+@Override public void onLoad(PluginContext context) {
+    context.services().register(EconomyApi.class, new EconomyService());
+}
+
+// islands 插件：dependencies 中声明 economy
+EconomyApi economy = context.services().require(EconomyApi.class);
+context.plugins().find("luckperms").ifPresent(info -> context.logger().info("LuckPerms {}", info.version()));
+```
+
+- 每个类型只能有一个提供方；第二个插件注册同一类型时启动失败。
+- `find` / `require` 只能看到自己和依赖链上的插件注册的服务；没有声明依赖的插件即使能加载到同一类型（例如 JDK 接口）也查不到。
+- 服务随提供方停用自动注销，也可以用 `register` 返回的 `ServiceRegistration` 提前注销。依赖方先于依赖停用，所以不会在运行中看到依赖的服务消失。
+- `plugins()` 列出所有带描述文件的已加载插件（id、版本、声明的依赖），`self()` 是自己的描述。
+
+依赖方在构建时只需要对方的接口，例如 Gradle 中 `compileOnly("com.example:economy-api:1.0.0")`；不要把对方的类打进自己的 JAR，否则自带的副本会优先于依赖提供的类，两边的类型就不再是同一个。不需要共享类的松散协作继续用下文的 Channel 消息。原生 LuckPerms 平台插件的 id 是 `luckperms`。
+
 ## 玩家与后端
 
 - `Players.online()` 和 `find(PlayerIdentity)` 返回不可变 `PlayerView`。`PlayerIdentity` 同时包含玩家 UUID 和本次连接代次；异步转服要保留这个完整身份，不能用旧连接去操作重连后的玩家。
