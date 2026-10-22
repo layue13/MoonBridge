@@ -1,9 +1,12 @@
 package dev.moonbridge.core.session.channel;
 
+import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.MinecraftFrameDecoder;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
@@ -26,6 +29,22 @@ public final class SessionChannels {
             AttributeKey.valueOf(SessionChannels.class, "client-address");
 
     private SessionChannels() { }
+
+    /**
+     * Writes the backend handshake and Login Start, which takes ownership of {@code handshake}. The handshake is
+     * queued first, so if Login Start cannot be encoded, closing the channel releases it and the future fails.
+     */
+    public static ChannelFuture writeBackendLogin(Channel backend, ByteBuf handshake, String username) {
+        backend.write(handshake);
+        ByteBuf login;
+        try {
+            login = new LoginStart(username).encode(backend.alloc(), ProtocolProfile.minecraft1710());
+        } catch (RuntimeException failure) {
+            backend.close();
+            return backend.newFailedFuture(failure);
+        }
+        return backend.writeAndFlush(login);
+    }
 
     /** Records the player address a front proxy reported, for a frontend that is not a direct TCP peer. */
     public static void setClientAddress(Channel frontend, InetSocketAddress address) {

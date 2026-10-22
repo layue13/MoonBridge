@@ -4,6 +4,7 @@ import dev.moonbridge.app.ProxyConfiguration;
 import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
+import dev.moonbridge.messaging.protocol.ControlHandshakeLimits;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -30,11 +31,11 @@ final class RegistrationVerifier {
     RegistrationVerifier(ProxyConfiguration.BackendChannel configuration) { this.configuration = configuration; }
 
     Registration parse(DataInputStream input, byte[] nonce) throws Exception {
-        String instanceId = readString(input, 64);
-        String name = readString(input, 128);
-        String address = readString(input, 1024);
-        String generation = readString(input, 64);
-        String keyId = readString(input, 64);
+        String instanceId = readString(input, ControlHandshakeLimits.INSTANCE_ID_BYTES);
+        String name = readString(input, ControlHandshakeLimits.BACKEND_NAME_BYTES);
+        String address = readString(input, ControlHandshakeLimits.GAME_ADDRESS_BYTES);
+        String generation = readString(input, ControlHandshakeLimits.GENERATION_BYTES);
+        String keyId = readString(input, ControlHandshakeLimits.KEY_ID_BYTES);
         byte[] signature = input.readNBytes(32);
         if (signature.length != 32) throw new EOFException();
         requireEmpty(input);

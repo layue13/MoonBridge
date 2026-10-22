@@ -8,6 +8,7 @@ import dev.moonbridge.messaging.MessagingException;
 import dev.moonbridge.messaging.PublishResult;
 import dev.moonbridge.messaging.SendResult;
 import dev.moonbridge.messaging.internal.LocalMessaging;
+import dev.moonbridge.messaging.protocol.ControlHandshakeLimits;
 import dev.moonbridge.messaging.protocol.MessageCodec;
 
 import static dev.moonbridge.backendchannel.Failures.*;
@@ -35,6 +36,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Java 8-compatible reconnecting transport with process-local messaging scopes. */
 public final class BackendChannelClient implements AutoCloseable, LocalMessaging.Outbound {
@@ -43,6 +46,7 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
     public static final int MAX_WRITER_QUEUE = 128;
     public static final long MAX_WRITER_QUEUE_BYTES = 1024L * 1024L;
 
+    private static final Logger LOGGER = Logger.getLogger(BackendChannelClient.class.getName());
     private static final long DEFAULT_MESSAGE_TIMEOUT_MILLIS = 5000L;
     private static final long CLOSE_FLUSH_MILLIS = 100L;
     private static final long WRITE_COMPLETION_TIMEOUT_MILLIS = 5000L;
@@ -64,6 +68,19 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
     private volatile long epoch;
     private volatile UUID proxyEpoch = new UUID(0L, 0L);
     private final Thread connectionThread;
+    /** Where the last reported reconnect failure happened; only the connection thread touches it. */
+    private ConnectStage lastReportedFailure;
+
+    /** Fixed failure categories: the log never carries peer-controlled protocol details. */
+    private enum ConnectStage {
+        CONNECT("Cannot reach the MoonBridge proxy control port; retrying"),
+        REGISTER("MoonBridge proxy did not accept this backend's registration; check that instanceId, backendName, "
+                + "keyId and secret match backendChannel.clients on the proxy and that both run the same version"),
+        CONNECTED("Lost the connection to the MoonBridge proxy; reconnecting");
+
+        final String message;
+        ConnectStage(String message) { this.message = message; }
+    }
 
     public BackendChannelClient(String host, int port, String instanceId, String backendName, String gameAddress,
                                 String generation, String keyId, byte[] secret) {
@@ -80,11 +97,11 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
         if (heartbeatMillis < 1000L || reconnectMinMillis < 1L || reconnectMaxMillis < reconnectMinMillis) {
             throw new IllegalArgumentException("invalid timing configuration");
         }
-        validateIdentity(instanceId, "instanceId");
-        validateIdentity(backendName, "backendName");
-        validateIdentity(gameAddress, "gameAddress");
-        validateIdentity(generation, "generation");
-        validateIdentity(keyId, "keyId");
+        validateIdentity(instanceId, "instanceId", ControlHandshakeLimits.INSTANCE_ID_BYTES);
+        validateIdentity(backendName, "backendName", ControlHandshakeLimits.BACKEND_NAME_BYTES);
+        validateIdentity(gameAddress, "gameAddress", ControlHandshakeLimits.GAME_ADDRESS_BYTES);
+        validateIdentity(generation, "generation", ControlHandshakeLimits.GENERATION_BYTES);
+        validateIdentity(keyId, "keyId", ControlHandshakeLimits.KEY_ID_BYTES);
         this.host = host;
         this.port = port;
         this.instanceId = instanceId;
@@ -283,6 +300,7 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
         long pause = reconnectMinMillis;
         while (!closed.get()) {
             ClientSession active = null;
+            ConnectStage stage = ConnectStage.CONNECT;
             try {
                 Socket socket = new Socket();
                 active = new ClientSession(socket, timer, instanceId);
@@ -292,14 +310,17 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
                 }
                 if (closed.get()) { active.close(new IOException("client closed")); break; }
                 socket.connect(new InetSocketAddress(host, port), 5000);
+                stage = ConnectStage.REGISTER;
                 active.initialize();
                 runSession(active);
                 pause = reconnectMinMillis;
+                reportFailure(ConnectStage.CONNECTED);
             } catch (InterruptedException interrupted) {
                 if (closed.get()) break;
                 Thread.currentThread().interrupt();
-            } catch (Exception ignored) {
-                // Avoid logging peer-controlled protocol details from this transport layer.
+            } catch (Exception failure) {
+                // Report only the stage: the exception may carry peer-controlled protocol details.
+                if (!closed.get()) reportFailure(registered ? ConnectStage.CONNECTED : stage);
             } finally {
                 if (active != null) {
                     session.compareAndSet(active, null);
@@ -315,6 +336,13 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
                 pause = Math.min(reconnectMaxMillis, pause > reconnectMaxMillis / 2 ? reconnectMaxMillis : pause * 2);
             }
         }
+    }
+
+    /** Logs each failure category once until the next successful registration, so retries do not flood the log. */
+    private void reportFailure(ConnectStage stage) {
+        if (closed.get() || stage == lastReportedFailure) return;
+        lastReportedFailure = stage;
+        LOGGER.log(stage == ConnectStage.CONNECTED ? Level.INFO : Level.WARNING, stage.message);
     }
 
     private void runSession(final ClientSession active) throws Exception {
@@ -359,6 +387,8 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
             registered = true;
             stateMonitor.notifyAll();
         }
+        lastReportedFailure = null;
+        LOGGER.info("Registered with the MoonBridge proxy as backend " + backendName);
         while (!active.isClosed()) {
             byte[] frame = FrameCodec.read(active.in);
             inbound.handleFrame(active, frame);
@@ -384,9 +414,9 @@ public final class BackendChannelClient implements AutoCloseable, LocalMessaging
         return Math.max(15_000L, triple);
     }
 
-    private static void validateIdentity(String value, String label) {
-        if (value == null || value.trim().isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > Wire.MAX_STRING_BYTES) {
-            throw new IllegalArgumentException(label + " is empty or too long");
+    private static void validateIdentity(String value, String label, int maxBytes) {
+        if (value == null || value.trim().isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+            throw new IllegalArgumentException(label + " is empty or longer than " + maxBytes + " UTF-8 bytes");
         }
     }
 

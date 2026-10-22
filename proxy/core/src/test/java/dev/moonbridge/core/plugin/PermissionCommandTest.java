@@ -161,6 +161,41 @@ class PermissionCommandTest {
     }
 
     @Test
+    void slowPluginSuppliedSourceDoesNotHoldTheHostLock() throws Exception {
+        var commands = new AtomicReference<Commands>();
+        var plugin = new PermissionPlugin(context -> {
+            commands.set(context.commands());
+            context.commands().register("staff", "moonbridge.staff", invocation -> { });
+        }, node -> PermissionDecision.ALLOW);
+        try (var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1))) {
+            host.load(List.of(plugin));
+            host.enable();
+            var inPlayer = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            CommandSource slow = new CommandSource() {
+                @Override public Optional<PlayerView> player() {
+                    inPlayer.countDown();
+                    try {
+                        release.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return Optional.empty();
+                }
+                @Override public void reply(Component message) { }
+            };
+            var blocked = CompletableFuture.supplyAsync(() -> commands.get().execute(slow, "staff"));
+            assertTrue(inPlayer.await(2, TimeUnit.SECONDS));
+            // Every command lookup takes the host lock, so this would wait for the slow source if it held it.
+            var other = CompletableFuture.supplyAsync(() -> commands.get()
+                    .execute(CommandSource.console(ignored -> { }), "missing").toCompletableFuture().join());
+            assertFalse(other.get(2, TimeUnit.SECONDS));
+            release.countDown();
+            blocked.get(2, TimeUnit.SECONDS).toCompletableFuture().get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void apiDispatchResolvesExactLivePlayerAndExpiresWithPluginContext() throws Exception {
         var commands = new AtomicReference<Commands>();
         var invocationSource = new AtomicReference<PlayerView>();

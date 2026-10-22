@@ -21,7 +21,6 @@ import dev.moonbridge.api.MessageResult;
 import dev.moonbridge.api.DisconnectResult;
 import dev.moonbridge.api.TransferResult;
 import dev.moonbridge.core.backend.BackendView;
-import dev.moonbridge.core.protocol.LoginStart;
 import dev.moonbridge.core.protocol.MinecraftLoginSuccess;
 import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.ProtocolVarInt;
@@ -249,19 +248,15 @@ final class Session extends ChannelInboundHandlerAdapter {
         backend.config().setAutoRead(true);
         LOGGER.debug("Initial backend TCP connection established for player {} to {}",
                 view.username(), selected.address());
-        ByteBuf handshakeBody = null;
-        ByteBuf loginBody;
+        ByteBuf handshakeBody;
         try {
             handshakeBody = encodeBackendHandshake(
                     selected.handle().id().value(), selected.owner().instanceGeneration());
-            loginBody = new LoginStart(view.username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
         } catch (RuntimeException failure) {
-            ReferenceCountUtil.release(handshakeBody);
             disconnectLogin("Could not prepare backend login.");
             return;
         }
-        backend.write(handshakeBody);
-        backend.writeAndFlush(loginBody).addListener(write -> {
+        SessionChannels.writeBackendLogin(backend, handshakeBody, view.username()).addListener(write -> {
             if (write.isSuccess()) {
                 LOGGER.debug("Initial backend login frames flushed for player {} to {}",
                         view.username(), selected.address());

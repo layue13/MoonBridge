@@ -5,7 +5,6 @@ import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendOwner;
 import dev.moonbridge.core.backend.BackendRegistration;
 
-import java.net.URI;
 import java.util.Objects;
 
 /** Loads configured servers through the same catalog used by registration plugins. */
@@ -22,7 +21,7 @@ public final class StaticBackends {
             catalog.register(new BackendRegistration(
                     new BackendId(backend.name()),
                     OWNER,
-                    URI.create("tcp://" + backend.address().trim()),
+                    backend.uri(),
                     backend.tags(),
                     java.util.Map.of()));
         }
