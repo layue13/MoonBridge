@@ -61,6 +61,8 @@ testing/smoke/      smoke scripts and dated records; testing/benchmarks/ likewis
 
 **Operator logs.** docs/logging.md is the policy: INFO is one line per event an operator asks about, WARN is something to act on, protocol steps stay at DEBUG. Player and server events go through `core.log.ConnectionLog` (loggers `moonbridge.players` / `moonbridge.servers`), which cleans peer text with `LogText` and honours `logging.playerAddresses`; floods use `ThrottledWarning`. Sessions record why they ended with `endBecause` (first reason wins) and log it in `closePair`.
 
+**Admin console.** `app.console.Console` reads the console with JLine in a terminal (prompt kept at the bottom by `ConsoleLogAppender`, which logback.xml uses for console output) or plain stdin otherwise, and sends each line to `BuiltinCommands` before plugin console commands. Commands read `core.admin.AdminView`, immutable snapshots built from `ProxySessionListener.onlinePlayers()`, the catalog and `ConnectionLog.activity()` (ten one-minute `RecentCounter` buckets), and act through `AdminActions`; never read session state from the console thread directly.
+
 **Backends and plugins.** Backends come from static config, plugin registration (`Servers.register`, owner-scoped handles with generations) or the optional control channel (`BackendControlService`: separate authenticated blocking sockets on virtual threads, leases that outlive short disconnects). Initial routing is fail-closed: with no placement plugin it uses only `initialRouting.servers`. Permissions are a provider interface (`PermissionService`) with per-connection subjects that are prepared before login admission and released on any exit.
 
 ## Testing notes

@@ -129,6 +129,16 @@ final class CommandService {
     }
 
     /** Returns up to 100 registered roots matching a case-insensitive prefix without a leading slash. */
+    /** Names of the active plugin commands the console may run, without a slash, sorted. */
+    List<String> consoleCommandNames() {
+        if (!lifecycle.enabled()) return List.of();
+        return commands.values().stream()
+                .filter(command -> command.context.active && command.options.allowConsole())
+                .map(command -> command.name)
+                .sorted()
+                .toList();
+    }
+
     List<String> commandNames(String prefix) {
         Objects.requireNonNull(prefix, "prefix");
         if (!lifecycle.enabled()) return List.of();

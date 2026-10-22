@@ -4,8 +4,9 @@
     <property name="LOG_DIR" value="${moonbridge.logDir:-logs}" />
     <property name="PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n" />
 
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
+    <!-- Keeps the interactive prompt at the bottom of the terminal; plain standard output otherwise. -->
+    <appender name="CONSOLE" class="dev.moonbridge.app.console.ConsoleLogAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
             <pattern>${PATTERN}</pattern>
         </encoder>
     </appender>

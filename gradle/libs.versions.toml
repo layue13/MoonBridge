@@ -5,6 +5,7 @@ jackson = "2.20.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
 adventure = "5.2.0"
+jline = "3.30.17"
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -27,3 +28,6 @@ adventure-api = { module = "net.kyori:adventure-api", version.ref = "adventure" 
 adventure-minimessage = { module = "net.kyori:adventure-text-minimessage", version.ref = "adventure" }
 adventure-gson = { module = "net.kyori:adventure-text-serializer-gson", version.ref = "adventure" }
 adventure-plain = { module = "net.kyori:adventure-text-serializer-plain", version.ref = "adventure" }
+jline-reader = { module = "org.jline:jline-reader", version.ref = "jline" }
+jline-terminal = { module = "org.jline:jline-terminal", version.ref = "jline" }
+jline-terminal-ffm = { module = "org.jline:jline-terminal-ffm", version.ref = "jline" }

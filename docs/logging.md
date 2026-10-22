@@ -66,9 +66,11 @@ INFO  Stopped
 
 - 过载（连接数上限、插件命令、命令补全、插件事件、初次选服的有界队列已满）用合并的 WARN：第一次立即写，之后每分钟最多一行，带上这段时间里被拒绝的次数。合并在下一次发生时输出，所以安静下来以后不会再补一行。
 
+控制台的 `send`、`kick`、`loglevel` 和 `stop` 以 INFO 写入 logger `moonbridge.admin`，例如 `Console kicks Tester: spamming chat`。
+
 ## DEBUG 写什么
 
-协议细节保留在 DEBUG：后端拨号与 TCP 建立、登录帧刷写、加密请求、意外的登录包、帧处理失败的异常栈、WebSocket 升级被拒、控制通道连接结束。排查某一块时只打开那一块，例如在 `logback.xml` 中：
+协议细节保留在 DEBUG：后端拨号与 TCP 建立、登录帧刷写、加密请求、意外的登录包、帧处理失败的异常栈、WebSocket 升级被拒、控制通道连接结束。排查某一块时只打开那一块：运行中可以在控制台输入 `loglevel transfer debug`（重启后恢复），或长期在 `logback.xml` 中：
 
 ```xml
 <logger name="dev.moonbridge.core.session.transfer" level="DEBUG" />

@@ -385,6 +385,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     /** Returns up to 100 registered roots matching a case-insensitive prefix without a leading slash. */
     public List<String> commandNames(String prefix) { return commandService.commandNames(prefix); }
 
+    /** Plugin commands the console may run, for console completion and built-in name checks. */
+    public List<String> consoleCommandNames() { return commandService.consoleCommandNames(); }
+
     /** Returns roots visible to this player; unavailable, undefined, and denied nodes stay hidden. */
     public List<String> commandNames(PlayerView player, String prefix) {
         return commandService.commandNames(player, prefix);

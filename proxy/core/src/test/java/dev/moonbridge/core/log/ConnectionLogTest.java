@@ -70,4 +70,22 @@ class ConnectionLogTest {
         assertEquals("1h 12m", ConnectionLog.duration(Duration.ofMinutes(72)));
         assertEquals("2d 3h", ConnectionLog.duration(Duration.ofHours(51)));
     }
+
+    @Test
+    void activityCountsWhatThisLogRecorded() {
+        try (var ignored = new LogCapture(ConnectionLog.PLAYERS)) {
+            var players = new ConnectionLog(true);
+            players.connected("Tester", PLAYER, FROM, false, "lobby");
+            players.moved("Tester", "lobby", "survival");
+            players.moveFailed("Tester", "creative", "timed out", "survival");
+            players.left("Tester", "survival", Duration.ofMinutes(1), "client disconnected");
+            players.loginFailed("Steve", FROM, "refused");
+            var activity = players.activity();
+            assertEquals(1, activity.joins());
+            assertEquals(1, activity.leaves());
+            assertEquals(1, activity.refused());
+            assertEquals(1, activity.moves());
+            assertEquals(1, activity.failedMoves());
+        }
+    }
 }

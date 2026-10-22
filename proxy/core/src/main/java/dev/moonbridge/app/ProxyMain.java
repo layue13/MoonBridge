@@ -4,6 +4,10 @@ import dev.moonbridge.core.session.channel.NetworkTransport;
 import dev.moonbridge.core.backend.InMemoryBackendCatalog;
 import dev.moonbridge.core.control.BackendControlService;
 import dev.moonbridge.core.auth.MojangSessionVerifier;
+import dev.moonbridge.app.console.BuiltinCommands;
+import dev.moonbridge.app.console.Console;
+import dev.moonbridge.app.console.LiveAdminActions;
+import dev.moonbridge.core.admin.AdminView;
 import dev.moonbridge.core.log.ConnectionLog;
 import dev.moonbridge.core.plugin.PluginHost;
 import dev.moonbridge.core.session.ProxySessionListener;
@@ -79,11 +83,13 @@ public final class ProxyMain {
     }
 
     private static void runProxy(Path configPath) throws Exception {
+        var started = java.time.Instant.now();
         var loader = new ProxyConfigurationLoader();
         var configuration = loader.load(configPath);
-        String version = ProxyMain.class.getPackage().getImplementationVersion();
-        LOGGER.info("Starting MoonBridge {} on Java {} with {} authentication", version == null ? "development" : version,
-                Runtime.version(), configuration.authentication());
+        String implementationVersion = ProxyMain.class.getPackage().getImplementationVersion();
+        String version = implementationVersion == null ? "development" : implementationVersion;
+        LOGGER.info("Starting MoonBridge {} on Java {} with {} authentication", version, Runtime.version(),
+                configuration.authentication());
         UUID proxyEpoch = UUID.randomUUID();
         var serverListStatus = loader.loadServerListStatus(configuration, configPath);
         var webSocket = loader.loadWebSocket(configuration, configPath);
@@ -107,7 +113,8 @@ public final class ProxyMain {
         listener.setSessionBinding(proxyEpoch, sessionBindingSecrets(configuration));
         listener.setServerListStatus(serverListStatus);
         listener.setInitialServers(configuration.initialRouting().servers());
-        listener.setConnectionLog(new ConnectionLog(configuration.logging().playerAddresses()));
+        var connectionLog = new ConnectionLog(configuration.logging().playerAddresses());
+        listener.setConnectionLog(connectionLog);
         if (webSocket != null) listener.setWebSocket(configuration.websocket().listenAddress(), webSocket);
         try (var plugins = new PluginHost(catalog, listener, placementTimeout, eventTimeout, proxyEpoch);
              var control = configuration.backendChannel() == null ? null
@@ -130,9 +137,22 @@ public final class ProxyMain {
             LOGGER.info("Ready: {} server(s) in the catalog, {} plugin(s) enabled, backend control channel {}",
                     catalog.snapshot().size(), configuration.plugins().enabled().size(),
                     control == null ? "off" : "on " + configuration.backendChannel().listen());
+            var listeners = new java.util.ArrayList<String>();
+            listeners.add("TCP " + serverChannel.localAddress());
             if (webSocket != null) {
                 LOGGER.info("Listening for WebSocket{} on {}{}", webSocket.tls() == null ? "" : " (TLS)",
                         listener.webSocketChannel().localAddress(), webSocket.path());
+                listeners.add((webSocket.tls() == null ? "ws " : "wss ") + listener.webSocketChannel().localAddress()
+                        + webSocket.path());
+            }
+            var admin = new AdminView(listener::onlinePlayers, catalog, connectionLog::activity,
+                    new AdminView.Identity(version, started, transport.name(), listeners), java.time.Clock.systemUTC());
+            var builtins = new BuiltinCommands(admin, new LiveAdminActions(listener), Console::print);
+            for (String name : plugins.consoleCommandNames()) {
+                if (BuiltinCommands.NAMES.contains(name)) {
+                    LOGGER.warn("Plugin console command {} is hidden on the console by the built-in command of the "
+                            + "same name; players can still run /{}", name, name);
+                }
             }
             var shutdown = new Thread(() -> {
                 LOGGER.info("Shutting down with {} player(s) online", listener.online().size());
@@ -151,9 +171,7 @@ public final class ProxyMain {
                 }
             }, "moonbridge-shutdown");
             Runtime.getRuntime().addShutdownHook(shutdown);
-            try (var console = new ConsoleCommands(plugins, System.in,
-                    component -> LOGGER.info("{}", net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
-                            .plainText().serialize(component)))) {
+            try (var console = Console.start(builtins, plugins)) {
                 serverChannel.closeFuture().sync();
             } finally {
                 listener.close().toCompletableFuture().join();
