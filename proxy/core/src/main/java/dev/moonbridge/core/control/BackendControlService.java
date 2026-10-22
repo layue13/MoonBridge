@@ -1,5 +1,6 @@
 package dev.moonbridge.core.control;
 
+import dev.moonbridge.core.log.LogText;
 import dev.moonbridge.app.ProxyConfiguration;
 import dev.moonbridge.core.backend.BackendCatalog;
 import dev.moonbridge.messaging.Endpoint;
@@ -44,6 +45,7 @@ import static dev.moonbridge.core.control.ControlProtocol.*;
 public final class BackendControlService implements BackendChannelTransport, AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(BackendControlService.class);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+    private final java.util.Map<String, String> rejectedRegistrations = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final ProxyConfiguration.BackendChannel configuration;
     private final UUID proxyEpoch;
@@ -127,8 +129,18 @@ public final class BackendControlService implements BackendChannelTransport, Aut
             connection.write(HELLO, out -> { out.writeInt(VERSION); out.write(nonce); });
             Frame register = readFrame(connection.input);
             if (register.type() != REGISTER) throw new IOException("expected backend registration");
-            RegistrationVerifier.Registration requested = verifier.parse(register.input(), nonce);
-            leases.register(connection, requested);
+            String peer = socket.getInetAddress().getHostAddress();
+            RegistrationVerifier.Registration requested;
+            try {
+                requested = verifier.parse(register.input(), nonce);
+                leases.register(connection, requested);
+            } catch (Exception rejected) {
+                reportRejectedRegistration(peer, rejected);
+                throw rejected;
+            }
+            if (rejectedRegistrations.remove(peer) != null) {
+                LOGGER.info("Backend at {} registered after earlier rejections", peer);
+            }
             connection.write(REGISTERED, out -> {
                 out.writeLong(connection.epoch);
                 out.writeLong(proxyEpoch.getMostSignificantBits());
@@ -161,6 +173,18 @@ public final class BackendControlService implements BackendChannelTransport, Aut
         } finally {
             leases.disconnect(connection);
         }
+    }
+
+    /**
+     * Warns once per backend address and reason: a misconfigured backend retries every few seconds. Only the proxy's
+     * own fixed IOException messages are shown; anything else may carry peer-supplied text.
+     */
+    private void reportRejectedRegistration(String peer, Exception rejected) {
+        String reason = rejected instanceof IOException && !(rejected instanceof EOFException)
+                && rejected.getMessage() != null ? rejected.getMessage() : "malformed registration";
+        if (reason.equals(rejectedRegistrations.put(peer, reason)) || closed) return;
+        LOGGER.warn("Rejected backend registration from {}: {}; check backendChannel.clients for this instance",
+                peer, LogText.clean(reason));
     }
 
     @Override public CompletionStage<SendResult> send(Message message) {

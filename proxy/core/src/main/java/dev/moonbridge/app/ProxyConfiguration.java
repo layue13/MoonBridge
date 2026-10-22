@@ -12,7 +12,7 @@ import java.util.Set;
 public record ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
                                  Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
                                  Status status, BackendChannel backendChannel, InitialRouting initialRouting,
-                                 Transport transport, WebSocket websocket) {
+                                 Transport transport, WebSocket websocket, Logging logging) {
     public enum Authentication { OFFLINE, ONLINE_BUNGEE }
 
     /** Network I/O transport. AUTO picks epoll on Linux, kqueue on macOS and NIO elsewhere. */
@@ -43,12 +43,21 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         }
         status = status == null ? new Status(null, null, null) : status;
         transport = transport == null ? Transport.AUTO : transport;
+        logging = logging == null ? new Logging(null) : logging;
         var names = new java.util.HashSet<String>();
         for (var backend : backends) {
             if (!names.add(backend.name())) {
                 throw new IllegalArgumentException("duplicate backend: " + backend.name());
             }
         }
+    }
+
+    public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
+                              Plugins plugins, Integer maxConnections, boolean allowOfflinePublicAccess,
+                              Status status, BackendChannel backendChannel, InitialRouting initialRouting,
+                              Transport transport, WebSocket websocket) {
+        this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
+                backendChannel, initialRouting, transport, websocket, null);
     }
 
     public ProxyConfiguration(String listen, Authentication authentication, List<Backend> backends,
@@ -81,6 +90,13 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                               Status status, BackendChannel backendChannel, InitialRouting initialRouting) {
         this(listen, authentication, backends, plugins, maxConnections, allowOfflinePublicAccess, status,
                 backendChannel, initialRouting, null);
+    }
+
+    /** What the operator log may contain; see docs/logging.md. */
+    public record Logging(Boolean playerAddresses) {
+        public Logging {
+            playerAddresses = playerAddresses == null || playerAddresses;
+        }
     }
 
     /** Explicit default destinations used only when no plugin owns initial placement. */

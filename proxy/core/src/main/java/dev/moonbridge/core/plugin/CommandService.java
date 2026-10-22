@@ -1,5 +1,6 @@
 package dev.moonbridge.core.plugin;
 
+import dev.moonbridge.core.log.Overload;
 import dev.moonbridge.api.AsyncCommandHandler;
 import dev.moonbridge.api.CommandCompleter;
 import dev.moonbridge.api.CommandCompletion;
@@ -194,6 +195,7 @@ final class CommandService {
                 return Optional.empty();
             }
             if (!reserveCompletionSlot()) {
+                Overload.rejected("command completion");
                 return Optional.of(CompletableFuture.failedFuture(new PluginOverloadedException(
                         new RejectedExecutionException("Too many pending command completions"))));
             }
@@ -219,6 +221,7 @@ final class CommandService {
                     commandWorkers.remove(invocation);
                 }
             } catch (RejectedExecutionException overloaded) {
+                Overload.rejected("command completion");
                 finishCompletion(pending, null, new PluginOverloadedException(overloaded), true);
             } catch (RuntimeException failure) {
                 finishCompletion(pending, null, failure, true);
@@ -345,6 +348,7 @@ final class CommandService {
                 component -> { if (registered.context.active) reply.accept(component); });
         CommandExecution execution = beginCommandExecution(registered, null);
         if (execution == null) {
+            Overload.rejected("plugin command");
             reply.accept(Component.text("Proxy command service is busy. Please try again."));
             return true;
         }
@@ -367,6 +371,7 @@ final class CommandService {
                 }
             });
         } catch (RejectedExecutionException overloaded) {
+            Overload.rejected("plugin command");
             execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
         }
         return true;
@@ -396,6 +401,7 @@ final class CommandService {
         CommandInvocation invocation = new CommandInvocation(source, name, arguments);
         CommandExecution execution = beginCommandExecution(registered, null);
         if (execution == null) {
+            Overload.rejected("plugin command");
             reply.accept(Component.text("Proxy command service is busy. Please try again."));
             return true;
         }
@@ -413,6 +419,7 @@ final class CommandService {
                 }
             });
         } catch (RejectedExecutionException overloaded) {
+            Overload.rejected("plugin command");
             execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
         }
         return true;
@@ -462,6 +469,7 @@ final class CommandService {
         CompletableFuture<Boolean> result = new CompletableFuture<>();
         CommandExecution execution = beginCommandExecution(registered, result);
         if (execution == null) {
+            Overload.rejected("plugin command");
             result.completeExceptionally(new PluginOverloadedException(
                     new RejectedExecutionException("Too many pending command executions")));
             return result.minimalCompletionStage();
@@ -501,6 +509,7 @@ final class CommandService {
                 }
             });
         } catch (RejectedExecutionException overloaded) {
+            Overload.rejected("plugin command");
             execution.finish(new PluginOverloadedException(overloaded), null,
                     "Proxy command service is busy. Please try again.");
         }

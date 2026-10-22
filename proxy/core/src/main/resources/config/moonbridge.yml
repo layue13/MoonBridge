@@ -11,6 +11,8 @@ maxConnections: 4096
 #   trustedProxies: ["127.0.0.1"] # only these peers may supply the player IP header; add your CDN's published ranges
 #   realIpHeader: "X-Forwarded-For" # or CF-Connecting-IP / X-Real-IP
 #   handshakeTimeoutSeconds: 10
+# logging:
+#   playerAddresses: true # false writes [hidden] instead of player IPs in logs/latest.log; see docs/logging.md
 status:
   motd: "MoonBridge"
   maxPlayers: 100

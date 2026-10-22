@@ -28,6 +28,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /**
  * The client-facing half of connecting: handshake, server-list status, login start and (online mode)
@@ -40,6 +41,8 @@ final class FrontendLogin {
     private final ProxySessionListener owner;
     private final Channel frontend;
     private final Runnable closeSession;
+    /** Closes the session with a fixed reason for the operator log. */
+    private final Consumer<String> refuse;
     private final BooleanSupplier shuttingDown;
     private final BiConsumer<UUID, String> authenticated;
     private MinecraftHandshake handshake;
@@ -49,11 +52,12 @@ final class FrontendLogin {
     private VerifiedProfile verifiedProfile;
     private CompletableFuture<Optional<VerifiedProfile>> verification;
 
-    FrontendLogin(ProxySessionListener owner, Channel frontend, Runnable closeSession,
+    FrontendLogin(ProxySessionListener owner, Channel frontend, Runnable closeSession, Consumer<String> refuse,
                   BooleanSupplier shuttingDown, BiConsumer<UUID, String> authenticated) {
         this.owner = owner;
         this.frontend = frontend;
         this.closeSession = closeSession;
+        this.refuse = refuse;
         this.shuttingDown = shuttingDown;
         this.authenticated = authenticated;
     }
@@ -152,7 +156,7 @@ final class FrontendLogin {
         try {
             accepted = OnlineModeCrypto.decrypt(owner.encryptionKeys().getPrivate(), encryptionRequest, response);
         } catch (GeneralSecurityException failure) {
-            closeSession.run();
+            refuse.accept("encryption handshake failed");
             return;
         }
         byte[] secret = accepted.sharedSecret();
@@ -176,13 +180,17 @@ final class FrontendLogin {
         verification.whenComplete((profile, failure) -> frontend.eventLoop().execute(() -> {
             verification = null;
             if (shuttingDown.getAsBoolean()) return;
-            if (failure != null || profile == null || profile.isEmpty()) {
-                closeSession.run();
+            if (failure != null) {
+                refuse.accept("could not reach the Mojang session server");
+                return;
+            }
+            if (profile == null || profile.isEmpty()) {
+                refuse.accept("Mojang session verification failed");
                 return;
             }
             verifiedProfile = profile.get();
             if (!verifiedProfile.username().equalsIgnoreCase(loginStart.username())) {
-                closeSession.run();
+                refuse.accept("Mojang profile name does not match the login name");
                 return;
             }
             authenticated.accept(verifiedProfile.uuid(), verifiedProfile.username());

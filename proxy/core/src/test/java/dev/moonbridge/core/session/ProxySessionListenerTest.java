@@ -603,6 +603,98 @@ final class ProxySessionListenerTest {
         }
     }
 
+    @Test
+    void playerJoinAndLeaveAreLoggedForOperators() throws Exception {
+        String username = "LoggedPlayer";
+        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+        var catalog = new InMemoryBackendCatalog();
+        var backendDone = new CompletableFuture<Void>();
+        try (ServerSocket backendServer = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+             var log = new dev.moonbridge.testing.LogCapture(dev.moonbridge.core.log.ConnectionLog.PLAYERS)) {
+            Thread backendThread = new Thread(() -> {
+                try (Socket socket = backendServer.accept()) {
+                    socket.setSoTimeout(5000);
+                    var input = new DataInputStream(socket.getInputStream());
+                    var output = new DataOutputStream(socket.getOutputStream());
+                    readFrame(input);
+                    readFrame(input);
+                    var success = new ByteArrayOutputStream();
+                    writeVarInt(success, 2);
+                    writeString(success, uuid.toString());
+                    writeString(success, username);
+                    writeFrame(output, success.toByteArray());
+                    assertEquals(-1, input.read());
+                    backendDone.complete(null);
+                } catch (Throwable failure) {
+                    backendDone.completeExceptionally(failure);
+                }
+            }, "fake-logging-backend");
+            backendThread.setDaemon(true);
+            backendThread.start();
+            catalog.register(new BackendRegistration(new BackendId("logged-lobby"), new BackendOwner("static", 0),
+                    URI.create("tcp://127.0.0.1:" + backendServer.getLocalPort()), Map.of(), Map.of()));
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("logged-lobby"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                    client.setSoTimeout(5000);
+                    sendLogin(client, username);
+                    assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
+                    awaitOnlinePlayer(listener);
+                }
+                awaitCondition(() -> log.lines().stream().anyMatch(line -> line.contains(" left ")));
+                backendDone.get(5, TimeUnit.SECONDS);
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+            var lines = log.lines();
+            assertEquals("INFO " + username + " (" + uuid + ") connected from 127.0.0.1 via TCP -> logged-lobby",
+                    lines.get(0));
+            assertTrue(lines.get(1).matches("INFO " + username + " left logged-lobby after \\d+s: client disconnected"),
+                    lines.get(1));
+        }
+    }
+
+    @Test
+    void refusedLoginIsLoggedWithItsReasonAndTheUnreachableServerOnce() throws Exception {
+        int closedPort;
+        try (ServerSocket unused = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            closedPort = unused.getLocalPort();
+        }
+        var catalog = new InMemoryBackendCatalog();
+        catalog.register(new BackendRegistration(new BackendId("logged-unreachable"), new BackendOwner("static", 0),
+                URI.create("tcp://127.0.0.1:" + closedPort), Map.of(), Map.of()));
+        try (var players = new dev.moonbridge.testing.LogCapture(dev.moonbridge.core.log.ConnectionLog.PLAYERS);
+             var servers = new dev.moonbridge.testing.LogCapture(dev.moonbridge.core.log.ConnectionLog.SERVERS)) {
+            var listener = new ProxySessionListener(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), catalog);
+            listener.setPlacement(player -> CompletableFuture.completedFuture(
+                    Optional.of(PlacementDecision.select("logged-unreachable"))));
+            try {
+                int port = ((InetSocketAddress) listener.start().toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS).localAddress()).getPort();
+                for (String name : List.of("Refused1", "Refused2")) {
+                    try (Socket client = new Socket(InetAddress.getLoopbackAddress(), port)) {
+                        client.setSoTimeout(5000);
+                        sendLogin(client, name);
+                        assertEquals(0, readVarInt(readFrame(new DataInputStream(client.getInputStream()))),
+                                "login disconnect");
+                    }
+                }
+                awaitCondition(() -> players.lines().size() == 2);
+            } finally {
+                listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            }
+            assertEquals(List.of(
+                    "INFO Refused1 from 127.0.0.1 could not join: No entry server could be reached.",
+                    "INFO Refused2 from 127.0.0.1 could not join: No entry server could be reached."), players.lines());
+            assertEquals(List.of("WARN Server logged-unreachable at 127.0.0.1:" + closedPort
+                    + " is unreachable; players are routed to the next entry server"), servers.lines());
+        }
+    }
+
     private static PlayerView awaitOnlinePlayer(ProxySessionListener listener) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (listener.online().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);

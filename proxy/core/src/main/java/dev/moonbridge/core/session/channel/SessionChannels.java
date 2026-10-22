@@ -32,6 +32,11 @@ public final class SessionChannels {
         frontend.attr(CLIENT_ADDRESS).set(address);
     }
 
+    /** True for a player connected through the WebSocket frontend, the only caller of {@link #setClientAddress}. */
+    public static boolean isWebSocket(Channel frontend) {
+        return frontend.hasAttr(CLIENT_ADDRESS) && frontend.attr(CLIENT_ADDRESS).get() != null;
+    }
+
     /** The address that identifies the player: a trusted forwarded address if any, else the TCP peer. */
     public static InetSocketAddress clientAddress(Channel frontend) {
         InetSocketAddress forwarded = frontend.attr(CLIENT_ADDRESS).get();
