@@ -3,6 +3,7 @@ package dev.moonbridge.app;
 import io.netty.util.NetUtil;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -148,7 +149,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             }
         }
 
-        public InetSocketAddress listenAddress() { return parseAddress(listen); }
+        public InetSocketAddress listenAddress() { return resolve(parseAddress(listen)); }
     }
 
     /** PEM certificate chain and unencrypted PKCS#8 private key, relative to the configuration file. */
@@ -178,7 +179,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
     }
 
     public InetSocketAddress listenAddress() {
-        return parseAddress(listen);
+        return resolve(parseAddress(listen));
     }
 
     private static boolean isLiteralLoopback(String listen) {
@@ -194,6 +195,10 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         }
     }
 
+    /**
+     * Parses {@code host:port} without resolving the host: loading or validating a configuration never blocks on DNS.
+     * Listeners resolve their address with {@link #resolve} when they bind.
+     */
     public static InetSocketAddress parseAddress(String text) {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("address is required");
@@ -218,7 +223,11 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
         if (host.isBlank() || port < 0 || port > 65535) {
             throw new IllegalArgumentException("invalid address: " + text);
         }
-        return new InetSocketAddress(host, port);
+        return InetSocketAddress.createUnresolved(host, port);
+    }
+
+    private static InetSocketAddress resolve(InetSocketAddress address) {
+        return new InetSocketAddress(address.getHostString(), address.getPort());
     }
 
     public record Backend(String name, String address, Map<String, String> tags) {
@@ -230,11 +239,22 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             if (parseAddress(address).getPort() == 0) {
                 throw new IllegalArgumentException("backend port must be positive");
             }
+            uri(address);
             tags = tags == null ? Map.of() : Map.copyOf(tags);
         }
 
-        public InetSocketAddress socketAddress() {
-            return parseAddress(address);
+        /** The catalog address, checked here so that config validation rejects what registration would reject. */
+        public URI uri() { return uri(address); }
+
+        private static URI uri(String address) {
+            URI uri;
+            try {
+                uri = new URI("tcp://" + address.trim());
+            } catch (java.net.URISyntaxException invalid) {
+                throw new IllegalArgumentException("invalid backend address: " + address, invalid);
+            }
+            if (uri.getHost() == null) throw new IllegalArgumentException("invalid backend host: " + address);
+            return uri;
         }
     }
 
@@ -243,14 +263,19 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                                  Integer maxConnections) {
         public BackendChannel {
             if (listen == null || listen.isBlank()) throw new IllegalArgumentException("backendChannel.listen is required");
-            parseAddress(listen);
             if (parseAddress(listen).getPort() == 0)
                 throw new IllegalArgumentException("backendChannel.listen port must be positive");
             clients = clients == null ? Map.of() : Map.copyOf(clients);
             if (clients.isEmpty()) throw new IllegalArgumentException("backendChannel.clients must not be empty");
-            for (String instanceId : clients.keySet()) {
-                if (!instanceId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
-                    throw new IllegalArgumentException("invalid backendChannel client id: " + instanceId);
+            Map<String, String> secretByBackend = new java.util.HashMap<>();
+            for (var client : clients.entrySet()) {
+                if (!client.getKey().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+                    throw new IllegalArgumentException("invalid backendChannel client id: " + client.getKey());
+                // Players' session bindings are signed per backend name, so every instance of it needs one secret.
+                String previous = secretByBackend.putIfAbsent(client.getValue().backendName(), client.getValue().secret());
+                if (previous != null && !previous.equals(client.getValue().secret()))
+                    throw new IllegalArgumentException("backendChannel has conflicting secrets for backend "
+                            + client.getValue().backendName());
             }
             leaseSeconds = leaseSeconds == null ? 30 : leaseSeconds;
             if (leaseSeconds < 5 || leaseSeconds > 3600)
@@ -260,7 +285,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                 throw new IllegalArgumentException("backendChannel.maxConnections must be between 1 and 4096");
         }
 
-        public InetSocketAddress listenAddress() { return parseAddress(listen); }
+        public InetSocketAddress listenAddress() { return resolve(parseAddress(listen)); }
     }
 
     public record Client(String backendName, String keyId, String secret, Set<String> allowedHosts,
@@ -310,7 +335,17 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
                                 }
                                 return entry.getKey();
                             },
-                            entry -> Map.copyOf(entry.getValue())));
+                            entry -> settings(entry.getKey(), entry.getValue())));
+        }
+
+        /** A plugin listed without settings ({@code com.example.Plugin:}) is enabled with none. */
+        private static Map<String, String> settings(String plugin, Map<String, String> settings) {
+            if (settings == null) return Map.of();
+            settings.forEach((key, value) -> {
+                if (key == null || value == null)
+                    throw new IllegalArgumentException("plugin " + plugin + " has a setting without a value");
+            });
+            return Map.copyOf(settings);
         }
     }
 }

@@ -95,6 +95,12 @@ public final class ClientAddressPolicy {
                 throw new IllegalArgumentException("invalid trusted proxy: " + text, invalid);
             }
             if (prefix < 0 || prefix > network.length * 8) throw new IllegalArgumentException("invalid trusted proxy: " + text);
+            byte[] unmapped = unmapped(network);
+            if (unmapped != network) {
+                // contains() compares mapped peers as IPv4, so an IPv4-mapped block has to be stored as IPv4 too.
+                if (prefix < 96) throw new IllegalArgumentException("invalid trusted proxy: " + text);
+                return new Cidr(unmapped, prefix - 96);
+            }
             return new Cidr(network, prefix);
         }
 

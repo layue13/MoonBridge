@@ -60,6 +60,15 @@ final class ClientAddressPolicyTest {
     }
 
     @Test
+    void ipv4MappedTrustedProxiesMatchIpv4Peers() {
+        var single = new ClientAddressPolicy(List.of("::ffff:173.245.48.10"), "X-Real-IP");
+        assertEquals("198.51.100.3", host(single.resolve(EDGE, headers("X-Real-IP", "198.51.100.3"))));
+        var block = new ClientAddressPolicy(List.of("::ffff:173.245.48.0/116"), "X-Real-IP");
+        assertEquals("198.51.100.4", host(block.resolve(EDGE, headers("X-Real-IP", "198.51.100.4"))));
+        assertThrows(IllegalArgumentException.class, () -> new ClientAddressPolicy(List.of("::ffff:0:0/80"), "X-Real-IP"));
+    }
+
+    @Test
     void malformedValuesFromATrustedPeerAreRejected() {
         var policy = new ClientAddressPolicy(List.of("173.245.48.0/20"), "CF-Connecting-IP");
         assertThrows(IllegalArgumentException.class, () -> policy.resolve(EDGE, headers("CF-Connecting-IP", "example.com")));

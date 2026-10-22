@@ -430,26 +430,28 @@ final class CommandService {
                 permissionService.check(player.identity(), node) == PermissionResult.ALLOW).orElse(true);
     }
 
+    /**
+     * Runs a command on behalf of a plugin. {@code source} is plugin-supplied, so its {@code player()} and
+     * {@code reply()} run without the host lock: a slow implementation must not stall host shutdown or other
+     * commands. Only the registration lookup is locked; the worker re-checks it before invoking the handler.
+     */
     CompletionStage<Boolean> executeCommand(PluginContextImpl caller, CommandSource source, String input) {
-        synchronized (lock) { return executeCommandLocked(caller, source, input); }
-    }
-
-    private CompletionStage<Boolean> executeCommandLocked(PluginContextImpl caller, CommandSource source,
-                                                          String input) {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(input, "command");
-        synchronized (caller) { caller.requireActive(); }
-        if (!lifecycle.enabled()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
-        }
         String message = input.startsWith("/") ? input.substring(1) : input;
-        if (message.isEmpty()) return CompletableFuture.completedFuture(false);
         int end = 0;
         while (end < message.length() && !Character.isWhitespace(message.charAt(end))) end++;
-        if (end == 0) return CompletableFuture.completedFuture(false);
         String name = message.substring(0, end).toLowerCase(Locale.ROOT);
-        RegisteredCommand registered = commands.get(name);
-        if (registered == null || !registered.context.active) return CompletableFuture.completedFuture(false);
+        RegisteredCommand registered;
+        synchronized (lock) {
+            synchronized (caller) { caller.requireActive(); }
+            if (!lifecycle.enabled()) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
+            }
+            if (end == 0) return CompletableFuture.completedFuture(false);
+            registered = commands.get(name);
+            if (registered == null || !registered.context.active) return CompletableFuture.completedFuture(false);
+        }
         final Optional<PlayerView> requestedPlayer;
         try {
             requestedPlayer = Objects.requireNonNull(source.player(), "command source player");

@@ -384,6 +384,26 @@ final class ProxyConfigurationTest {
     }
 
     @Test
+    void pluginListedWithoutSettingsIsEnabledWithNone() throws Exception {
+        var config = Files.createTempFile("moonbridge-plugin-no-settings", ".yml");
+        try {
+            Files.writeString(config, """
+                    listen: "127.0.0.1:25577"
+                    authentication: OFFLINE
+                    backends: []
+                    plugins:
+                      directory: "extensions"
+                      enabled:
+                        dev.example.PlainPlugin:
+                    """);
+            var enabled = new ProxyConfigurationLoader().load(config).plugins().enabled();
+            assertEquals(java.util.Map.of(), enabled.get("dev.example.PlainPlugin"));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
     void playerAddressesAreLoggedUnlessTurnedOff() throws Exception {
         var config = Files.createTempFile("moonbridge-logging", ".yml");
         try {
@@ -395,5 +415,41 @@ final class ProxyConfigurationTest {
         } finally {
             Files.deleteIfExists(config);
         }
+    }
+
+    @Test
+    void validateConfigRejectsConflictingSecretsForOneBackendName() throws Exception {
+        var config = Files.createTempFile("moonbridge-conflicting-secrets", ".yml");
+        try {
+            String client = """
+                        %s:
+                          backendName: island-a
+                          keyId: primary
+                          secret: "%s"
+                          allowedHosts: ["127.0.0.1"]
+                    """;
+            Files.writeString(config, """
+                    listen: "127.0.0.1:25577"
+                    authentication: OFFLINE
+                    backends: []
+                    backendChannel:
+                      listen: "127.0.0.1:28081"
+                      clients:
+                    """ + client.formatted("island-a-1", "first-secret-at-least-thirty-two-bytes")
+                    + client.formatted("island-a-2", "other-secret-at-least-thirty-two-bytes"));
+            assertEquals(1, ProxyMain.run(new String[]{"--validate-config", config.toString()}));
+        } finally {
+            Files.deleteIfExists(config);
+        }
+    }
+
+    @Test
+    void backendAddressesAreCheckedWithoutDnsAndAsTheCatalogWillReadThem() {
+        assertTrue(ProxyConfiguration.parseAddress("lobby.example.invalid:25565").isUnresolved());
+        var backend = new ProxyConfiguration.Backend("lobby", "lobby.example.invalid:25565", null);
+        assertEquals("lobby.example.invalid", backend.uri().getHost());
+        // URI cannot carry an underscore host, so the catalog would reject it: config validation has to as well.
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProxyConfiguration.Backend("lobby", "lobby_a:25565", null));
     }
 }
