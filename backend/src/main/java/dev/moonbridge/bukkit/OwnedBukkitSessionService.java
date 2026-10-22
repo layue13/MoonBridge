@@ -1,7 +1,6 @@
 package dev.moonbridge.bukkit;
 
 import dev.moonbridge.messaging.session.ForwardedSessionProof;
-import java.lang.reflect.Method;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -91,89 +90,52 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         return true;
     }
 
+    /** Chosen once per server process; replaced by the reflective fallback if a compiled adapter fails to link. */
+    private static volatile ProfileAccess profiles = ProfileAccess.select();
+
     static ProofProperty stripForwardedProof(Player player) {
-        Object profile = invoke(player, GET_PROFILE);
-        if (profile == null) profile = invoke(player, GET_GAME_PROFILE);
-        if (profile == null) return ProofProperty.unavailable();
-        Object properties = invoke(profile, GET_PROPERTIES);
+        ProfileAccess access = profiles;
+        // Every Uranium player is a CraftPlayer; anything else (a test double, an unusual server player type) is read
+        // by name rather than treated as having no profile.
+        if (!access.handles(player)) access = ReflectiveProfileAccess.INSTANCE;
+        try {
+            return stripForwardedProof(access, player);
+        } catch (LinkageError mismatch) {
+            if (access == ReflectiveProfileAccess.INSTANCE) throw mismatch;
+            // The server has the adapter's classes but not the exact signatures it was compiled against. The failing
+            // call happens before any property is removed, so retrying with reflection starts from the same state.
+            profiles = ReflectiveProfileAccess.INSTANCE;
+            java.util.logging.Logger.getLogger(OwnedBukkitSessionService.class.getName()).warning(
+                    "GameProfile access: " + access.description() + " does not match this server; using reflection");
+            return stripForwardedProof(ReflectiveProfileAccess.INSTANCE, player);
+        }
+    }
+
+    static ProofProperty stripForwardedProof(ProfileAccess access, Object player) {
+        Object properties = access.properties(player);
         if (properties == null) return ProofProperty.unavailable();
-        Object matches = invoke(properties, MULTIMAP_GET, ForwardedSessionProof.PROPERTY_NAME);
-        if (!(matches instanceof Iterable<?>)) return ProofProperty.unavailable();
+        Iterable<?> matches = access.get(properties, ForwardedSessionProof.PROPERTY_NAME);
+        if (matches == null) return ProofProperty.unavailable();
         Collection<Object> propertiesToRemove = new java.util.ArrayList<Object>();
         Collection<String> values = new java.util.ArrayList<>(2);
         boolean allValuesValid = true;
-        for (Object property : (Iterable<?>) matches) {
+        for (Object property : matches) {
             if (property == null) return ProofProperty.failed(true);
             propertiesToRemove.add(property);
-            Object value = invoke(property, GET_VALUE);
+            Object value = access.value(property);
             if (value instanceof String && ((String) value).length() <= 2048) values.add((String) value);
             else allValuesValid = false;
         }
         for (Object property : propertiesToRemove) {
-            Object removed = invoke(properties, MULTIMAP_REMOVE, ForwardedSessionProof.PROPERTY_NAME, property);
-            if (!Boolean.TRUE.equals(removed)) return ProofProperty.failed(true);
+            if (!access.remove(properties, ForwardedSessionProof.PROPERTY_NAME, property)) {
+                return ProofProperty.failed(true);
+            }
         }
-        Object remaining = invoke(properties, MULTIMAP_GET, ForwardedSessionProof.PROPERTY_NAME);
-        if (!(remaining instanceof Iterable<?>) || ((Iterable<?>) remaining).iterator().hasNext())
+        Iterable<?> remaining = access.get(properties, ForwardedSessionProof.PROPERTY_NAME);
+        if (remaining == null || remaining.iterator().hasNext())
             return ProofProperty.failed(!propertiesToRemove.isEmpty());
         return ProofProperty.removed(propertiesToRemove.size() == 1 && allValuesValid && values.size() == 1
                 ? values.iterator().next() : null);
-    }
-
-    /**
-     * A public method this class calls reflectively: the GameProfile types differ between Bukkit builds, so the
-     * backend does not compile against them. Instances are lookup keys compared by identity.
-     */
-    private static final class MethodRef {
-        final String name;
-        final Class<?>[] parameterTypes;
-
-        MethodRef(String name, Class<?>... parameterTypes) {
-            this.name = name;
-            this.parameterTypes = parameterTypes;
-        }
-    }
-
-    private static final MethodRef GET_PROFILE = new MethodRef("getProfile");
-    private static final MethodRef GET_GAME_PROFILE = new MethodRef("getGameProfile");
-    private static final MethodRef GET_PROPERTIES = new MethodRef("getProperties");
-    private static final MethodRef GET_VALUE = new MethodRef("getValue");
-    private static final MethodRef MULTIMAP_GET = new MethodRef("get", Object.class);
-    private static final MethodRef MULTIMAP_REMOVE = new MethodRef("remove", Object.class, Object.class);
-
-    /**
-     * Lookups resolved once per receiver class, including misses, so a join does not search methods again. ClassValue
-     * keeps the cache from holding a reloaded plugin's classes.
-     */
-    private static final ClassValue<Map<MethodRef, Optional<Method>>> METHODS =
-            new ClassValue<Map<MethodRef, Optional<Method>>>() {
-                @Override protected Map<MethodRef, Optional<Method>> computeValue(Class<?> type) {
-                    return new ConcurrentHashMap<MethodRef, Optional<Method>>();
-                }
-            };
-
-    private static Object invoke(Object receiver, MethodRef reference, Object... args) {
-        if (receiver == null) return null;
-        Map<MethodRef, Optional<Method>> methods = METHODS.get(receiver.getClass());
-        Optional<Method> method = methods.get(reference);
-        if (method == null) {
-            method = lookup(receiver.getClass(), reference);
-            methods.put(reference, method);
-        }
-        if (!method.isPresent()) return null;
-        try {
-            return method.get().invoke(receiver, args);
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return null;
-        }
-    }
-
-    private static Optional<Method> lookup(Class<?> type, MethodRef reference) {
-        try {
-            return Optional.of(type.getMethod(reference.name, reference.parameterTypes));
-        } catch (NoSuchMethodException | RuntimeException unavailable) {
-            return Optional.empty();
-        }
     }
 
     static final class ProofProperty {
@@ -187,9 +149,9 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
             this.foundProperty = foundProperty;
         }
 
-        private static ProofProperty unavailable() { return new ProofProperty(null, false, false); }
-        private static ProofProperty failed(boolean found) { return new ProofProperty(null, false, found); }
-        private static ProofProperty removed(String proof) { return new ProofProperty(proof, true, proof != null); }
+        static ProofProperty unavailable() { return new ProofProperty(null, false, false); }
+        static ProofProperty failed(boolean found) { return new ProofProperty(null, false, found); }
+        static ProofProperty removed(String proof) { return new ProofProperty(proof, true, proof != null); }
     }
 
     @Override

@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.ServiceLoader;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
@@ -181,18 +180,17 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                         Plugin.class.getClassLoader());
                 classLoaders.add(loader);
                 if (selected == null) {
-                    ServiceLoader.load(Plugin.class, loader).stream().forEach(provider -> {
-                        String className = provider.type().getName();
-                        loadOne(provider.get(), jar.getFileName() + ":" + className, Map.of(),
+                    for (String className : PluginJars.declaredProviders(jar)) {
+                        loadOne(PluginConstructors.newPlugin(loader.loadClass(className)),
+                                jar.getFileName() + ":" + className, Map.of(),
                                 directory.resolve("data").resolve(className), loader);
-                    });
+                    }
                 } else {
                     for (String className : selected) {
                         if (!remaining.remove(className)) {
                             throw new IllegalStateException("Duplicate configured plugin provider: " + className);
                         }
-                        Plugin plugin = Class.forName(className, true, loader).asSubclass(Plugin.class)
-                                .getConstructor().newInstance();
+                        Plugin plugin = PluginConstructors.newPlugin(loader.loadClass(className));
                         loadOne(plugin, jar.getFileName() + ":" + className, enabled.get(className),
                                 directory.resolve("data").resolve(className), loader);
                     }
