@@ -55,7 +55,7 @@ context.commands().register("island", "example.command.island", invocation -> {
 
 ## LuckPerms 平台插件
 
-`luckperms-moonbridge` 使用固定版本的官方 LuckPerms 公共核心，并实现 MoonBridge 平台适配。上游源码在 Git 子模块 `vendor/luckperms`。编译它较慢且依赖很多，因此默认构建不包含该插件，需要显式开启：
+`luckperms-moonbridge` 使用固定版本的官方 LuckPerms 公共核心，并实现 MoonBridge 平台适配。上游源码在 Git 子模块 `proxy/vendor/luckperms`。编译它较慢且依赖很多，因此默认构建不包含该插件，需要显式开启：
 
 ```sh
 git submodule update --init --recursive
@@ -120,7 +120,7 @@ redis:
 
 Redis 负责通知其他实例重载权限，权限数据仍保存在 MariaDB。Redis 中断期间不会保证其他实例即时看到修改；恢复连接后的新通知可触发刷新，也可以在需要时使用 `lp sync` 主动同步。数据库中断时，已加载玩家可继续使用现有缓存，新玩家加载失败会被拒绝登录；缓存不是数据库最新状态的保证。
 
-此前 MySQL 8.4 与 Redis 7.4 的结果保留为 [历史验收记录](../smoke/results/2026-09-28-permissions.md)。当前 MariaDB 13.0.2 的验收入口和记录见 [MariaDB 验证](mariadb.md)。
+此前 MySQL 8.4 与 Redis 7.4 的结果保留为 [历史验收记录](../testing/smoke/results/2026-09-28-permissions.md)。当前 MariaDB 13.0.2 的验收入口和记录见 [MariaDB 验证](mariadb.md)。
 
 backend 可安装与其 Minecraft / Java 版本兼容的原生 Bukkit LuckPerms，使用相同的身份模式、共享数据库与 LuckPerms 支持的同步方式；MoonBridge 平台插件 JAR 只供代理使用。共享数据库不意味着所有场景的检查结果相同：代理知道后端名称，但不知道玩家在 Bukkit 世界中的位置或其他后端私有上下文。玩家首次登录的权限加载不依赖某个 backend 在线。
 

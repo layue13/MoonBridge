@@ -1,0 +1,34 @@
+param(
+    [ValidateRange(1, 32)][int]$Connections = 4,
+    [ValidateRange(1, 100000)][int]$Messages = 1000,
+    [ValidateRange(0, 10000)][int]$Warmup = 100,
+    [ValidateRange(5, 1048576)][int]$Payload = 1024,
+    [ValidateRange(1, 10)][int]$Repeats = 2,
+    [ValidateRange(1, 1024)][int]$Window = 1,
+    [ValidateSet(0, 1)][int]$CommandInterceptor = 1,
+    [ValidateRange(1, 256)][int]$Burst = 1,
+    [ValidateSet('auto', 'nio', 'epoll', 'kqueue')][string]$Transport = 'auto',
+    [ValidateSet('initial', 'post-transfer')][string]$Mode = 'initial'
+)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$installLib = Join-Path $repoRoot "proxy\core\build\install\moonbridge"
+$classes = Join-Path $PSScriptRoot "build"
+
+Push-Location $repoRoot
+try {
+    & .\gradlew.bat :proxy-core:installDist
+    if ($LASTEXITCODE -ne 0) { throw "installDist failed with exit code $LASTEXITCODE" }
+
+    New-Item -ItemType Directory -Path $classes -Force | Out-Null
+    & javac -cp "$installLib\*" -d $classes (Join-Path $PSScriptRoot "ProxySessionBenchmark.java")
+    if ($LASTEXITCODE -ne 0) { throw "javac failed with exit code $LASTEXITCODE" }
+
+    & java --enable-native-access=ALL-UNNAMED -cp "$classes;$installLib\*" dev.moonbridge.core.session.ProxySessionBenchmark `
+        --connections $Connections --messages $Messages --warmup $Warmup --payload $Payload --repeats $Repeats `
+        --window $Window --mode $Mode --command-interceptor $CommandInterceptor --burst $Burst --transport $Transport
+    if ($LASTEXITCODE -ne 0) { throw "benchmark failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}

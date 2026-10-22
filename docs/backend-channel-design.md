@@ -25,7 +25,7 @@ flowchart LR
 
 ## 后端插件接入
 
-在 Bukkit/Uranium 后端安装一次 `backend` 模块生成的 `moonbridge-backend` JAR（发行包 `backend/` 目录），插件名为 `MoonBridgeBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
+在 Bukkit/Uranium 后端安装一次 `backend` 模块生成的 `moonbridge-backend` JAR（`gradlew release` 输出的 `backend/` 目录），插件名为 `MoonBridgeBackend`。配置唯一的实例 ID、后端名称、代理控制地址、游戏地址与凭据。宿主异步建立连接，不在启动主线程等待网络。
 
 消费者 `plugin.yml` 声明：
 
@@ -100,7 +100,7 @@ Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目�
 
 ## 配置与部署
 
-代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy-core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。Channel registration v3 将代理启动 epoch 和 backend registration epoch 同时交给后端。代理用该 backend client secret 为发往该 backendName 的 legacy forwarding handshake 生成短时 HMAC 会话证明；证明绑定两端当前 epoch、backendName、UUID、connectionId、一次性 nonce 和到期时间。后端 `MoonBridgeBackend` 校验它并把会话绑定到实际 Bukkit Player 登录对象。两端身份或 secret 不匹配、registration 未完成或 epoch 已变化时，`BukkitSessionService.find(player)` 返回空值。证明不代表任何 AetherShard 操作。
+代理在 `backendChannel.listen` 启动独立监听器。配置示例见 [moonbridge-channel.example.yml](../proxy/core/src/main/resources/config/moonbridge-channel.example.yml)。每个实例的 `secret` 至少 32 个 UTF-8 字节，`allowedHosts` 限制其广告游戏地址；`allowedNamespaces` 控制发送，`allowedReceiveNamespaces` 控制接收，未配置接收列表时继承发送列表，显式空列表表示禁止该方向的所有消息。跨后端路由同时检查源发送权限与目的接收权限。Channel registration v3 将代理启动 epoch 和 backend registration epoch 同时交给后端。代理用该 backend client secret 为发往该 backendName 的 legacy forwarding handshake 生成短时 HMAC 会话证明；证明绑定两端当前 epoch、backendName、UUID、connectionId、一次性 nonce 和到期时间。后端 `MoonBridgeBackend` 校验它并把会话绑定到实际 Bukkit Player 登录对象。两端身份或 secret 不匹配、registration 未完成或 epoch 已变化时，`BukkitSessionService.find(player)` 返回空值。证明不代表任何 AetherShard 操作。
 
 在 `OFFLINE` 代理模式中，只有显式配置了该 backend 的 session-binding secret 时，代理才会在初始连接或转服时转发由代理派生的 offline UUID 和会话证明；这证明代理连接身份，不表示 Mojang 已认证。没有配置 secret 的 offline backend 仍接收原始握手。静态 backend 或尚未获得正数 registration epoch 的目标不会收到会话证明。
 
@@ -114,7 +114,7 @@ HMAC 挑战认证本身不加密链路；跨机器使用私有加密链路或可
 
 自动化验证针对 Java 8 API/宿主字节码、宿主 JAR 打包边界、真实 TCP 的零玩家双向及跨后端请求、发布、多插件关闭、并发回复关联、超时与异常帧。构建和独立 TCP 测试不能代替真实 Bukkit/Uranium 装载、玩家整合包验收或生产容量测试。
 
-本次构建、244 项回归和实际 Java 8 进程的结果见 [2026-09-27 验证记录](../smoke/results/2026-09-27-channel-messaging.md)。
+本次构建、244 项回归和实际 Java 8 进程的结果见 [2026-09-27 验证记录](../testing/smoke/results/2026-09-27-channel-messaging.md)。
 
 安装发行包的 `backend/` 提供共享宿主 JAR；它同时包含非 Bukkit 宿主所需的控制通道客户端、消息 API 和协议。运行 `:proxy-core:installDist` 后，可用实际 JDK 8 运行独立进程验收：
 

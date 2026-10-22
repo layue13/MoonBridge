@@ -19,14 +19,14 @@
 
 ```sh
 ./gradlew check :proxy-core:installDist                # Windows: .\gradlew.bat check :proxy-core:installDist
-cd proxy-core/build/install/moonbridge
-bin/moonbridge --validate-config config/moonbridge.yml   # Windows: bin\moonbridge.bat
-bin/moonbridge --config config/moonbridge.yml
+cd proxy/core/build/install/moonbridge
+java -jar moonbridge.jar --validate-config config/moonbridge.yml
+java -jar moonbridge.jar                                 # 默认读取 config/moonbridge.yml
 ```
 
-需要全部部署物（服务器包、后端插件、客户端 mod）时运行 `./gradlew release`，说明见[发行物与安装位置](docs/release-layout.md)。LuckPerms 平台插件从 `vendor/luckperms` 子模块编译，默认不构建；需要时先 `git submodule update --init --recursive`，再加 `-Pluckperms`。
+需要全部部署物（服务器包、后端插件、客户端 mod）时运行 `./gradlew release`，说明见[发行物与安装位置](docs/release-layout.md)。LuckPerms 平台插件从 `proxy/vendor/luckperms` 子模块编译，默认不构建；需要时先 `git submodule update --init --recursive`，再加 `-Pluckperms`。
 
-默认配置为 `OFFLINE`，仅监听 `127.0.0.1:25577`。公开部署使用 `ONLINE_BUNGEE` 并限制玩家直连后端；认证、监听、入口候选和后端地址见[运行配置](docs/operations.md)。发行包根目录附带 `docs/` 与按日期归档的 `smoke/results/`、`benchmarks/results/`。
+默认配置为 `OFFLINE`，仅监听 `127.0.0.1:25577`。公开部署使用 `ONLINE_BUNGEE` 并限制玩家直连后端；认证、监听、入口候选和后端地址见[运行配置](docs/operations.md)。
 
 ## 后端插件开发
 
@@ -36,6 +36,6 @@ bin/moonbridge --config config/moonbridge.yml
 
 ## 验证状态
 
-当前可引用的验收记录及其覆盖范围见[文档索引](docs/README.md#当前可引用的验证记录)和[验证方法](docs/testing.md)。各记录只证明其注明的提交和环境，不代表生产容量。已知 Uranium 候选服登录停滞见[记录](smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
+当前可引用的验收记录及其覆盖范围见[文档索引](docs/README.md#当前可引用的验证记录)和[验证方法](docs/testing.md)。各记录只证明其注明的提交和环境，不代表生产容量。已知 Uranium 候选服登录停滞见[记录](testing/smoke/results/2026-09-26-uranium-login-stalls.md)及 [Uranium #585](https://git.nest.potatolab.uk:8443/TDLM/Uranium/issues/585)。
 
 生产权限存储统一使用 MariaDB 13.0.2；见 [MariaDB 权限数据库](docs/mariadb.md)。

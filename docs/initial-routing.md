@@ -84,4 +84,4 @@ initialRouting:
 
 这些是验收要求而不是本文件对运行时通过状态的声明。自动化测试、隔离协议烟测、真实后端登录与完整客户端/Forge 登录属于不同证据层级；各自结果必须单独记录。
 
-本次专项测试与真实 Uranium 协议登录结果见[验收记录](../smoke/results/2026-09-27-initial-routing.md)。
+本次专项测试与真实 Uranium 协议登录结果见[验收记录](../testing/smoke/results/2026-09-27-initial-routing.md)。

@@ -4,7 +4,7 @@
 
 | 路径 | 是什么 | 装在哪里 |
 | --- | --- | --- |
-| `server/moonbridge-<版本>.zip` | 代理发行包：`bin/` 启动脚本、`lib/`、`config/` 示例配置、`docs/`；带 `-Pluckperms` 构建时 `plugins/` 里含 LuckPerms 平台插件 | 代理服务器，解压后用 JDK 25 运行 `bin/moonbridge --config config/moonbridge.yml` |
+| `server/moonbridge-<版本>.zip` | 代理发行包：可直接运行的 `moonbridge.jar`、`config/` 示例配置、README；带 `-Pluckperms` 构建时 `plugins/` 里含 LuckPerms 平台插件 | 代理服务器，解压后在该目录用 JDK 25 运行 `java -jar moonbridge.jar` |
 | `backend/moonbridge-backend-<版本>.jar` | 后端共享宿主 `MoonBridgeBackend`（Bukkit/Uranium 插件，Java 8），内含消息 API 与控制通道客户端 | 每台后端服务器的 `plugins/`；后端业务插件对它 `compileOnly` 并在 `plugin.yml` 里 `depend: [MoonBridgeBackend]` |
 | `client/moonbridgews-<版本>.jar` | 1.7.10 Forge WebSocket 客户端 mod | 玩家客户端 `mods/`，另需 UniMixins；只在使用 `ws://`/`wss://` 地址时需要 |
 
