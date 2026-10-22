@@ -1,0 +1,72 @@
+diff --git a/proxy/core/src/main/java/dev/moonbridge/core/session/play/RawRelay.java b/proxy/core/src/main/java/dev/moonbridge/core/session/play/RawRelay.java
+index e1832e1..a6288f2 100644
+--- a/proxy/core/src/main/java/dev/moonbridge/core/session/play/RawRelay.java
++++ b/proxy/core/src/main/java/dev/moonbridge/core/session/play/RawRelay.java
+@@ -3,6 +3,7 @@ package dev.moonbridge.core.session.play;
+ import dev.moonbridge.core.protocol.ProtocolProfile;
+ import io.netty.buffer.ByteBuf;
+ import io.netty.channel.Channel;
++import io.netty.channel.ChannelFuture;
+ import io.netty.channel.ChannelFutureListener;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelInboundHandlerAdapter;
+@@ -173,6 +174,9 @@ public final class RawRelay {
+         private volatile boolean closingAfterWrites;
+         private boolean readsEnabled;
+         private boolean flushPending;
++        /** The last frame written since the previous flush, and how many frames that batch holds. */
++        private ChannelFuture batchTail;
++        private int batchWrites;
+         private ScheduledFuture<?> closeDeadline;
+         private CompletableFuture<Void> pauseComplete;
+         private CompletableFuture<Void> resumeComplete;
+@@ -340,17 +344,10 @@ public final class RawRelay {
+             try {
+                 Consumer<ByteBuf> activeObserver = observer;
+                 if (activeObserver != null) activeObserver.accept(((ByteBuf) message).duplicate());
+-                peer.write(message).addListener((ChannelFutureListener) future ->
+-                        ctx.executor().execute(() -> {
+-                            writesInFlight--;
+-                            if (paused && writesInFlight == 0 && pauseComplete != null) {
+-                                if (future.isSuccess()) pauseComplete.complete(null);
+-                                else pauseComplete.completeExceptionally(future.cause());
+-                                pauseComplete = null;
+-                            }
+-                            if (!future.isSuccess() || (closingAfterWrites && writesInFlight == 0)) closePair(ctx);
+-                            else if (!closingAfterWrites) requestRead();
+-                        }));
++                // Only the batch's last write gets a listener, attached when the batch is flushed: one channel
++                // completes writes in order and fails every later write once one fails, so its outcome covers all.
++                batchTail = peer.write(message);
++                batchWrites++;
+                 scheduleFlush(ctx);
+             } catch (RuntimeException failure) {
+                 writesInFlight--;
+@@ -379,9 +376,27 @@ public final class RawRelay {
+         private void flushPeer() {
+             if (!flushPending) return;
+             flushPending = false;
++            ChannelFuture tail = batchTail;
++            int writes = batchWrites;
++            batchTail = null;
++            batchWrites = 0;
++            if (tail != null) tail.addListener((ChannelFutureListener) future -> batchCompleted(future, writes));
+             peer.flush();
+         }
+ 
++        private void batchCompleted(ChannelFuture future, int writes) {
++            context.executor().execute(() -> {
++                writesInFlight -= writes;
++                if (paused && writesInFlight == 0 && pauseComplete != null) {
++                    if (future.isSuccess()) pauseComplete.complete(null);
++                    else pauseComplete.completeExceptionally(future.cause());
++                    pauseComplete = null;
++                }
++                if (!future.isSuccess() || (closingAfterWrites && writesInFlight == 0)) closePair(context);
++                else if (!closingAfterWrites) requestRead();
++            });
++        }
++
+         @Override
+         public void channelWritabilityChanged(ChannelHandlerContext ctx) {
+             if (ctx.channel().isWritable()) opposite.requestRead();

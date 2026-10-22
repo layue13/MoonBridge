@@ -1,7 +1,6 @@
 package dev.moonbridge.bukkit;
 
 import dev.moonbridge.messaging.session.ForwardedSessionProof;
-import java.lang.reflect.Method;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -91,55 +90,52 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
         return true;
     }
 
+    /** Chosen once per server process; replaced by the reflective fallback if a compiled adapter fails to link. */
+    private static volatile ProfileAccess profiles = ProfileAccess.select();
+
     static ProofProperty stripForwardedProof(Player player) {
-        Object profile = invokeNoArg(player, "getProfile");
-        if (profile == null) profile = invokeNoArg(player, "getGameProfile");
-        if (profile == null) return ProofProperty.unavailable();
-        Object properties = invokeNoArg(profile, "getProperties");
+        ProfileAccess access = profiles;
+        // Every Uranium player is a CraftPlayer; anything else (a test double, an unusual server player type) is read
+        // by name rather than treated as having no profile.
+        if (!access.handles(player)) access = ReflectiveProfileAccess.INSTANCE;
+        try {
+            return stripForwardedProof(access, player);
+        } catch (LinkageError mismatch) {
+            if (access == ReflectiveProfileAccess.INSTANCE) throw mismatch;
+            // The server has the adapter's classes but not the exact signatures it was compiled against. The failing
+            // call happens before any property is removed, so retrying with reflection starts from the same state.
+            profiles = ReflectiveProfileAccess.INSTANCE;
+            java.util.logging.Logger.getLogger(OwnedBukkitSessionService.class.getName()).warning(
+                    "GameProfile access: " + access.description() + " does not match this server; using reflection");
+            return stripForwardedProof(ReflectiveProfileAccess.INSTANCE, player);
+        }
+    }
+
+    static ProofProperty stripForwardedProof(ProfileAccess access, Object player) {
+        Object properties = access.properties(player);
         if (properties == null) return ProofProperty.unavailable();
-        Object matches = invoke(properties, "get", new Class<?>[]{Object.class}, ForwardedSessionProof.PROPERTY_NAME);
-        if (!(matches instanceof Iterable<?>)) return ProofProperty.unavailable();
+        Iterable<?> matches = access.get(properties, ForwardedSessionProof.PROPERTY_NAME);
+        if (matches == null) return ProofProperty.unavailable();
         Collection<Object> propertiesToRemove = new java.util.ArrayList<Object>();
         Collection<String> values = new java.util.ArrayList<>(2);
         boolean allValuesValid = true;
-        for (Object property : (Iterable<?>) matches) {
+        for (Object property : matches) {
             if (property == null) return ProofProperty.failed(true);
             propertiesToRemove.add(property);
-            Object value = invokeNoArg(property, "getValue");
+            Object value = access.value(property);
             if (value instanceof String && ((String) value).length() <= 2048) values.add((String) value);
             else allValuesValid = false;
         }
         for (Object property : propertiesToRemove) {
-            Object removed = invoke(properties, "remove", new Class<?>[]{Object.class, Object.class},
-                    ForwardedSessionProof.PROPERTY_NAME, property);
-            if (!Boolean.TRUE.equals(removed)) return ProofProperty.failed(true);
+            if (!access.remove(properties, ForwardedSessionProof.PROPERTY_NAME, property)) {
+                return ProofProperty.failed(true);
+            }
         }
-        Object remaining = invoke(properties, "get", new Class<?>[]{Object.class},
-                ForwardedSessionProof.PROPERTY_NAME);
-        if (!(remaining instanceof Iterable<?>) || ((Iterable<?>) remaining).iterator().hasNext())
+        Iterable<?> remaining = access.get(properties, ForwardedSessionProof.PROPERTY_NAME);
+        if (remaining == null || remaining.iterator().hasNext())
             return ProofProperty.failed(!propertiesToRemove.isEmpty());
         return ProofProperty.removed(propertiesToRemove.size() == 1 && allValuesValid && values.size() == 1
                 ? values.iterator().next() : null);
-    }
-
-    private static Object invokeNoArg(Object receiver, String methodName) {
-        if (receiver == null) return null;
-        try {
-            Method method = receiver.getClass().getMethod(methodName);
-            return method.invoke(receiver);
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return null;
-        }
-    }
-
-    private static Object invoke(Object receiver, String methodName, Class<?>[] parameterTypes, Object... args) {
-        if (receiver == null) return null;
-        try {
-            Method method = receiver.getClass().getMethod(methodName, parameterTypes);
-            return method.invoke(receiver, args);
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return null;
-        }
     }
 
     static final class ProofProperty {
@@ -153,9 +149,9 @@ final class OwnedBukkitSessionService implements BukkitSessionService, Listener,
             this.foundProperty = foundProperty;
         }
 
-        private static ProofProperty unavailable() { return new ProofProperty(null, false, false); }
-        private static ProofProperty failed(boolean found) { return new ProofProperty(null, false, found); }
-        private static ProofProperty removed(String proof) { return new ProofProperty(proof, true, proof != null); }
+        static ProofProperty unavailable() { return new ProofProperty(null, false, false); }
+        static ProofProperty failed(boolean found) { return new ProofProperty(null, false, found); }
+        static ProofProperty removed(String proof) { return new ProofProperty(proof, true, proof != null); }
     }
 
     @Override

@@ -1,8 +1,8 @@
 package dev.moonbridge.messaging;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Immutable message envelope shared by the proxy and Java 8 backend clients. The UUID identifies a message
@@ -70,11 +70,13 @@ public final class Message {
     /** Returns a defensive copy of the payload. */
     public byte[] payload() { return payload.clone(); }
 
+    /** Compiled once: validateChannel runs for every message, and String.matches would recompile it each time. */
+    private static final Pattern CHANNEL = Pattern.compile("[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*");
+
     public static String validateChannel(String channel) {
         Objects.requireNonNull(channel, "channel");
-        byte[] bytes = channel.getBytes(StandardCharsets.US_ASCII);
-        if (bytes.length == 0 || bytes.length > MAX_CHANNEL_BYTES || !channel.matches(
-                "[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*")) {
+        // The pattern admits ASCII only, so the character count is the byte count.
+        if (channel.isEmpty() || channel.length() > MAX_CHANNEL_BYTES || !CHANNEL.matcher(channel).matches()) {
             throw new IllegalArgumentException("channel must be namespace:name using lowercase ASCII letters, digits, '.', '_' or '-'");
         }
         return channel;

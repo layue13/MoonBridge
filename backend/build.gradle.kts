@@ -8,7 +8,13 @@ plugins {
 
 val spigotApi = "org.spigotmc:spigot-api:1.8-R0.1-SNAPSHOT"
 
+// Compile-only copies of the server classes the compiled profile adapters call (see src/serverStubs/README.md).
+// The running server provides the real ones, so the stubs are never packaged.
+val serverStubs = sourceSets.create("serverStubs")
+
 dependencies {
+    compileOnly(serverStubs.output)
+    testImplementation(serverStubs.output)
     api(project(":messaging"))
     // The running server supplies Bukkit; business plugins compile against their own server API.
     compileOnly(spigotApi) { isTransitive = false }
@@ -57,6 +63,7 @@ val verifyBackendJar = tasks.register("verifyBackendJar") {
                 check(names.count { name -> name == it } == 1) { "Backend jar must contain exactly one $it" }
             }
             check(names.none { it.startsWith("org/bukkit/") }) { "Bukkit API must remain server-provided" }
+            check(names.none { it.startsWith("com/mojang/") }) { "authlib must remain server-provided" }
             entries.filter { it.name.endsWith(".class") }.forEach { entry ->
                 DataInputStream(archive.getInputStream(entry)).use { input ->
                     input.readInt()

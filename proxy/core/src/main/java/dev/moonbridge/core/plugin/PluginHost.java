@@ -197,9 +197,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 }
                 Plugin plugin;
                 try {
-                    plugin = Class.forName(candidate.className(), true, loader).asSubclass(Plugin.class)
-                            .getConstructor().newInstance();
-                } catch (ReflectiveOperationException | ClassCastException | LinkageError failure) {
+                    plugin = PluginConstructors.newPlugin(loader.loadClass(candidate.className()));
+                } catch (Throwable failure) {
                     throw new IOException("Failed to load plugin JAR " + candidate.jar(), failure);
                 }
                 Set<String> dependencyIds = candidate.id() == null ? Set.of()

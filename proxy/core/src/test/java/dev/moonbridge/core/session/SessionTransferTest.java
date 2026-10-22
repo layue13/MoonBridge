@@ -389,6 +389,19 @@ final class SessionTransferTest {
         }
     }
 
+    /**
+     * Waits for the proxy to close a backend connection. The proxy may close while this backend's frames are still
+     * unread on its side, and the kernel then answers with a reset instead of an orderly end of stream; both mean the
+     * proxy closed it.
+     */
+    private static void awaitClosedByProxy(Socket socket) throws java.io.IOException {
+        try {
+            assertEquals(-1, socket.getInputStream().read());
+        } catch (java.net.SocketException reset) {
+            if (!String.valueOf(reset.getMessage()).contains("Connection reset")) throw reset;
+        }
+    }
+
     @Test
     void cutoverTimesOutWhenOldBackendWriteNeverCompletes() throws Exception {
         var catalog = new InMemoryBackendCatalog();
@@ -400,7 +413,7 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     acceptLogin(new DataInputStream(socket.getInputStream()),
                             new DataOutputStream(socket.getOutputStream()), 0);
-                    assertEquals(-1, socket.getInputStream().read());
+                    awaitClosedByProxy(socket);
                     oldClosed.complete(null);
                 } catch (Throwable failure) { oldClosed.completeExceptionally(failure); }
             });
@@ -409,7 +422,7 @@ final class SessionTransferTest {
                     socket.setSoTimeout(5000);
                     acceptLogin(new DataInputStream(socket.getInputStream()),
                             new DataOutputStream(socket.getOutputStream()), 0, 200);
-                    assertEquals(-1, socket.getInputStream().read());
+                    awaitClosedByProxy(socket);
                     newClosed.complete(null);
                 } catch (Throwable failure) { newClosed.completeExceptionally(failure); }
             });
