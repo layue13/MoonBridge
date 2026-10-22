@@ -8,6 +8,7 @@ import dev.moonbridge.api.PlacementDecision;
 import dev.moonbridge.api.PlayerView;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.api.Plugin;
+import dev.moonbridge.api.PluginInfo;
 import dev.moonbridge.api.permission.PermissionProvider;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.backend.BackendCatalog;
@@ -30,7 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
@@ -66,6 +67,9 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     private final HostServices services;
     private final List<URLClassLoader> classLoaders = new ArrayList<>();
     private final List<LoadedPlugin> plugins = new ArrayList<>();
+    private final PluginServiceRegistry pluginServices = new PluginServiceRegistry();
+    /** Descriptor plugins in load order, readable by plugins on any thread. */
+    private volatile List<PluginInfo> pluginInfos = List.of();
     private volatile BackendChannelTransport backendChannelTransport;
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
@@ -144,7 +148,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         this.commandService = new CommandService(lifecycle, this, players, permissionService, commandWorkers, timer);
         this.placement = new PlacementService(lifecycle, this, catalog, placementTimeout, callbacks, timer);
         this.services = new HostServices(catalog, players, proxyEpoch, permissionService, localMessaging,
-                commandService, events, lifecycle);
+                commandService, events, lifecycle, pluginServices, () -> pluginInfos);
     }
 
     private static ThreadPoolExecutor boundedPool(int threads, int queueCapacity, String name) {
@@ -153,12 +157,16 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
-    /** Loads every JAR in the directory in filename order through Java's service provider mechanism. */
+    /** Loads every plugin in the directory: descriptor plugins in dependency order, the rest in filename order. */
     public synchronized void loadPlugins(Path directory) throws IOException {
         loadPlugins(directory, null);
     }
 
-    /** Loads only configured provider classes; an empty map enables no external plugins. */
+    /**
+     * Loads only the configured plugins; an empty map enables no external plugins. A key is a descriptor id or a
+     * plugin class name. Plugins with a {@code META-INF/moonbridge-plugin.yml} are loaded after the plugins they
+     * depend on and can see their classes; startup fails if a required dependency is missing or not enabled.
+     */
     public synchronized void loadPlugins(Path directory, Map<String, Map<String, String>> enabled) throws IOException {
         lifecycle.require(HostLifecycle.State.LOADING);
         Objects.requireNonNull(directory, "directory");
@@ -170,41 +178,123 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         if (!Files.isDirectory(directory)) {
             throw new IOException("Plugin path is not a directory: " + directory);
         }
-        List<Path> jars = PluginJars.list(directory);
-        var remaining = enabled == null ? null : new HashSet<>(enabled.keySet());
-        for (Path jar : jars) {
-            try {
-                List<String> selected = enabled == null ? null : PluginJars.declaredProviders(jar).stream()
-                        .filter(enabled::containsKey).toList();
-                if (selected != null && selected.isEmpty()) continue;
-                PluginClassLoader loader = new PluginClassLoader(new java.net.URL[]{jar.toUri().toURL()},
-                        Plugin.class.getClassLoader());
-                classLoaders.add(loader);
-                if (selected == null) {
-                    ServiceLoader.load(Plugin.class, loader).stream().forEach(provider -> {
-                        String className = provider.type().getName();
-                        loadOne(provider.get(), jar.getFileName() + ":" + className, Map.of(),
-                                directory.resolve("data").resolve(className), loader);
-                    });
-                } else {
-                    for (String className : selected) {
-                        if (!remaining.remove(className)) {
-                            throw new IllegalStateException("Duplicate configured plugin provider: " + className);
-                        }
-                        Plugin plugin = Class.forName(className, true, loader).asSubclass(Plugin.class)
-                                .getConstructor().newInstance();
-                        loadOne(plugin, jar.getFileName() + ":" + className, enabled.get(className),
-                                directory.resolve("data").resolve(className), loader);
-                    }
+        try {
+            List<Candidate> ordered = resolve(installedCandidates(directory), enabled);
+            Map<Path, PluginClassLoader> loaders = new java.util.HashMap<>();
+            Map<String, Candidate> byId = new java.util.HashMap<>();
+            ordered.stream().filter(candidate -> candidate.id() != null)
+                    .forEach(candidate -> byId.put(candidate.id(), candidate));
+            for (Candidate candidate : ordered) {
+                PluginClassLoader loader = loaders.get(candidate.jar());
+                if (loader == null) {
+                    // Dependencies come earlier in the order, so their loaders already exist.
+                    List<PluginClassLoader> dependencyLoaders = candidate.presentDependencies().stream()
+                            .map(id -> loaders.get(byId.get(id).jar())).toList();
+                    loader = new PluginClassLoader(new java.net.URL[]{candidate.jar().toUri().toURL()},
+                            Plugin.class.getClassLoader(), dependencyLoaders);
+                    loaders.put(candidate.jar(), loader);
+                    classLoaders.add(loader);
                 }
-            } catch (Throwable failure) {
-                close();
-                throw new IOException("Failed to load plugin JAR " + jar, failure);
+                Plugin plugin;
+                try {
+                    plugin = Class.forName(candidate.className(), true, loader).asSubclass(Plugin.class)
+                            .getConstructor().newInstance();
+                } catch (ReflectiveOperationException | ClassCastException | LinkageError failure) {
+                    throw new IOException("Failed to load plugin JAR " + candidate.jar(), failure);
+                }
+                Set<String> dependencyIds = candidate.id() == null ? Set.of()
+                        : PluginGraph.reachable(candidate.id(), id -> byId.get(id).presentDependencies());
+                try {
+                    loadOne(plugin, candidate.jar().getFileName() + ":" + candidate.className(), candidate.settings(),
+                            directory.resolve("data").resolve(candidate.className()), loader,
+                            candidate.descriptor() == null ? null : candidate.descriptor().info(), dependencyIds);
+                } catch (RuntimeException failure) {
+                    throw new IOException("Failed to load plugin JAR " + candidate.jar(), failure);
+                }
+            }
+        } catch (IOException | RuntimeException | Error failure) {
+            close();
+            throw failure;
+        }
+    }
+
+    /** One plugin entry point found in a JAR: the descriptor's main class, or a META-INF/services provider. */
+    private record Candidate(Path jar, String className, PluginDescriptor descriptor, Map<String, String> settings,
+                             List<String> presentDependencies) {
+        String id() { return descriptor == null ? null : descriptor.id(); }
+    }
+
+    private static List<Candidate> installedCandidates(Path directory) throws IOException {
+        List<Candidate> installed = new ArrayList<>();
+        Map<String, Path> ids = new java.util.HashMap<>();
+        for (Path jar : PluginJars.list(directory)) {
+            Optional<PluginDescriptor> descriptor = PluginDescriptor.read(jar);
+            if (descriptor.isPresent()) {
+                Path other = ids.putIfAbsent(descriptor.get().id(), jar);
+                if (other != null) {
+                    throw new IOException("Plugin id " + descriptor.get().id() + " is used by both "
+                            + other.getFileName() + " and " + jar.getFileName());
+                }
+                installed.add(new Candidate(jar, descriptor.get().main(), descriptor.get(), Map.of(), List.of()));
+            } else {
+                for (String className : PluginJars.declaredProviders(jar)) {
+                    installed.add(new Candidate(jar, className, null, Map.of(), List.of()));
+                }
             }
         }
+        return installed;
+    }
+
+    /** Picks the enabled plugins, checks their dependencies and returns them in load order. */
+    private static List<Candidate> resolve(List<Candidate> installed, Map<String, Map<String, String>> enabled)
+            throws IOException {
+        var remaining = enabled == null ? null : new HashSet<>(enabled.keySet());
+        List<Candidate> selected = new ArrayList<>();
+        for (Candidate candidate : installed) {
+            Map<String, String> settings = Map.of();
+            if (enabled != null) {
+                boolean byId = candidate.id() != null && enabled.containsKey(candidate.id());
+                boolean byClass = enabled.containsKey(candidate.className());
+                if (byId && byClass) {
+                    throw new IOException("Plugin " + candidate.id() + " is enabled twice, by id and by class name "
+                            + candidate.className());
+                }
+                if (!byId && !byClass) continue;
+                String key = byId ? candidate.id() : candidate.className();
+                if (!remaining.remove(key)) throw new IOException("Duplicate configured plugin provider: " + key);
+                settings = enabled.get(key);
+            }
+            selected.add(new Candidate(candidate.jar(), candidate.className(), candidate.descriptor(), settings,
+                    List.of()));
+        }
         if (remaining != null && !remaining.isEmpty()) {
-            close();
             throw new IOException("Configured plugins were not found: " + remaining);
+        }
+        Set<String> installedIds = new HashSet<>();
+        installed.forEach(candidate -> { if (candidate.id() != null) installedIds.add(candidate.id()); });
+        Set<String> selectedIds = new HashSet<>();
+        selected.forEach(candidate -> { if (candidate.id() != null) selectedIds.add(candidate.id()); });
+        List<Candidate> withDependencies = new ArrayList<>();
+        for (Candidate candidate : selected) {
+            List<String> present = new ArrayList<>();
+            if (candidate.descriptor() != null) {
+                for (PluginDescriptor.Dependency dependency : candidate.descriptor().dependencies()) {
+                    if (selectedIds.contains(dependency.id())) {
+                        present.add(dependency.id());
+                    } else if (!dependency.optional()) {
+                        throw new IOException("Plugin " + candidate.id() + " requires " + dependency.id() + ", which is "
+                                + (installedIds.contains(dependency.id()) ? "installed but not enabled in plugins.enabled"
+                                : "not installed"));
+                    }
+                }
+            }
+            withDependencies.add(new Candidate(candidate.jar(), candidate.className(), candidate.descriptor(),
+                    candidate.settings(), List.copyOf(present)));
+        }
+        try {
+            return PluginGraph.order(withDependencies, Candidate::id, Candidate::presentDependencies);
+        } catch (IllegalStateException cycle) {
+            throw new IOException(cycle.getMessage());
         }
     }
 
@@ -215,7 +305,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             for (Plugin plugin : instances) {
                 Objects.requireNonNull(plugin, "plugin");
                 loadOne(plugin, "instance:" + plugin.getClass().getName() + ":" + plugins.size(), Map.of(),
-                        Path.of("plugins").resolve(plugin.getClass().getName()), null);
+                        Path.of("plugins").resolve(plugin.getClass().getName()), null, null, Set.of());
             }
         } catch (RuntimeException | Error failure) {
             close();
@@ -240,7 +330,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 } finally {
                     loaded.context.endEventRegistration();
                 }
-                LOGGER.info("Plugin {} enabled", loaded.owner.id());
+                LOGGER.info("Plugin {} enabled", loaded.context.displayName());
             }
             selectPermissionProvider();
             events.freeze();
@@ -378,7 +468,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         Thread.ofVirtual().name("moonbridge-plugin-disable-" + loaded.owner.id()).start(stop);
         try {
             stop.get(remaining, TimeUnit.NANOSECONDS);
-            LOGGER.info("Plugin {} disabled", loaded.owner.id());
+            LOGGER.info("Plugin {} disabled", loaded.context.displayName());
         } catch (TimeoutException timeout) {
             stop.cancel(true);
             LOGGER.warn("Plugin {} onDisable exceeded shutdown deadline", loaded.owner.id());
@@ -391,7 +481,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     }
 
     private void loadOne(Plugin plugin, String id, Map<String, String> settings, Path dataDirectory,
-                         PluginClassLoader pluginClassLoader) {
+                         PluginClassLoader pluginClassLoader, PluginInfo info, Set<String> dependencyIds) {
         long generation = NEXT_HOST_GENERATION.updateAndGet(value -> {
             if (value == Long.MAX_VALUE) {
                 throw new IllegalStateException("Plugin host generation exhausted");
@@ -399,15 +489,22 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
             return value + 1;
         });
         BackendOwner owner = new BackendOwner(id, generation);
-        PluginContextImpl context = new PluginContextImpl(services, owner, settings, dataDirectory, pluginClassLoader);
+        PluginContextImpl context = new PluginContextImpl(services, owner, settings, dataDirectory, pluginClassLoader,
+                info, dependencyIds);
         LoadedPlugin loaded = new LoadedPlugin(plugin, owner, context);
         plugins.add(loaded);
+        if (info != null) {
+            var infos = new ArrayList<>(pluginInfos);
+            infos.add(info);
+            pluginInfos = List.copyOf(infos);
+        }
         context.beginEventRegistration();
         try {
             plugin.onLoad(context);
         } catch (Throwable failure) {
             context.deactivateAndRemove();
             plugins.remove(loaded);
+            if (info != null) pluginInfos = pluginInfos.stream().filter(other -> other != info).toList();
             throw new PluginLoadException(id, failure);
         } finally {
             context.endEventRegistration();

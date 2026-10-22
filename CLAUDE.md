@@ -37,7 +37,7 @@ testing/smoke/      smoke scripts and dated records; testing/benchmarks/ likewis
 ```
 
 - `proxy-core` — the proxy runtime (`dev.moonbridge.app` = startup/config, `dev.moonbridge.core.*` = everything else). The only module that uses Netty.
-- `proxy-plugin-api` — the stable plugin boundary. Plugins are discovered with `META-INF/services/dev.moonbridge.api.Plugin` and loaded in separate class loaders by `PluginHost`.
+- `proxy-plugin-api` — the stable plugin boundary. Plugins are discovered with `META-INF/services/dev.moonbridge.api.Plugin` or an optional `META-INF/moonbridge-plugin.yml` (id, version, main, dependencies) and loaded in separate class loaders by `PluginHost`. Descriptor plugins load in dependency order (`PluginGraph`), see their declared dependencies' classes (`PluginClassLoader`) and share typed services (`PluginServiceRegistry`).
 - `messaging` — message envelope, channel API and wire codec shared by the proxy and backends.
 - `backend` — the Bukkit/Uranium host plugin `MoonBridgeBackend` (its jar bundles `messaging`), its service API (`dev.moonbridge.bukkit`) and the control channel client (`dev.moonbridge.backendchannel`). Business plugins compile against this jar `compileOnly`.
 - `messaging` and `backend` use `moonbridge.java8-library-conventions` (`--release 8`, for Java 8 backends such as Uranium) and must not pull in newer APIs.

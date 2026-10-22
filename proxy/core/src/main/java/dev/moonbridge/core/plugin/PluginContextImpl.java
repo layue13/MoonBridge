@@ -19,6 +19,10 @@ import dev.moonbridge.api.PlayerView;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.api.Plugin;
 import dev.moonbridge.api.PluginContext;
+import dev.moonbridge.api.PluginInfo;
+import dev.moonbridge.api.PluginServices;
+import dev.moonbridge.api.Plugins;
+import dev.moonbridge.api.ServiceRegistration;
 import dev.moonbridge.api.ServerDefinition;
 import dev.moonbridge.api.ServerRegistration;
 import dev.moonbridge.api.ServerView;
@@ -58,13 +62,48 @@ import java.util.UUID;
         private final Map<String, String> settings;
         private final Path dataDirectory;
         private final PluginClassLoader pluginClassLoader;
+        /** Null for a plugin loaded without a descriptor. */
+        private final PluginInfo info;
+        /** Ids of every plugin this one depends on, directly or through other dependencies. */
+        private final Set<String> dependencyIds;
+        private final PluginServices pluginServices;
+        private final Plugins pluginDirectory;
         final Set<EventRegistration<?, ?>> eventSubscriptions = new HashSet<>();
         volatile boolean active = true;
         private boolean eventRegistrationOpen;
 
         PluginContextImpl(HostServices host, BackendOwner owner, Map<String, String> settings, Path dataDirectory,
                           PluginClassLoader pluginClassLoader) {
+            this(host, owner, settings, dataDirectory, pluginClassLoader, null, Set.of());
+        }
+
+        PluginContextImpl(HostServices host, BackendOwner owner, Map<String, String> settings, Path dataDirectory,
+                          PluginClassLoader pluginClassLoader, PluginInfo info, Set<String> dependencyIds) {
             this.host = host;
+            this.info = info;
+            this.dependencyIds = Set.copyOf(dependencyIds);
+            this.pluginServices = new PluginServices() {
+                @Override public <T> ServiceRegistration register(Class<T> type, T service) {
+                    synchronized (PluginContextImpl.this) {
+                        requireActive();
+                        return host.pluginServices().register(PluginContextImpl.this, type, service);
+                    }
+                }
+                @Override public <T> Optional<T> find(Class<T> type) {
+                    synchronized (PluginContextImpl.this) {
+                        requireActive();
+                        return host.pluginServices().find(PluginContextImpl.this, type);
+                    }
+                }
+            };
+            this.pluginDirectory = new Plugins() {
+                @Override public Optional<PluginInfo> self() { return Optional.ofNullable(info); }
+                @Override public Optional<PluginInfo> find(String id) {
+                    Objects.requireNonNull(id, "id");
+                    return all().stream().filter(plugin -> plugin.id().equals(id)).findFirst();
+                }
+                @Override public List<PluginInfo> all() { return host.pluginInfos().get(); }
+            };
             this.owner = owner;
             this.pluginMessaging = host.messaging().openScope(owner.id());
             this.pluginPlayers = new PluginPlayers(this);
@@ -99,6 +138,16 @@ import java.util.UUID;
         @Override public Commands commands() { return pluginCommands; }
         @Override public Events events() { return pluginEvents; }
         @Override public Messaging messaging() { return pluginMessaging; }
+        @Override public PluginServices services() { return pluginServices; }
+        @Override public Plugins plugins() { return pluginDirectory; }
+
+        /** True when {@code provider} is one of this plugin's dependencies, directly or transitively. */
+        boolean dependsOn(PluginContextImpl provider) {
+            return provider.info != null && dependencyIds.contains(provider.info.id());
+        }
+
+        /** The descriptor id when there is one, else the internal owner id. */
+        String displayName() { return info != null ? info.id() : owner.id(); }
         @Override public Logger logger() { return logger; }
         @Override public dev.moonbridge.api.permission.Permissions permissions() { return pluginPermissions; }
         @Override public Path dataDirectory() {
@@ -119,6 +168,7 @@ import java.util.UUID;
             active = false;
             eventRegistrationOpen = false;
             pluginMessaging.close();
+            host.pluginServices().removeOwner(this);
             revokeEventSubscriptions();
             host.commands().removeOwner(this);
             host.catalog().removeOwner(owner);
