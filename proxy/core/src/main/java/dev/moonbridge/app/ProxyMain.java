@@ -160,13 +160,9 @@ public final class ProxyMain {
     private static Map<String, String> sessionBindingSecrets(ProxyConfiguration configuration) {
         if (configuration.backendChannel() == null) return Map.of();
         Map<String, String> secrets = new HashMap<>();
-        configuration.backendChannel().clients().values().forEach(client -> {
-            String previous = secrets.putIfAbsent(client.backendName(), client.secret());
-            if (previous != null && !previous.equals(client.secret())) {
-                throw new IllegalArgumentException("backendChannel has conflicting secrets for backend "
-                        + client.backendName());
-            }
-        });
+        // BackendChannel already rejects two secrets for one backend name.
+        configuration.backendChannel().clients().values()
+                .forEach(client -> secrets.putIfAbsent(client.backendName(), client.secret()));
         return Map.copyOf(secrets);
     }
 

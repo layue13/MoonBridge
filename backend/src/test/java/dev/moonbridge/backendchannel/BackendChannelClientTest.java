@@ -4,6 +4,7 @@ import dev.moonbridge.messaging.Endpoint;
 import dev.moonbridge.messaging.Message;
 import dev.moonbridge.messaging.MessageKind;
 import dev.moonbridge.messaging.MessageChannel;
+import dev.moonbridge.messaging.protocol.ControlHandshakeLimits;
 import dev.moonbridge.messaging.protocol.MessageCodec;
 import org.junit.jupiter.api.Test;
 
@@ -296,5 +297,16 @@ class BackendChannelClientTest {
             client.close();
         }
         peer.get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void identityLongerThanTheProxyAcceptsIsRejectedAtConstruction() {
+        byte[] secret = new byte[32];
+        char[] longId = new char[ControlHandshakeLimits.INSTANCE_ID_BYTES + 1];
+        Arrays.fill(longId, 'a');
+        IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                () -> new BackendChannelClient("127.0.0.1", 28081, new String(longId), "island-a",
+                        "tcp://127.0.0.1:25565", UUID.randomUUID().toString(), "key-1", secret));
+        assertTrue(rejected.getMessage().startsWith("instanceId"));
     }
 }

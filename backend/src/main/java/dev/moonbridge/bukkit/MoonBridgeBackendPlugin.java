@@ -44,6 +44,10 @@ public final class MoonBridgeBackendPlugin extends JavaPlugin implements Listene
             getServer().getPluginManager().registerEvents(this, this);
             getServer().getPluginManager().registerEvents(sessions, this);
             getLogger().info("Shared MoonBridge messaging service started; registration runs asynchronously");
+        } catch (IllegalArgumentException invalid) {
+            // The configuration checks above and in BackendChannelClient name the key, never its value.
+            getLogger().severe("Cannot start MoonBridge messaging: " + invalid.getMessage());
+            getServer().getPluginManager().disablePlugin(this);
         } catch (RuntimeException failure) {
             // Do not include configuration values or authentication peer data.
             getLogger().severe("Cannot start MoonBridge messaging: " + failure.getClass().getSimpleName());

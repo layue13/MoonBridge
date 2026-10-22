@@ -9,8 +9,6 @@ import dev.moonbridge.core.backend.BackendId;
 import dev.moonbridge.core.backend.BackendView;
 import dev.moonbridge.core.event.PreparedTransfer;
 import dev.moonbridge.core.protocol.ByteBufs;
-import dev.moonbridge.core.protocol.LoginStart;
-import dev.moonbridge.core.protocol.ProtocolProfile;
 import dev.moonbridge.core.protocol.Minecraft1710PlayPackets;
 import dev.moonbridge.core.session.play.RawRelay;
 import dev.moonbridge.core.session.channel.SessionChannels;
@@ -285,11 +283,15 @@ public final class TransferCoordinator {
 
     private void writeBackendLogin(Channel channel) {
         transfer.candidate.loginStarted();
-        ByteBuf handshakeBody = host.backendHandshake(
-                transfer.target.handle().id().value(), transfer.target.owner().instanceGeneration());
-        ByteBuf loginBody = new LoginStart(host.view().username()).encode(frontend.alloc(), ProtocolProfile.minecraft1710());
-        channel.write(handshakeBody);
-        channel.writeAndFlush(loginBody).addListener(write -> {
+        ByteBuf handshakeBody;
+        try {
+            handshakeBody = host.backendHandshake(
+                    transfer.target.handle().id().value(), transfer.target.owner().instanceGeneration());
+        } catch (RuntimeException failure) {
+            failTransfer(transfer, "could not prepare replacement backend login");
+            return;
+        }
+        SessionChannels.writeBackendLogin(channel, handshakeBody, host.view().username()).addListener(write -> {
             if (write.isSuccess()) {
                 LOGGER.debug("Replacement backend login frames flushed for player {} to {}",
                         host.view().username(), channel.remoteAddress());
