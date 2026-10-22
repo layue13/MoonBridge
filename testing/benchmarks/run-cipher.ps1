@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$installLib = Join-Path $repoRoot "proxy\core\build\install\moonbridge\lib"
+$installLib = Join-Path $repoRoot "proxy\core\build\install\moonbridge"
 $classes = Join-Path $PSScriptRoot "build"
 
 Push-Location $repoRoot

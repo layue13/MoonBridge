@@ -1,6 +1,5 @@
 plugins {
     id("moonbridge.java-library-conventions") apply false
-    id("moonbridge.application-conventions") apply false
 }
 
 val releaseVersion = providers.gradleProperty("releaseVersion").orElse("0.1.0-SNAPSHOT").get()

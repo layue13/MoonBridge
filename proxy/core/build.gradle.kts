@@ -1,7 +1,10 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 import org.gradle.api.tasks.Exec
 
 plugins {
-    id("moonbridge.application-conventions")
+    id("moonbridge.java-library-conventions")
+    distribution
+    id("com.gradleup.shadow") version "9.6.1"
 }
 
 val runtimeJavaHome = System.getProperty("java.home")
@@ -37,54 +40,26 @@ dependencies {
     testImplementation(libs.findLibrary("netty-pkitesting").get())
 }
 
-val installedDistSmokeTest = tasks.register<Exec>("installedDistSmokeTest") {
-    group = "verification"
-    description = "Runs the installed MoonBridge distribution in --validate-config mode."
-    dependsOn(tasks.named("installDist"))
+// The distribution is started the way an operator starts it: java -jar moonbridge.jar from the install directory.
+fun installedDistCheck(name: String, description: String, vararg arguments: String) =
+    tasks.register<Exec>(name) {
+        group = "verification"
+        this.description = description
+        dependsOn(tasks.named("installDist"))
 
-    val installDir = layout.buildDirectory.dir("install/moonbridge")
-    inputs.dir(installDir)
-    environment("JAVA_HOME", runtimeJavaHome)
-
-    doFirst {
-        val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
-        val config = installDir.get().file("config/moonbridge.yml").asFile
-        commandLine(script.absolutePath, "--validate-config", config.absolutePath)
+        val installDir = layout.buildDirectory.dir("install/moonbridge")
+        inputs.dir(installDir)
+        workingDir(installDir)
+        commandLine(File(runtimeJavaHome, "bin/java").absolutePath, "-jar", "moonbridge.jar", *arguments)
     }
-}
 
-val installedDistHelpSmokeTest = tasks.register<Exec>("installedDistHelpSmokeTest") {
-    group = "verification"
-    description = "Runs the installed MoonBridge distribution help command."
-    dependsOn(tasks.named("installDist"))
-
-    val installDir = layout.buildDirectory.dir("install/moonbridge")
-    inputs.dir(installDir)
-    environment("JAVA_HOME", runtimeJavaHome)
-
-    doFirst {
-        val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
-        commandLine(script.absolutePath, "--help")
-    }
-}
-
-val installedDistVersionSmokeTest = tasks.register<Exec>("installedDistVersionSmokeTest") {
-    group = "verification"
-    description = "Runs the installed MoonBridge distribution version command."
-    dependsOn(tasks.named("installDist"))
-
-    val installDir = layout.buildDirectory.dir("install/moonbridge")
-    inputs.dir(installDir)
-    environment("JAVA_HOME", runtimeJavaHome)
-
-    doFirst {
-        val windows = System.getProperty("os.name").lowercase().contains("windows")
-        val script = installDir.get().file("bin/" + if (windows) "moonbridge.bat" else "moonbridge").asFile
-        commandLine(script.absolutePath, "--version")
-    }
-}
+val installedDistSmokeTest = installedDistCheck("installedDistSmokeTest",
+    "Runs the installed MoonBridge distribution in --validate-config mode.",
+    "--validate-config", "config/moonbridge.yml")
+val installedDistHelpSmokeTest = installedDistCheck("installedDistHelpSmokeTest",
+    "Runs the installed MoonBridge distribution help command.", "--help")
+val installedDistVersionSmokeTest = installedDistCheck("installedDistVersionSmokeTest",
+    "Runs the installed MoonBridge distribution version command.", "--version")
 
 // The benchmarks in testing/benchmarks/ declare proxy-core packages to reach package-private classes and are
 // normally compiled by their PowerShell runners. Compiling them here keeps them building with main.
@@ -127,16 +102,6 @@ tasks.named("check") {
     dependsOn(compileBenchmarks)
 }
 
-application {
-    mainClass.set("dev.moonbridge.app.ProxyMain")
-    applicationName = "moonbridge"
-    // Netty's epoll/kqueue transports load a JNI library; allow it without JDK restricted-method warnings.
-    // Leak detection is off in the distribution; every proxy-core test class runs with PARANOID detection
-    // through LeakGate instead. Re-enable per deployment with JAVA_OPTS=-Dio.netty.leakDetection.level=simple.
-    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED",
-        "-Dio.netty.leakDetection.level=disabled")
-}
-
 tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     // Tests track every buffer so LeakGate can fail on a leak; the distribution runs with detection off.
@@ -148,11 +113,31 @@ tasks.jar {
     manifest.attributes("Implementation-Title" to "MoonBridge", "Implementation-Version" to project.version)
 }
 
+// The server ships as one runnable jar, like other Minecraft proxies: java -jar moonbridge.jar.
+val serverJar = tasks.named<ShadowJar>("shadowJar") {
+    archiveFileName.set("moonbridge.jar")
+    // Netty, Jackson and Logback register implementations through META-INF/services.
+    mergeServiceFiles()
+    exclude("module-info.class", "META-INF/versions/*/module-info.class",
+        "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
+    manifest.attributes(
+        "Main-Class" to "dev.moonbridge.app.ProxyMain",
+        "Implementation-Title" to "MoonBridge",
+        "Implementation-Version" to project.version,
+        // Jackson ships version-specific classes; keep them selected at runtime.
+        "Multi-Release" to "true",
+        // Netty's epoll/kqueue transports load a JNI library; allow it without restricted-method warnings.
+        "Enable-Native-Access" to "ALL-UNNAMED",
+    )
+}
+
 distributions {
     main {
+        distributionBaseName.set("moonbridge")
         // Only what the proxy needs to run. Docs and test records stay in the repository, and the
         // backend jar ships separately in build/release/backend (see docs/release-layout.md).
         contents {
+            from(serverJar)
             from(rootProject.file("README.md"))
             if (luckPerms != null) {
                 from(luckPerms.tasks.named("pluginJar")) {

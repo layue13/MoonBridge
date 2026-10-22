@@ -16,9 +16,5 @@ gradlePlugin {
             id = "moonbridge.publishing-conventions"
             implementationClass = "MoonBridgePublishingConventionsPlugin"
         }
-        register("applicationConventions") {
-            id = "moonbridge.application-conventions"
-            implementationClass = "MoonBridgeApplicationConventionsPlugin"
-        }
     }
 }

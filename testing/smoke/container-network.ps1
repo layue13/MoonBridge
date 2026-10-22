@@ -98,7 +98,7 @@ $controlConfig
             WaitBackend $backend
             InvokeDocker @('run', '-d', '--network', $network, '--name', $proxy,
                 '-v', "${install}:/opt/moonbridge:ro", '-v', "${config}:/opt/moonbridge.yml:ro",
-                '--entrypoint', 'java', $javaImage, '-cp', '/opt/moonbridge/lib/*',
+                '--entrypoint', 'java', $javaImage, '-cp', '/opt/moonbridge/*',
                 'dev.moonbridge.app.ProxyMain', '--config', '/opt/moonbridge.yml') | Out-Null
             $clientArgs = @('run', '--rm', '--network', $network, '-v', "${repoRoot}:/work:ro")
             if ($mode -eq 'control') { $clientArgs += @('-e', "MOONBRIDGE_CHANNEL_SECRET=$secret") }

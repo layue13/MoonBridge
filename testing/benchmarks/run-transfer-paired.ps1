@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$candidateLib = Join-Path $repoRoot "proxy\core\build\install\moonbridge\lib"
+$candidateLib = Join-Path $repoRoot "proxy\core\build\install\moonbridge"
 $baselineLib = (Resolve-Path -LiteralPath $BaselineLibDirectory).Path
 if (-not (Test-Path -LiteralPath $baselineLib -PathType Container)) {
     throw "baseline library directory does not exist: $baselineLib"

@@ -26,7 +26,7 @@ if ($ReturnToOld -and -not $InstalledPlugin) {
 if (-not $PrismInstanceFolder) { $PrismInstanceFolder = $PrismInstance }
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
-$proxyLib = Join-Path $repoRoot 'proxy\core\build\install\moonbridge\lib'
+$proxyLib = Join-Path $repoRoot 'proxy\core\build\install\moonbridge'
 if (-not (Test-Path -LiteralPath $Java8Path) -or -not (Test-Path -LiteralPath $proxyLib)) {
     throw 'Java 8 and the installed MoonBridge distribution are required'
 }

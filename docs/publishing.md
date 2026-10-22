@@ -56,9 +56,9 @@ dependencies {
 
 `:proxy-core:distZip` 生成 `proxy/core/build/distributions/moonbridge-<version>.zip`。CI 把这个 ZIP 作为 `moonbridge-development` 下载工件的一部分上传，保留 30 天；它不是 Maven 模块，也不自动成为 Git Release。解压后从发行包目录运行：
 
-```powershell
-.\bin\moonbridge.bat --validate-config .\config\moonbridge.yml
-.\bin\moonbridge.bat --config .\config\moonbridge.yml
+```sh
+java -jar moonbridge.jar --validate-config config/moonbridge.yml
+java -jar moonbridge.jar --config config/moonbridge.yml
 ```
 
-Linux/macOS 使用 `bin/moonbridge`。发行包根目录只有运行需要的内容：`bin/` 启动脚本、`lib/` 依赖、`config/` 配置模板、README，以及带 `-Pluckperms` 构建时的 `plugins/`。文档、验收与基准记录留在仓库里；后端宿主 jar 不在代理包内，见[发行物与安装位置](release-layout.md)。
+不带参数时读取当前目录下的 `config/moonbridge.yml`。发行包根目录只有运行需要的内容：可直接运行的 `moonbridge.jar`（含全部依赖，清单里已允许 Netty 加载 epoll/kqueue 本地库）、`config/` 配置模板、README，以及带 `-Pluckperms` 构建时的 `plugins/`。文档、验收与基准记录留在仓库里；后端宿主 jar 不在代理包内，见[发行物与安装位置](release-layout.md)。

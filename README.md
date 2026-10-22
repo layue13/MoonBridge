@@ -20,8 +20,8 @@
 ```sh
 ./gradlew check :proxy-core:installDist                # Windows: .\gradlew.bat check :proxy-core:installDist
 cd proxy/core/build/install/moonbridge
-bin/moonbridge --validate-config config/moonbridge.yml   # Windows: bin\moonbridge.bat
-bin/moonbridge --config config/moonbridge.yml
+java -jar moonbridge.jar --validate-config config/moonbridge.yml
+java -jar moonbridge.jar                                 # 默认读取 config/moonbridge.yml
 ```
 
 需要全部部署物（服务器包、后端插件、客户端 mod）时运行 `./gradlew release`，说明见[发行物与安装位置](docs/release-layout.md)。LuckPerms 平台插件从 `proxy/vendor/luckperms` 子模块编译，默认不构建；需要时先 `git submodule update --init --recursive`，再加 `-Pluckperms`。

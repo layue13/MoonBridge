@@ -25,7 +25,7 @@ $probeClasses = if ($PrismClient) { $null } else {
     if (-not $ProbeClassesPath) { throw 'ProbeClassesPath is required without -PrismClient' }
     (Resolve-Path -LiteralPath $ProbeClassesPath).Path
 }
-$proxyLib = Join-Path $repoRoot 'proxy\core\build\install\moonbridge\lib'
+$proxyLib = Join-Path $repoRoot 'proxy\core\build\install\moonbridge'
 if (-not (Test-Path -LiteralPath $Java8Path) -or -not (Test-Path -LiteralPath $proxyLib)) {
     throw 'Java 8 and the installed MoonBridge distribution are required'
 }

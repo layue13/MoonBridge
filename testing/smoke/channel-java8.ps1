@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $fixtureClasses = Join-Path $repo 'build/channel-smoke/router'
 $probeClasses = Join-Path $repo 'build/channel-smoke/probe'
-$proxyClasspath = Join-Path $repo 'proxy/core/build/install/moonbridge/lib/*'
+$proxyClasspath = Join-Path $repo 'proxy/core/build/install/moonbridge/*'
 $backendClasspath = Join-Path $repo 'backend/build/libs/*'
-if (-not (Test-Path (Join-Path $repo 'proxy/core/build/install/moonbridge/lib'))) {
+if (-not (Test-Path (Join-Path $repo 'proxy/core/build/install/moonbridge'))) {
     throw 'Run gradlew :proxy-core:installDist :backend:jar first.'
 }
 New-Item -ItemType Directory -Force $fixtureClasses, $probeClasses | Out-Null

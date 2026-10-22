@@ -22,7 +22,7 @@ PDS、AetherShard 与 LuckPerms 可以使用同一台 MariaDB 服务，各自保
 git submodule update --init --recursive
 bash ./gradlew clean check :proxy-core:distZip --no-daemon --max-workers=2
 mkdir -p build/permission-network-classes
-javac -cp 'proxy/core/build/install/moonbridge/lib/*' -d build/permission-network-classes testing/smoke/PermissionNetworkAcceptance.java
+javac -cp 'proxy/core/build/install/moonbridge/*' -d build/permission-network-classes testing/smoke/PermissionNetworkAcceptance.java
 node testing/smoke/permission-services.cjs start
 ```
 

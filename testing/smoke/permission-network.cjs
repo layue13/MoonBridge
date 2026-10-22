@@ -7,7 +7,7 @@ const mode = process.argv[2];
 if (!['sql','redis'].includes(mode)) throw new Error('Usage: node testing/smoke/permission-network.cjs sql|redis [outage]');
 const outage = process.argv[3] === 'outage';
 const log = fs.createWriteStream(path.join(root,'build',`permission-network-${mode}${outage?'-outage':''}.log`));
-const args = ['-cp',`${path.join(root,'proxy/core/build/install/moonbridge/lib/*')}${path.delimiter}${path.join(root,'build/permission-network-classes')}`,
+const args = ['-cp',`${path.join(root,'proxy/core/build/install/moonbridge/*')}${path.delimiter}${path.join(root,'build/permission-network-classes')}`,
  'PermissionNetworkAcceptance','proxy/core/build/install/moonbridge',`build/permission-services/${mode==='sql'?'mariadb':'redis'}-base.yml`,'build/permission-network',mode];
 if (outage) args.push('outage');
 const child = spawn('java',args,{cwd:root,windowsHide:true,stdio:['pipe','pipe','pipe']});

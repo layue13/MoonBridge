@@ -55,7 +55,7 @@ if [ "$ready" -ne 1 ]; then docker logs "$backend"; exit 1; fi
 
 docker run -d --network "$network" --name "$proxy" \
     -v "$install:/opt/moonbridge:ro" -v "$work/config.yml:/opt/moonbridge.yml:ro" \
-    --entrypoint java "$java_image" -cp '/opt/moonbridge/lib/*' \
+    --entrypoint java "$java_image" -cp '/opt/moonbridge/*' \
     dev.moonbridge.app.ProxyMain --config /opt/moonbridge.yml >/dev/null
 if ! docker run --rm --network "$network" -v "$repo_root:/work:ro" \
     -e "MOONBRIDGE_CHANNEL_SECRET=$secret" --entrypoint python3 "$python_image" \

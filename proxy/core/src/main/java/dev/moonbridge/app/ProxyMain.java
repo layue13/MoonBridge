@@ -19,6 +19,15 @@ import java.util.concurrent.Executors;
 
 /** Command line entry point for the new proxy runtime. */
 public final class ProxyMain {
+    static {
+        // Leak detection costs per frame on every hand-written forwarding path, so the proxy runs without it;
+        // every proxy-core test class runs with PARANOID detection through LeakGate instead. This must run
+        // before Netty is loaded. Re-enable per deployment with -Dio.netty.leakDetection.level=simple.
+        if (System.getProperty("io.netty.leakDetection.level") == null) {
+            System.setProperty("io.netty.leakDetection.level", "disabled");
+        }
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(ProxyMain.class);
 
     private ProxyMain() {
