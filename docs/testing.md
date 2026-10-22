@@ -7,26 +7,26 @@
 .\gradlew.bat :proxy-core:installedDistSmokeTest
 .\gradlew.bat -Pluckperms :proxy-core:permissionAcceptance
 .\smoke\container-network.ps1
-sh smoke/container-channel.sh
+sh testing/smoke/container-channel.sh
 ```
 
-定向测试覆盖控制通道认证与代次、目录租约、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。初次路由最新专项验收包括自动化覆盖和实际 Java 8 Uranium 后端协议探针，见[2026-09-27 路由验收](../smoke/results/2026-09-27-initial-routing.md)；它不是完整模组包视觉验收。2026-09-26 Prism 记录保留为其提交和环境下的历史真实客户端/配对测量，见[历史 Prism 记录](../benchmarks/results/2026-09-26-prism-pack.md)。下面其他历史结果也只支持其记录注明的范围。
+定向测试覆盖控制通道认证与代次、目录租约、插件生命周期与超时、协议边界、relay 背压，以及合成 TCP 登录和切换。初次路由最新专项验收包括自动化覆盖和实际 Java 8 Uranium 后端协议探针，见[2026-09-27 路由验收](../testing/smoke/results/2026-09-27-initial-routing.md)；它不是完整模组包视觉验收。2026-09-26 Prism 记录保留为其提交和环境下的历史真实客户端/配对测量，见[历史 Prism 记录](../testing/benchmarks/results/2026-09-26-prism-pack.md)。下面其他历史结果也只支持其记录注明的范围。
 
-`smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
+`testing/smoke/container-network.ps1` 使用 Docker bridge 中的独立代理、后端和客户端容器，依次检查静态配置和控制通道注册、登录及 PLAY 转发；控制通道模式还验证注销后已连接会话继续转发。PowerShell 7 和 Docker Desktop 是运行前提。`testing/smoke/container-channel.sh` 在 Unix shell 下验证控制通道的同一跨容器路径。2026-09-25 的[容器网络烟测记录](../testing/smoke/results/2026-09-25-container-network.md)是旧实现的历史结果，不代表当前通道已在那次运行中验证。容器烟测不能代替跨物理主机或目标 Forge 整合包实测。
 
 `.github/workflows/verify.yml` 在每个 Pull Request 上运行 `gradlew -Pluckperms check`，并单独构建、测试 `client-mod/`。`.github/workflows/ci.yml` 在 `main` 推送或手动触发时先执行 `gradlew -Pluckperms check release`，再上传 `build/release/` 并发布 Maven 模块。发布步骤要求 `MAVEN_USER` 与 `MAVEN_PASSWORD` secrets；本地 `check` 不能证明远端 Maven 发布成功。版本规则、Maven 坐标和发行物 见[发布与依赖版本](publishing.md)。
 
-带 `-Pluckperms` 时 `check` 包含 `permissionAcceptance`（本地默认 `check` 不编译 LuckPerms，因此不含这一项；CI 始终开启）：使用发行包中的实际 LuckPerms JAR、隔离插件类加载器和临时 H2 数据库，验证原生命令、授权/拒绝/未设置、组继承、临时节点到期、后端上下文、连接代次隔离及关闭后重新打开数据库。输出位于 `proxy-core/build/permission-acceptance/run-*/`，成功标记为 `PERMISSION_ACCEPTANCE_PASS`。它使用 API 玩家探针，不连接真实 Minecraft 客户端，也不证明外部 SQL/Redis 联调成功；真实会话的权限准备和释放由 TCP 生命周期测试另行覆盖。
+带 `-Pluckperms` 时 `check` 包含 `permissionAcceptance`（本地默认 `check` 不编译 LuckPerms，因此不含这一项；CI 始终开启）：使用发行包中的实际 LuckPerms JAR、隔离插件类加载器和临时 H2 数据库，验证原生命令、授权/拒绝/未设置、组继承、临时节点到期、后端上下文、连接代次隔离及关闭后重新打开数据库。输出位于 `proxy/core/build/permission-acceptance/run-*/`，成功标记为 `PERMISSION_ACCEPTANCE_PASS`。它使用 API 玩家探针，不连接真实 Minecraft 客户端，也不证明外部 SQL/Redis 联调成功；真实会话的权限准备和释放由 TCP 生命周期测试另行覆盖。
 
-如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](../smoke/results/2026-09-25-local-uranium.md)。初次路由的当前 `ProxyMain` 协议探针结果另见[路由验收](../smoke/results/2026-09-27-initial-routing.md)。真实客户端记录见下段和其单独的历史验收档案；它们不应与当前路由分支的完整模组包验收混为一谈。
+如果本地已有 Uranium 1.7.10 可运行包及其编译好的 `MinecraftProtocolProbe`，可运行 `testing/smoke/local-uranium.ps1 -BundlePath <包目录> -ProbeClassesPath <探针类目录>`。脚本复制服务端到忽略目录，启动 Java 8 后端与当前安装包，再让探针经代理完成状态查询、FML 登录、Join Game 和持续 Keep Alive，结束时停止两个进程。本地一次结果与具体前提见 [最小 Uranium 联机记录](../testing/smoke/results/2026-09-25-local-uranium.md)。初次路由的当前 `ProxyMain` 协议探针结果另见[路由验收](../testing/smoke/results/2026-09-27-initial-routing.md)。真实客户端记录见下段和其单独的历史验收档案；它们不应与当前路由分支的完整模组包验收混为一谈。
 
-`smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](../smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
+`testing/smoke/local-uranium-transfer.ps1 -BundlePath <包目录>` 复制并启动两台 Uranium，然后编译仓库中的协议探针，通过实际 `ProxySessionListener` 请求从旧服切换到新服。加上 `-InstalledPlugin` 则启动已安装的 `ProxyMain`：旧服由静态配置注册，临时插件用 `Servers.register` 注册目标服，在初始落点回调读取 `ServerView`，再通过 `Players.transfer` 发起转服。默认模式使用协议探针核对 FML 重置、重新握手、世界切换包和目标连接的 Keep Alive，见 [两台 Uranium 转服记录](../testing/smoke/results/2026-09-25-local-uranium-transfer.md)。`-InstalledPlugin -ReturnToOld` 让协议探针验证旧服→新服→旧服的两次切换。`-InstalledPlugin -PrismClient` 改用本机 Prism 中的 `1.7.10` Forge 实例，要求客户端在目标服保持连接 10 秒；可同时使用 `-ReturnToOld` 验证真实客户端往返。两个真实客户端脚本都可用 `-PrismInstance <实例名>` 选择其他实例。若实例的文件夹名与启动名不同，另传 `-PrismInstanceFolder <文件夹名>`，以便准确定位并清理这次启动的客户端；`-PrismPath` 指向其他 Prism 安装位置。`testing/smoke/local-uranium.ps1 -PrismClient` 可单独验证首次登录。这些实测仍不能替代目标整合包验收。
 
-安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](../smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](../smoke/results/2026-09-26-uranium-login-stalls.md)。
+安装包转服烟测可加 `-DebugSession`，在本次复制的 Uranium 配置中开启登录阶段日志，并将代理会话的连接、登录写入和失败路径 DEBUG 日志写入所打印运行目录的 `proxy.stdout.log`。加 `-TraceBackend` 会在代理与两台 Uranium 之间放置本地 TCP 中继，并将每个方向的前 512 字节记录到运行目录的 `tap-old.log` 和 `tap-new.log`；这一诊断选项会改变连接时序。初次登录 EOF 的复现实验见 [运行记录](../testing/smoke/results/2026-09-26-initial-login-repeat.md)；增强日志和中继后捕获的 Uranium 登录停滞及源码假设见 [登录停滞记录](../testing/smoke/results/2026-09-26-uranium-login-stalls.md)。
 
 ## 历史验证记录
 
-带日期的逐轮验证结果放在 [`records/`](records/)，与 `smoke/results/`、`benchmarks/results/` 一样只证明各自注明的提交和环境：
+带日期的逐轮验证结果放在 [`records/`](records/)，与 `testing/smoke/results/`、`testing/benchmarks/results/` 一样只证明各自注明的提交和环境：
 
 - [2026-09-26 验证记录](records/2026-09-26-validation-log.md)：玩家操作与服务器列表、统一事件模型、历史类型化事件与访问检查。
 - [2026-09-27 富文本与命令补全验证](records/2026-09-27-rich-text-completion.md)。
@@ -39,7 +39,7 @@ sh smoke/container-channel.sh
 
 ## 合成 relay 基准
 
-`benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
+`testing/benchmarks/run-relay.ps1` 比较同一 JVM、同一个本机回声后端上的直连、原始字节 relay、按帧 relay，以及安装了实际 `KeepAliveBridge` 的按帧 relay。每个连接先预热，再重复发送固定长度的合成 Minecraft 帧并读取同样长度的回声；连接数、每连接消息数、预热数、帧负载字节数、重复轮数和同时在途的消息数均可配置。`-Window 1` 是逐包等待回声；更大的窗口使用独立写线程持续发送，读线程按顺序核对回声，并用信号量限制在途消息数。基准在轮次间交替执行三种 relay，并在首尾测直连基线。输出往返吞吐、按单向传输字节计算的 MiB/s、往返延迟 p50/p95/p99、JVM GC 次数/耗时和堆已用量变化。
 
 ```powershell
 .\benchmarks\run-relay.ps1 -Connections 8 -Messages 2000 -Warmup 200 -Payload 4096
@@ -48,8 +48,8 @@ sh smoke/container-channel.sh
 
 该基准只覆盖本机 TCP 回声和三种 relay 数据路径。不同窗口使用不同的客户端发送方式，应在相同窗口内比较。负载是合成帧，不含登录、Forge 握手、模组流量、转服时的实体 ID 改写或真实客户端/后端行为；结果不代表 1.7.10 整合包等价性能，也不设 CI 性能门槛。堆变化是阶段前后的粗略观测，不是分配速率；请在目标机器、JDK 和连接规模上多轮运行并记录环境，避免把单次结果当成容量承诺。
 
-本地一次测量的环境、参数与原始输出见 `benchmarks/results/2026-09-25-local-relay.md`。
-加入实际 `KeepAliveBridge` 后的配对测量见 `benchmarks/results/2026-09-25-keepalive-bridge.md`；两份结果使用的 relay 事件循环安排不同，不能直接视为前后性能对比。
+本地一次测量的环境、参数与原始输出见 `testing/benchmarks/results/2026-09-25-local-relay.md`。
+加入实际 `KeepAliveBridge` 后的配对测量见 `testing/benchmarks/results/2026-09-25-keepalive-bridge.md`；两份结果使用的 relay 事件循环安排不同，不能直接视为前后性能对比。
 
 ## 真实 TCP 慢接收端背压回归
 
@@ -63,34 +63,34 @@ sh smoke/container-channel.sh
 
 ## 合成会话基准
 
-`benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。`-Window` 设置每个客户端允许的在途请求数，默认 `1`（stop-and-wait）；大于 `1` 时客户端最多连续发送 Window 个帧，再按 TCP 顺序读取回声并逐条校验，每收到一条便补发一条。预热和计时阶段、直连和代理都使用相同的发送算法。测得的单条延迟从该请求写出前计时到其回声读完；延迟样本和在途时间戳都使用有界数组，受 `Connections`、`Messages` 和 Window 上限约束。出现错误回声或阶段超时时基准以失败退出。
+`testing/benchmarks/run-proxy-session.ps1` 在同一 JVM 中比较直接连接模拟后端，以及经过实际 `ProxySessionListener` 登录、落点选择和会话转发后连接同一后端。客户端先完成离线登录，读取 Join Game 和 Position and Look，再预热；计时仅包含固定 PLAY 帧的往返。`-Window` 设置每个客户端允许的在途请求数，默认 `1`（stop-and-wait）；大于 `1` 时客户端最多连续发送 Window 个帧，再按 TCP 顺序读取回声并逐条校验，每收到一条便补发一条。预热和计时阶段、直连和代理都使用相同的发送算法。测得的单条延迟从该请求写出前计时到其回声读完；延迟样本和在途时间戳都使用有界数组，受 `Connections`、`Messages` 和 Window 上限约束。出现错误回声或阶段超时时基准以失败退出。
 
 ```powershell
 .\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1
 .\benchmarks\run-proxy-session.ps1 -Connections 4 -Messages 1000 -Warmup 100 -Payload 1024 -Repeats 2 -Window 1 -Mode post-transfer
 ```
 
-2026-09-25 的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](../benchmarks/results/2026-09-25-session-after-lifecycle.md)。更早的测量见 [原会话基准记录](../benchmarks/results/2026-09-25-current-session-benchmark.md)。这些记录对应各自注明的源码版本，不是当前事件 API 的性能结果，也不代表后端负载观测。
+2026-09-25 的多轮、同条件本机测量及原始输出见 [生命周期修复后的会话基准记录](../testing/benchmarks/results/2026-09-25-session-after-lifecycle.md)。更早的测量见 [原会话基准记录](../testing/benchmarks/results/2026-09-25-current-session-benchmark.md)。这些记录对应各自注明的源码版本，不是当前事件 API 的性能结果，也不代表后端负载观测。
 
-`-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](../benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
+`-Mode post-transfer` 让代理客户端先从 `bench` 转到 `replacement`，直连客户端直接进入同一个 `replacement` 模拟后端；转服与预热均在计时外。两后端使用不同玩家实体 ID，因此代理在转服后仍运行实体 ID 映射路径。[转服前后会话基准记录](../testing/benchmarks/results/2026-09-25-post-transfer-session.md) 包含窗口 1 和 16 的同条件多轮测量及原始输出。结果没有显示值得据此修改普通转发路径的稳定差异。
 
-加入 Forge 握手阶段旧世界数据包过滤后，在该历史版本上重跑的 [转服后基准](../benchmarks/results/2026-09-25-forge-transfer-gate-followup.md) 与先前结果的范围重叠；合成流量没有显示稳定的大幅退化，目标整合包仍需单独测量。
+加入 Forge 握手阶段旧世界数据包过滤后，在该历史版本上重跑的 [转服后基准](../testing/benchmarks/results/2026-09-25-forge-transfer-gate-followup.md) 与先前结果的范围重叠；合成流量没有显示稳定的大幅退化，目标整合包仍需单独测量。
 
-同一提交在独立 Linux 容器中的 [转服后会话基准](../benchmarks/results/2026-09-25-linux-container-post-transfer.md) 也完成了窗口 1 和 16 的各五轮对照与逐包校验。该结果仅验证另一运行环境中的合成路径；目标整合包和跨主机网络仍需实测。
+同一提交在独立 Linux 容器中的 [转服后会话基准](../testing/benchmarks/results/2026-09-25-linux-container-post-transfer.md) 也完成了窗口 1 和 16 的各五轮对照与逐包校验。该结果仅验证另一运行环境中的合成路径；目标整合包和跨主机网络仍需实测。
 
-2026-09-25 会话路径的 [JFR 采样记录](../benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
+2026-09-25 会话路径的 [JFR 采样记录](../testing/benchmarks/results/2026-09-25-session-jfr-screening.md) 只提供了分配线索，代理 I/O 线程的 CPU 执行样本不足以定位热点；因此没有据此改动普通转发路径。
 
-[玩家命令拦截初筛](../benchmarks/results/2026-09-26-command-interceptor.md) 比较同一合成 PLAY 回声流量下启用与关闭命令拦截器的结果；三轮吞吐和延迟范围重叠。该实验没有发送命令，也不能替代目标整合包的容量验收。
+[玩家命令拦截初筛](../testing/benchmarks/results/2026-09-26-command-interceptor.md) 比较同一合成 PLAY 回声流量下启用与关闭命令拦截器的结果；三轮吞吐和延迟范围重叠。该实验没有发送命令，也不能替代目标整合包的容量验收。
 
 将 `-Window` 改为 `16` 可测每连接最多 16 个在途往返的情形。
 
-`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
+`-Burst N`（直接运行 Java 时为 `--burst N`）让每次往返由客户端一次写出 N 个帧、模拟后端一次 flush 回声，接近一个服务器 tick 内的多个小 PLAY 包；此时 Window 按批计数。输出另含代理 I/O 线程每帧 CPU 时间，以及在 Linux 上读取 `/proc/net/snmp` 得到的全机 TCP 发送段数/帧（含 ACK，其他平台显示 `n/a`）。[2026-10-05 批量 flush 记录](../testing/benchmarks/results/2026-10-05-relay-batched-flush.md)用它比较逐帧 flush 与按读取批次 flush。`-Transport auto|nio|epoll|kqueue`（`--transport`）选择代理使用的网络传输层，默认 `auto`；[2026-10-05 传输层记录](../testing/benchmarks/results/2026-10-05-network-transport.md)比较了 epoll 与 NIO。
 
-原 stop-and-wait 小样本见 `benchmarks/results/2026-09-25-proxy-session-benchmark-smoke.md`；Window 参数的小样本和 Window=1/16 重复测量见 `benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
+原 stop-and-wait 小样本见 `testing/benchmarks/results/2026-09-25-proxy-session-benchmark-smoke.md`；Window 参数的小样本和 Window=1/16 重复测量见 `testing/benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 
 ## 后端宿主真实服务端验收
 
-`smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `MoonBridgeBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。Bukkit 业务插件以发行包 `backend/` 中的 JAR 和服务器 Bukkit API 编译（compileOnly，运行时依赖 `MoonBridgeBackend`），并在实际插件加载器下验证服务类身份一致。
+`testing/smoke/backend-uranium.ps1` 将已经接受 EULA 的 Uranium 发行包中的服务端 JAR、运行库和 EULA 复制到全新隔离目录，启动两个 Java 8 后端及实际 Java 25 Proxy。它安装 `MoonBridgeBackend`、两个独立的 Bukkit 业务插件和一个外部 Proxy 验收插件，通过正式插件 API 检查注册与消息服务；不会复制或修改原有世界、模组、插件及凭据。Bukkit 业务插件以发行包 `backend/` 中的 JAR 和服务器 Bukkit API 编译（compileOnly，运行时依赖 `MoonBridgeBackend`），并在实际插件加载器下验证服务类身份一致。
 
 ```powershell
 .\gradlew.bat check :proxy-core:installDist
@@ -100,4 +100,4 @@ sh smoke/container-channel.sh
 
 脚本默认使用本机 Zulu Java 8 和 Java 25，可通过 `-Java8Home`、`-Java25Home` 指定其他路径。完整成功输出 `BACKEND_URANIUM_PASS`；任一阶段失败会返回非零退出码并保留日志。后台进程有启动、请求、停机期限，退出时只清理本次创建的进程。
 
-验收覆盖 Proxy→后端、后端→Proxy、后端→后端请求，UUID/replyTo、多个独立订阅者接收同一广播、Bukkit 主线程与零在线玩家、业务插件停用隔离、Proxy 重启后的自动重新注册、正常停服快速注销、异常退出后的租约清理和后端重启。具体构件哈希和运行结果见[2026-09-27 后端宿主记录](../smoke/results/2026-09-27-backend-host.md)。
+验收覆盖 Proxy→后端、后端→Proxy、后端→后端请求，UUID/replyTo、多个独立订阅者接收同一广播、Bukkit 主线程与零在线玩家、业务插件停用隔离、Proxy 重启后的自动重新注册、正常停服快速注销、异常退出后的租约清理和后端重启。具体构件哈希和运行结果见[2026-09-27 后端宿主记录](../testing/smoke/results/2026-09-27-backend-host.md)。

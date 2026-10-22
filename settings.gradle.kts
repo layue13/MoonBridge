@@ -1,5 +1,5 @@
 pluginManagement {
-    includeBuild("proxy-build-logic")
+    includeBuild("build-logic")
     repositories {
         gradlePluginPortal()
         mavenCentral()
@@ -27,19 +27,24 @@ dependencyResolutionManagement {
 
 rootProject.name = "moonbridge"
 
-include(
-    "proxy-core",
-    "proxy-plugin-api",
-    "messaging",
-    "backend",
-)
+// Project names (and so task paths and Maven artifact IDs) stay flat; the directories group them:
+// proxy/ for the proxy side, messaging/ for the API shared with backends, backend/ for the Bukkit host.
+fun module(name: String, dir: String) {
+    include(name)
+    project(":$name").projectDir = file(dir)
+}
 
-// The LuckPerms platform plugin compiles LuckPerms itself from the vendor/luckperms submodule, which is
+module("proxy-core", "proxy/core")
+module("proxy-plugin-api", "proxy/plugin-api")
+module("messaging", "messaging")
+module("backend", "backend")
+
+// The LuckPerms platform plugin compiles LuckPerms itself from the proxy/vendor/luckperms submodule, which is
 // slow and pulls a large dependency tree, so it is opt-in: pass -Pluckperms (CI and release builds do).
 if (providers.gradleProperty("luckperms").map { it != "false" }.getOrElse(false)) {
-    check(file("vendor/luckperms/build.gradle").isFile) {
+    check(file("proxy/vendor/luckperms/build.gradle").isFile) {
         "-Pluckperms needs the LuckPerms sources: run git submodule update --init --recursive"
     }
-    includeBuild("luckperms-moonbridge/upstream-build")
-    include("luckperms-moonbridge")
+    includeBuild("proxy/luckperms/upstream-build")
+    module("luckperms-moonbridge", "proxy/luckperms")
 }

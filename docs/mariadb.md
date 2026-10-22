@@ -22,19 +22,19 @@ PDS、AetherShard 与 LuckPerms 可以使用同一台 MariaDB 服务，各自保
 git submodule update --init --recursive
 bash ./gradlew clean check :proxy-core:distZip --no-daemon --max-workers=2
 mkdir -p build/permission-network-classes
-javac -cp 'proxy-core/build/install/moonbridge/lib/*' -d build/permission-network-classes smoke/PermissionNetworkAcceptance.java
-node smoke/permission-services.cjs start
+javac -cp 'proxy/core/build/install/moonbridge/lib/*' -d build/permission-network-classes testing/smoke/PermissionNetworkAcceptance.java
+node testing/smoke/permission-services.cjs start
 ```
 
 运行下面两轮后，务必执行 stop（失败也需清理）：
 
 ```sh
-node smoke/permission-network.cjs sql outage
-node smoke/permission-network.cjs redis outage
-node smoke/permission-services.cjs query
-node smoke/permission-services.cjs stop
+node testing/smoke/permission-network.cjs sql outage
+node testing/smoke/permission-network.cjs redis outage
+node testing/smoke/permission-services.cjs query
+node testing/smoke/permission-services.cjs stop
 ```
 
 fixture 只创建带本轮所有权标签的本机容器，固定使用 `mariadb:13.0.2` 并检查实际服务器版本。SQL 模式使用 MariaDB 原生自动 SQL messenger；Redis 模式仍使用 MariaDB 保存权限。测试执行双实例授权/撤销/组继承、上下文、临时权限、插件重启持久化，以及 MariaDB/Redis 停机恢复。普通构建不会自动执行这些外部服务测试。
 
-stop 删除本轮容器和数据卷、移除凭据文件，并对保留的测试配置密码脱敏。[当前验收记录](../smoke/results/2026-10-02-mariadb.md) 与早期 MySQL/H2/游戏客户端证据分别记录，避免将旧运行结果当成本次 MariaDB 联测。
+stop 删除本轮容器和数据卷、移除凭据文件，并对保留的测试配置密码脱敏。[当前验收记录](../testing/smoke/results/2026-10-02-mariadb.md) 与早期 MySQL/H2/游戏客户端证据分别记录，避免将旧运行结果当成本次 MariaDB 联测。

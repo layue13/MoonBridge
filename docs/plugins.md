@@ -145,6 +145,6 @@ context.events().subscribe(PlayerDisconnectedEvent.class, event ->
 
 统一事件模型让准入决策和会话通知共享同一类型、监听器、订阅表与派发实现，同时保留各类事件所需的运行策略。准入阶段执行有序且失败关闭的结果聚合；生命周期通知异步 FIFO 尽力交付并与会话处理隔离。没有 PLAY 包事件。目前没有事件 API 的专门基准，不能据此宣称性能收益或无开销。
 
-源码入口：[`PluginContext`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Events`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/event/Events.java)、[`AccessDecision`](../proxy-plugin-api/src/main/java/dev/moonbridge/api/AccessDecision.java)。
+源码入口：[`PluginContext`](../proxy/plugin-api/src/main/java/dev/moonbridge/api/PluginContext.java)、[`Events`](../proxy/plugin-api/src/main/java/dev/moonbridge/api/event/Events.java)、[`AccessDecision`](../proxy/plugin-api/src/main/java/dev/moonbridge/api/AccessDecision.java)。
 
 富文本构造、MiniMessage 和异步命令补全示例见[消息与命令补全](messages-and-completion.md)。

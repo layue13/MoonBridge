@@ -54,7 +54,7 @@ dependencies {
 
 ## Proxy 发行包
 
-`:proxy-core:distZip` 生成 `proxy-core/build/distributions/moonbridge-<version>.zip`。CI 把这个 ZIP 作为 `moonbridge-development` 下载工件的一部分上传，保留 30 天；它不是 Maven 模块，也不自动成为 Git Release。解压后从发行包目录运行：
+`:proxy-core:distZip` 生成 `proxy/core/build/distributions/moonbridge-<version>.zip`。CI 把这个 ZIP 作为 `moonbridge-development` 下载工件的一部分上传，保留 30 天；它不是 Maven 模块，也不自动成为 Git Release。解压后从发行包目录运行：
 
 ```powershell
 .\bin\moonbridge.bat --validate-config .\config\moonbridge.yml
