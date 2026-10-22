@@ -150,6 +150,8 @@ tasks.jar {
 
 distributions {
     main {
+        // Only what the proxy needs to run. Docs and test records stay in the repository, and the
+        // backend jar ships separately in build/release/backend (see docs/release-layout.md).
         contents {
             from(rootProject.file("README.md"))
             if (luckPerms != null) {
@@ -157,20 +159,8 @@ distributions {
                     into("plugins")
                 }
             }
-            from(rootProject.file("docs")) {
-                into("docs")
-            }
-            from(rootProject.file("smoke/results")) {
-                into("smoke/results")
-            }
-            from(rootProject.file("benchmarks/results")) {
-                into("benchmarks/results")
-            }
             from("src/main/resources/config") {
                 into("config")
-            }
-            from(project(":backend").tasks.named("jar")) {
-                into("backend")
             }
         }
     }

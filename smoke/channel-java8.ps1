@@ -7,9 +7,9 @@ $repo = Split-Path -Parent $PSScriptRoot
 $fixtureClasses = Join-Path $repo 'build/channel-smoke/router'
 $probeClasses = Join-Path $repo 'build/channel-smoke/probe'
 $proxyClasspath = Join-Path $repo 'proxy-core/build/install/moonbridge/lib/*'
-$backendClasspath = Join-Path $repo 'proxy-core/build/install/moonbridge/backend/*'
+$backendClasspath = Join-Path $repo 'backend/build/libs/*'
 if (-not (Test-Path (Join-Path $repo 'proxy-core/build/install/moonbridge/lib'))) {
-    throw 'Run gradlew :proxy-core:installDist first.'
+    throw 'Run gradlew :proxy-core:installDist :backend:jar first.'
 }
 New-Item -ItemType Directory -Force $fixtureClasses, $probeClasses | Out-Null
 & (Join-Path $Java25Home 'bin/javac.exe') -cp $proxyClasspath -d $fixtureClasses (Join-Path $PSScriptRoot 'ChannelRouterFixture.java')
