@@ -104,7 +104,7 @@ Proxy 为每个插件管理独立的 scope，在停用时自动撤销。项目�
 
 在 `OFFLINE` 代理模式中，只有显式配置了该 backend 的 session-binding secret 时，代理才会在初始连接或转服时转发由代理派生的 offline UUID 和会话证明；这证明代理连接身份，不表示 Mojang 已认证。没有配置 secret 的 offline backend 仍接收原始握手。静态 backend 或尚未获得正数 registration epoch 的目标不会收到会话证明。
 
-后端宿主在玩家加入时从 GameProfile 属性中取出并移除会话证明。Bukkit API 不提供 GameProfile，所以按服务器选择访问方式，启动日志会写明 `GameProfile access: …`：Uranium（`org.bukkit.craftbukkit.entity.CraftPlayer`、未重定位的 authlib）使用编译进 JAR 的直接调用，没有反射；其他服务器（例如 Spigot/CraftBukkit 1.7.10）使用按类缓存的反射回退。编译调用与服务器实际签名不符时，宿主记一条警告后改用反射回退。两条路径都找不到 GameProfile 时，该玩家没有会话绑定，不会猜测。
+后端宿主在玩家加入时从 GameProfile 属性中取出并移除会话证明。Bukkit API 不提供 GameProfile，所以按服务器选择访问方式，启动日志会写明 `GameProfile access: …`：Uranium（`org.bukkit.craftbukkit.entity.CraftPlayer`、未重定位的 authlib）和 Spigot/CraftBukkit 1.7.10（`v1_7_R4`、authlib 重定位到 `net.minecraft.util`）都使用编译进 JAR 的直接调用，没有反射；其他服务器使用按类缓存的反射回退。编译调用与服务器实际签名不符时，宿主记一条警告后改用反射回退。两条路径都找不到 GameProfile 时，该玩家没有会话绑定，不会猜测。
 
 实例的游戏地址必须是代理实际可达的 `tcp://host:port`。Docker 中使用容器服务名，容器间不要使用 `127.0.0.1`。仅将玩家端口公开，控制端口放在私有网络。不要把真实凭据写入镜像或提交到仓库。
 

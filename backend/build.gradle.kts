@@ -63,7 +63,9 @@ val verifyBackendJar = tasks.register("verifyBackendJar") {
                 check(names.count { name -> name == it } == 1) { "Backend jar must contain exactly one $it" }
             }
             check(names.none { it.startsWith("org/bukkit/") }) { "Bukkit API must remain server-provided" }
-            check(names.none { it.startsWith("com/mojang/") }) { "authlib must remain server-provided" }
+            check(names.none { it.startsWith("com/mojang/") || it.startsWith("net/minecraft/") }) {
+                "authlib and Minecraft classes must remain server-provided"
+            }
             entries.filter { it.name.endsWith(".class") }.forEach { entry ->
                 DataInputStream(archive.getInputStream(entry)).use { input ->
                     input.readInt()
