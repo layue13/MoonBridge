@@ -6,7 +6,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Fallback for servers without a compiled adapter (Spigot/CraftBukkit 1.7.10 and others): finds the GameProfile
+ * Fallback for servers without a compiled adapter (neither Uranium nor Spigot/CraftBukkit 1.7.10): finds the GameProfile
  * methods by name. Lookups are resolved once per receiver class and cached, including misses; a missing method means
  * the feature is unavailable on this server, never a guess.
  */

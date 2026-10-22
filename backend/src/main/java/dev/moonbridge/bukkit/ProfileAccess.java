@@ -5,7 +5,8 @@ import java.util.logging.Logger;
 /**
  * How the backend reaches a player's GameProfile properties on the running server. Bukkit has no API for them, so
  * each server family needs its own access. A compiled adapter is chosen once at startup; servers without one use the
- * cached reflective fallback.
+ * cached reflective fallback. The two server families never share class names (CraftBukkit's package is versioned
+ * only on Spigot, and only Spigot relocates authlib), so at most one compiled adapter can load.
  */
 interface ProfileAccess {
     /** True when this access knows the player's class; other players go to the reflective fallback. */
@@ -25,13 +26,17 @@ interface ProfileAccess {
     /** A short name for the startup log. */
     String description();
 
-    /** The compiled Uranium adapter when its classes are present, otherwise the reflective fallback. */
+    /** The first compiled adapter whose classes are present (Uranium, then Spigot 1.7.10), else the fallback. */
     static ProfileAccess select() {
         ProfileAccess selected;
         try {
             selected = UraniumProfileAccess.create();
         } catch (LinkageError notUranium) {
-            selected = ReflectiveProfileAccess.INSTANCE;
+            try {
+                selected = SpigotProfileAccess.create();
+            } catch (LinkageError notSpigot) {
+                selected = ReflectiveProfileAccess.INSTANCE;
+            }
         }
         Logger.getLogger(ProfileAccess.class.getName()).info("GameProfile access: " + selected.description());
         return selected;
