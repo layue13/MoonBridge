@@ -86,21 +86,4 @@ class WebSocketFrameAdapterTest {
         reply.release();
         assertFalse(ch.isOpen());
     }
-
-    @Test
-    void outboundBuffersBecomeBinaryFrames() {
-        EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
-        ByteBuf data = Unpooled.buffer()
-            .writeBytes(new byte[] { 4, 5 });
-        ch.writeOutbound(data);
-        BinaryWebSocketFrame frame = (BinaryWebSocketFrame) ch.readOutbound();
-        assertSame(data, frame.content());
-        frame.release();
-
-        ByteBuf empty = Unpooled.buffer();
-        ch.writeOutbound(empty);
-        assertNull(ch.readOutbound());
-        assertEquals(0, empty.refCnt());
-        ch.finish();
-    }
 }

@@ -34,6 +34,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
@@ -72,6 +73,9 @@ class WebSocketPipelineTest {
 
                 @Override
                 protected void initChannel(Channel ch) {
+                    // Vanilla's initializer turns Nagle on before our TAIL hook runs.
+                    ch.config()
+                        .setOption(ChannelOption.TCP_NODELAY, false);
                     stub.set(VanillaStub.installInto(ch.pipeline(), writeOnActive));
                     WebSocketPipeline.install(ch.pipeline(), address);
                 }
@@ -187,7 +191,20 @@ class WebSocketPipelineTest {
             synchronized (serverGot) {
                 assertArrayEquals(expected, serverGot.toByteArray());
             }
-            assertEquals(Arrays.asList(5, 1, 300, 70000), serverFrameSizes, "one binary frame per write");
+            // Writes queued before a batch runs share one message of at most 64 KiB. The three early writes are one
+            // batch; the large write joins it if the test thread queued it before that batch ran.
+            List<Integer> separate = Arrays.asList(306, 65536, 70000 - 65536);
+            List<Integer> joined = Arrays.asList(65536, 70306 - 65536);
+            synchronized (serverFrameSizes) {
+                assertTrue(
+                    serverFrameSizes.equals(separate) || serverFrameSizes.equals(joined),
+                    String.valueOf(serverFrameSizes));
+            }
+            assertEquals(
+                Boolean.TRUE,
+                client.config()
+                    .getOption(ChannelOption.TCP_NODELAY),
+                "ws turns Nagle off again");
             assertEquals("/mc?x=1", path.get());
             assertEquals("127.0.0.1:" + port, host.get());
 
