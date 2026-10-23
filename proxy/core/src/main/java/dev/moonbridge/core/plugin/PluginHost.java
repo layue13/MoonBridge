@@ -33,6 +33,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -71,6 +72,8 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
     /** Descriptor plugins in load order, readable by plugins on any thread. */
     private volatile List<PluginInfo> pluginInfos = List.of();
     private volatile BackendChannelTransport backendChannelTransport;
+    /** Completes when the first {@link #close()} has finished. */
+    private final CompletableFuture<Void> closeFinished = new CompletableFuture<>();
 
     public PluginHost(BackendCatalog catalog, Players players, Duration placementTimeout) {
         this(catalog, players, placementTimeout, Duration.ofSeconds(5));
@@ -422,39 +425,64 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
         return commandService.dispatchConsoleCommand(input, reply);
     }
 
+    /**
+     * Stops the host. The host monitor is held only around the steps before and after the plugins' {@code onDisable},
+     * never while waiting for one: a plugin closing its own handles there (a command registration, for example) takes
+     * that monitor and would otherwise wait out the whole shutdown deadline. A concurrent caller returns once the
+     * first one has finished.
+     */
     @Override
-    public synchronized void close() {
-        if (lifecycle.closed()) return;
-        lifecycle.set(HostLifecycle.State.CLOSED);
-        permissionService.close();
-        commandService.failPendingExecutions();
-        events.closeDispatchers();
-        localMessaging.close();
-        events.stopReporting();
-        for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
-        placement.closeAll();
-        commandService.failPendingCompletions();
-        callbacks.shutdownNow();
-        commandWorkers.shutdownNow();
-        backendWorkers.shutdownNow();
-        timer.shutdownNow();
-        long deadline = System.nanoTime() + shutdownTimeout.toNanos();
-        for (int index = plugins.size() - 1; index >= 0; index--) {
-            LoadedPlugin loaded = plugins.get(index);
-            if (loaded.enabled) disableWithinDeadline(loaded, deadline);
-            loaded.context.deactivateAndRemove();
-        }
-        for (URLClassLoader loader : classLoaders) {
-            try {
-                loader.close();
-            } catch (IOException failure) {
-                LOGGER.warn("Could not close plugin class loader", failure);
+    public void close() {
+        List<LoadedPlugin> stopping;
+        synchronized (this) {
+            if (lifecycle.closed()) {
+                stopping = null;
+            } else {
+                lifecycle.set(HostLifecycle.State.CLOSED);
+                permissionService.close();
+                commandService.failPendingExecutions();
+                events.closeDispatchers();
+                localMessaging.close();
+                events.stopReporting();
+                for (LoadedPlugin loaded : plugins) loaded.context.revokeEventSubscriptions();
+                placement.closeAll();
+                commandService.failPendingCompletions();
+                callbacks.shutdownNow();
+                commandWorkers.shutdownNow();
+                backendWorkers.shutdownNow();
+                timer.shutdownNow();
+                stopping = List.copyOf(plugins);
             }
         }
-        classLoaders.clear();
-        placement.clear();
-        events.clear();
-        backendChannelTransport = null;
+        if (stopping == null) {
+            closeFinished.join();
+            return;
+        }
+        try {
+            long deadline = System.nanoTime() + shutdownTimeout.toNanos();
+            for (int index = stopping.size() - 1; index >= 0; index--) {
+                LoadedPlugin loaded = stopping.get(index);
+                if (loaded.enabled) disableWithinDeadline(loaded, deadline);
+                synchronized (this) {
+                    loaded.context.deactivateAndRemove();
+                }
+            }
+            synchronized (this) {
+                for (URLClassLoader loader : classLoaders) {
+                    try {
+                        loader.close();
+                    } catch (IOException failure) {
+                        LOGGER.warn("Could not close plugin class loader", failure);
+                    }
+                }
+                classLoaders.clear();
+                placement.clear();
+                events.clear();
+                backendChannelTransport = null;
+            }
+        } finally {
+            closeFinished.complete(null);
+        }
     }
 
     private void disableWithinDeadline(LoadedPlugin loaded, long deadline) {
