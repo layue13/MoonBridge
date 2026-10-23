@@ -814,6 +814,36 @@ class PluginHostTest {
     }
 
     @Test
+    void pluginClosingItsCommandRegistrationInOnDisableDoesNotWaitOutTheDeadline() throws Exception {
+        var disabled = new CountDownLatch(1);
+        var plugin = new Plugin() {
+            private dev.moonbridge.api.CommandRegistration registration;
+            @Override public void onLoad(PluginContext context) {
+                registration = context.commands().register("islands", invocation -> { });
+            }
+            @Override public void onDisable() {
+                registration.close();
+                disabled.countDown();
+            }
+        };
+        var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1),
+                1, 1, Duration.ofSeconds(5));
+        host.load(List.of(plugin));
+        host.enable();
+        var second = new CompletableFuture<Long>();
+        long start = System.nanoTime();
+        Thread.ofPlatform().start(() -> {
+            host.close();
+            second.complete(System.nanoTime());
+        });
+        host.close();
+        long firstDone = System.nanoTime();
+        assertTrue(disabled.await(0, TimeUnit.SECONDS), "onDisable should have finished");
+        assertTrue(firstDone - start < TimeUnit.SECONDS.toNanos(2), "close waited out the deadline");
+        assertTrue(second.get(2, TimeUnit.SECONDS) - start < TimeUnit.SECONDS.toNanos(2));
+    }
+
+    @Test
     void saturatedCommandWorkersRejectWithoutRunningPluginCodeOnCaller() throws Exception {
         var plugin = new CapturingPlugin("unused", false);
         var entered = new CountDownLatch(1);
