@@ -47,6 +47,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
@@ -71,6 +72,7 @@ import javax.crypto.spec.SecretKeySpec;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProxySessionListenerTest {
@@ -1021,6 +1023,15 @@ final class ProxySessionListenerTest {
                 client.setSoTimeout(2000);
                 try {
                     assertEquals(-1, client.getInputStream().read());
+                } catch (SocketTimeoutException halfOpen) {
+                    // Linux can drop the handshake's final ACK without a reset when it races the listener
+                    // close, so connect() succeeded but no server socket was ever created and nothing is
+                    // sent until this side transmits. Any data then draws a reset; a socket the proxy
+                    // accepted and leaked would take the byte and leave this read timing out instead.
+                    client.getOutputStream().write(0);
+                    client.getOutputStream().flush();
+                    assertThrows(SocketException.class, () -> client.getInputStream().read(),
+                            "a connection that saw no close is still held by a server socket");
                 } catch (SocketException reset) {
                     // A peer close with unread login bytes can surface as a TCP reset on Windows.
                 }
