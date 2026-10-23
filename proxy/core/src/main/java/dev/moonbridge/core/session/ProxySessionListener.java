@@ -34,6 +34,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.resolver.AddressResolverGroup;
 import io.netty.resolver.dns.DnsAddressResolverGroup;
 import io.netty.resolver.dns.DnsNameResolverBuilder;
+import io.netty.util.concurrent.Future;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -512,7 +513,10 @@ public final class ProxySessionListener implements Players {
         allSessions.forEach(session -> session.closeBecause("proxy shutting down"));
         backendResolver.close();
         shutdown = new CompletableFuture<>();
-        boss.shutdownGracefully().addListener(first -> workers.shutdownGracefully().addListener(second -> {
+        // Start both at once: each group waits out its own quiet period, so draining them in turn doubled the close time.
+        Future<?> bossStopped = boss.shutdownGracefully();
+        Future<?> workersStopped = workers.shutdownGracefully();
+        bossStopped.addListener(first -> workersStopped.addListener(second -> {
             if (first.isSuccess() && second.isSuccess()) shutdown.complete(null);
             else shutdown.completeExceptionally(first.isSuccess() ? second.cause() : first.cause());
         }));
