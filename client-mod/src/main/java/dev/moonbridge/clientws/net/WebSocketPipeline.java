@@ -11,6 +11,7 @@ import javax.net.ssl.SSLParameters;
 import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
+import io.netty.handler.codec.http.websocketx.WebSocket13FrameDecoder;
 import io.netty.handler.ssl.SslHandler;
 
 /**
@@ -63,7 +64,7 @@ public final class WebSocketPipeline {
         // addFirst in reverse so the final order is ssl, handshake, decoder, encoder, frames, vanilla...
         pipeline.addFirst(FRAMES, new WebSocketFrameAdapter());
         pipeline.addFirst(FRAME_ENCODER, new ClientFrameEncoder());
-        pipeline.addFirst(FRAME_DECODER, new ClientFrameDecoder());
+        pipeline.addFirst(FRAME_DECODER, new WebSocket13FrameDecoder(false, false, MAX_FRAME_PAYLOAD));
         pipeline.addFirst(HANDSHAKE, new WebSocketHandshakeHandler(address));
         if (address.isSecure()) {
             pipeline.addFirst(SSL, new SslHandler(newClientEngine(tls, address)));

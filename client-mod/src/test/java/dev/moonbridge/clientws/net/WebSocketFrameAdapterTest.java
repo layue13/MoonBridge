@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
@@ -24,7 +25,7 @@ class WebSocketFrameAdapterTest {
         EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
         ByteBuf payload = Unpooled.buffer()
             .writeBytes(new byte[] { 1, 2, 3 });
-        ch.writeInbound(payload);
+        ch.writeInbound(new BinaryWebSocketFrame(payload));
         ByteBuf out = (ByteBuf) ch.readInbound();
         assertSame(payload, out);
         assertEquals(1, out.refCnt());
@@ -36,7 +37,7 @@ class WebSocketFrameAdapterTest {
     void emptyAndControlFramesAreReleased() {
         EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
         ByteBuf empty = Unpooled.buffer();
-        ch.writeInbound(empty);
+        ch.writeInbound(new BinaryWebSocketFrame(empty));
         assertNull(ch.readInbound());
         assertEquals(0, empty.refCnt());
 

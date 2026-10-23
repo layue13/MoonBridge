@@ -30,6 +30,8 @@
 - 路径只允许可打印 ASCII 且不含空格，其他字符请先做百分号编码。
 - 发给后端的 Minecraft 握手包里的地址/端口就是 URL 的主机名和端口。
 - 每个 WebSocket 消息都是 BINARY 帧，内容是原版 TCP 字节流的一段（已经过原版的加密和长度前缀），分段边界任意。服务器发来 TEXT 帧视为协议错误并断开。
+- 出站按批发送：原版每个包调用一次 `writeAndFlush`，模组把事件循环里已排队的包合并成一条 BINARY 消息（每条最多 64 KiB），单独一个包也会在同一轮事件循环里立即发出；pong 不排队，立即发送。服务器端不能假设一条消息对应一个包。
+- ws/wss 连接会重新开启 `TCP_NODELAY`（原版关闭了它，即开启 Nagle）：包已经按批合并，Nagle 只会让下一条消息白等上一条的 ACK。普通 TCP 连接保持原版设置。
 
 ## 常见问题
 
@@ -55,6 +57,7 @@ Gradle 守护进程使用 JDK 25（`gradle/gradle-daemon-jvm.properties`，可�
 
 ## 代码结构
 
-- `dev.moonbridge.clientws.net`：与 Minecraft 无关、可单独测试的部分。`WebSocketAddress`（URL 解析）、`WebSocketHandshakeHandler`（RFC 6455 握手，握手完成前缓存出站写入）、`WebSocketFrameAdapter`（帧 ⇄ 原始字节流）、`WebSocketPipeline`（安装到管线最前面）、`WebSocketConnectContext`（把 URL 从地址解析传到建立连接的线程）。
+- `dev.moonbridge.clientws.net`：与 Minecraft 无关、可单独测试的部分。`WebSocketAddress`（URL 解析）、`WebSocketHandshakeHandler`（RFC 6455 握手，握手完成前缓存出站写入）、`WebSocketFrameAdapter`（入站帧 → 原始字节流）、`ClientFrameEncoder`（出站按批成帧）、`WebSocketPipeline`（安装到管线最前面）、`WebSocketConnectContext`（把 URL 从地址解析传到建立连接的线程）。
 - `dev.moonbridge.clientws.mixins.early`：早期 Mixin，目标为 `ServerAddress.func_78860_a`、`NetworkManager.provideLanClient`（`func_150726_a`）及其匿名 `ChannelInitializer`（`NetworkManager$2`）、`GuiConnecting.func_146367_a`、`OldServerPinger.func_147225_b`。
-- 帧编解码使用 Minecraft 自带的 Netty 4.0.10.Final（`WebSocket13FrameEncoder/Decoder`、`SslHandler`），没有打包其他 Netty。
+- 出站帧由自己的 `ClientFrameEncoder` 编码（按批合并、每次 4 字节掩码）；入站解码和 TLS 使用 Minecraft 自带的 Netty 4.0.10.Final（`WebSocket13FrameDecoder`、`SslHandler`），没有打包其他 Netty。取舍依据见 `testing/benchmarks/results/2026-10-23-client-websocket-codec.md`。
+- `./gradlew codecBenchmark -PbenchArgs="--variant base|candidate --repeats 3"`：编码器微基准（测试源码，不打包）。

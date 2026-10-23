@@ -28,7 +28,9 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
  * end of the event loop's queue; by the time it runs, every packet the client thread queued in the meantime has been
  * written too, and the whole batch goes out as one binary message (split at {@link #MAX_MESSAGE_PAYLOAD}). A lone
  * packet still leaves in the same loop iteration: the task runs right after the write that scheduled it. A write's
- * promise completes when the message carrying its last byte has been written.
+ * promise completes when the message carrying its last byte has been written, so after write tasks queued behind it;
+ * vanilla's one promise-driven state change (enabling encryption once the encryption response is written) is safe
+ * because the client sends nothing else until the server answers that response.
  *
  * <p>
  * Each message is one buffer: the header, then the payload masked four bytes at a time. {@link WebSocketFrame}s are

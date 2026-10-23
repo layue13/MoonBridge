@@ -1,0 +1,84 @@
+# jvm1 base uptime: load averages: 5.11 6.02 6.17
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode base jvm1 warmup: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=9512 loopCpuNsPerByte=8.093 loopAllocBytesPerPacket=1363.8 producerCpuNsPerPacket=1336 wallMs=1210.9
+decode base jvm1 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.550 allocBytesPerByte=1.006 wallMs=235.9
+decodesplit base jvm1 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.760 allocBytesPerByte=2.544 wallMs=313.1
+encode base jvm1 rep1: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=8377 loopCpuNsPerByte=7.128 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=1036 wallMs=939.1
+decode base jvm1 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.170 allocBytesPerByte=1.006 wallMs=74.5
+decodesplit base jvm1 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.412 allocBytesPerByte=2.544 wallMs=169.2
+encode base jvm1 rep2: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=6857 loopCpuNsPerByte=5.834 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=753 wallMs=780.7
+decode base jvm1 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.141 allocBytesPerByte=1.006 wallMs=61.3
+decodesplit base jvm1 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.365 allocBytesPerByte=2.544 wallMs=150.8
+encode base jvm1 rep3: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=6468 loopCpuNsPerByte=5.504 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=699 wallMs=729.1
+decode base jvm1 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.127 allocBytesPerByte=1.006 wallMs=54.3
+decodesplit base jvm1 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.311 allocBytesPerByte=2.544 wallMs=128.6
+# jvm2 candidate uptime: load averages: 6.44 6.27 6.26
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode candidate jvm2 warmup: packets=100000 payloadBytes=117529702 messages=8549 messagesPer1000=85.5 flushesPer1000=82.7 wireBytes=117599518 loopCpuNsPerPacket=2616 loopCpuNsPerByte=2.226 loopAllocBytesPerPacket=1203.6 producerCpuNsPerPacket=808 wallMs=334.6
+decode candidate jvm2 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.226 allocBytesPerByte=0.035 wallMs=92.4
+decodesplit candidate jvm2 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.521 allocBytesPerByte=2.794 wallMs=228.1
+encode candidate jvm2 rep1: packets=100000 payloadBytes=117529702 messages=8370 messagesPer1000=83.7 flushesPer1000=80.8 wireBytes=117598126 loopCpuNsPerPacket=3194 loopCpuNsPerByte=2.718 loopAllocBytesPerPacket=1203.1 producerCpuNsPerPacket=824 wallMs=412.4
+decode candidate jvm2 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.119 allocBytesPerByte=0.035 wallMs=48.6
+decodesplit candidate jvm2 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.457 allocBytesPerByte=2.794 wallMs=192.9
+encode candidate jvm2 rep2: packets=100000 payloadBytes=117529702 messages=8340 messagesPer1000=83.4 flushesPer1000=80.5 wireBytes=117597936 loopCpuNsPerPacket=3573 loopCpuNsPerByte=3.040 loopAllocBytesPerPacket=1203.0 producerCpuNsPerPacket=830 wallMs=441.1
+decode candidate jvm2 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.149 allocBytesPerByte=0.035 wallMs=62.0
+decodesplit candidate jvm2 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.490 allocBytesPerByte=2.794 wallMs=205.0
+encode candidate jvm2 rep3: packets=100000 payloadBytes=117529702 messages=8283 messagesPer1000=82.8 flushesPer1000=79.9 wireBytes=117597510 loopCpuNsPerPacket=2486 loopCpuNsPerByte=2.115 loopAllocBytesPerPacket=1202.9 producerCpuNsPerPacket=543 wallMs=294.4
+decode candidate jvm2 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.120 allocBytesPerByte=0.035 wallMs=49.0
+decodesplit candidate jvm2 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.399 allocBytesPerByte=2.794 wallMs=168.0
+# jvm3 candidate uptime: load averages: 6.40 6.27 6.25
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode candidate jvm3 warmup: packets=100000 payloadBytes=117529702 messages=8630 messagesPer1000=86.3 flushesPer1000=83.5 wireBytes=117600122 loopCpuNsPerPacket=2976 loopCpuNsPerByte=2.532 loopAllocBytesPerPacket=1203.7 producerCpuNsPerPacket=860 wallMs=372.4
+decode candidate jvm3 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.197 allocBytesPerByte=0.035 wallMs=80.0
+decodesplit candidate jvm3 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.475 allocBytesPerByte=2.794 wallMs=210.9
+encode candidate jvm3 rep1: packets=100000 payloadBytes=117529702 messages=8287 messagesPer1000=82.9 flushesPer1000=79.9 wireBytes=117597532 loopCpuNsPerPacket=2123 loopCpuNsPerByte=1.806 loopAllocBytesPerPacket=1203.0 producerCpuNsPerPacket=429 wallMs=246.7
+decode candidate jvm3 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.103 allocBytesPerByte=0.035 wallMs=41.7
+decodesplit candidate jvm3 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.342 allocBytesPerByte=2.794 wallMs=142.3
+encode candidate jvm3 rep2: packets=100000 payloadBytes=117529702 messages=8302 messagesPer1000=83.0 flushesPer1000=80.1 wireBytes=117597636 loopCpuNsPerPacket=2067 loopCpuNsPerByte=1.759 loopAllocBytesPerPacket=1203.0 producerCpuNsPerPacket=388 wallMs=237.5
+decode candidate jvm3 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.096 allocBytesPerByte=0.035 wallMs=38.6
+decodesplit candidate jvm3 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.301 allocBytesPerByte=2.794 wallMs=127.5
+encode candidate jvm3 rep3: packets=100000 payloadBytes=117529702 messages=8280 messagesPer1000=82.8 flushesPer1000=79.8 wireBytes=117597486 loopCpuNsPerPacket=1832 loopCpuNsPerByte=1.559 loopAllocBytesPerPacket=1202.9 producerCpuNsPerPacket=344 wallMs=208.1
+decode candidate jvm3 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.089 allocBytesPerByte=0.035 wallMs=35.9
+decodesplit candidate jvm3 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.292 allocBytesPerByte=2.794 wallMs=121.7
+# jvm4 base uptime: load averages: 7.25 6.44 6.32
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode base jvm4 warmup: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=5345 loopCpuNsPerByte=4.548 loopAllocBytesPerPacket=1363.7 producerCpuNsPerPacket=636 wallMs=587.8
+decode base jvm4 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.280 allocBytesPerByte=1.006 wallMs=114.5
+decodesplit base jvm4 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.381 allocBytesPerByte=2.544 wallMs=156.3
+encode base jvm4 rep1: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=4673 loopCpuNsPerByte=3.976 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=448 wallMs=502.7
+decode base jvm4 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.117 allocBytesPerByte=1.006 wallMs=50.7
+decodesplit base jvm4 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.291 allocBytesPerByte=2.544 wallMs=123.9
+encode base jvm4 rep2: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=4667 loopCpuNsPerByte=3.971 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=408 wallMs=499.0
+decode base jvm4 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.122 allocBytesPerByte=1.006 wallMs=49.2
+decodesplit base jvm4 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.265 allocBytesPerByte=2.544 wallMs=108.7
+encode base jvm4 rep3: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=4141 loopCpuNsPerByte=3.523 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=356 wallMs=440.2
+decode base jvm4 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.096 allocBytesPerByte=1.006 wallMs=38.6
+decodesplit base jvm4 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.232 allocBytesPerByte=2.544 wallMs=96.2
+# jvm5 base uptime: load averages: 7.15 6.44 6.31
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode base jvm5 warmup: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=4443 loopCpuNsPerByte=3.780 loopAllocBytesPerPacket=1363.7 producerCpuNsPerPacket=485 wallMs=482.0
+decode base jvm5 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.216 allocBytesPerByte=1.006 wallMs=87.8
+decodesplit base jvm5 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.318 allocBytesPerByte=2.544 wallMs=130.4
+encode base jvm5 rep1: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=4199 loopCpuNsPerByte=3.573 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=384 wallMs=449.1
+decode base jvm5 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.103 allocBytesPerByte=1.006 wallMs=45.3
+decodesplit base jvm5 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.258 allocBytesPerByte=2.544 wallMs=105.5
+encode base jvm5 rep2: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=3833 loopCpuNsPerByte=3.261 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=324 wallMs=407.8
+decode base jvm5 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.104 allocBytesPerByte=1.006 wallMs=44.8
+decodesplit base jvm5 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.234 allocBytesPerByte=2.544 wallMs=96.2
+encode base jvm5 rep3: packets=100000 payloadBytes=117529702 messages=100000 messagesPer1000=1000.0 flushesPer1000=1000.0 wireBytes=118263428 loopCpuNsPerPacket=3838 loopCpuNsPerByte=3.265 loopAllocBytesPerPacket=1362.2 producerCpuNsPerPacket=322 wallMs=408.1
+decode base jvm5 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=2670 cpuNsPerByte=0.095 allocBytesPerByte=1.006 wallMs=38.4
+decodesplit base jvm5 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.237 allocBytesPerByte=2.544 wallMs=97.4
+# jvm6 candidate uptime: load averages: 7.38 6.49 6.34
+# java 17.0.20.1 OpenJDK 64-Bit Server VM, Mac OS X aarch64, cpus 10
+encode candidate jvm6 warmup: packets=100000 payloadBytes=117529702 messages=8522 messagesPer1000=85.2 flushesPer1000=82.4 wireBytes=117599294 loopCpuNsPerPacket=2336 loopCpuNsPerByte=1.987 loopAllocBytesPerPacket=1203.6 producerCpuNsPerPacket=635 wallMs=282.9
+decode candidate jvm6 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.161 allocBytesPerByte=0.035 wallMs=65.3
+decodesplit candidate jvm6 warmup: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.398 allocBytesPerByte=2.794 wallMs=180.8
+encode candidate jvm6 rep1: packets=100000 payloadBytes=117529702 messages=8282 messagesPer1000=82.8 flushesPer1000=79.9 wireBytes=117597492 loopCpuNsPerPacket=2101 loopCpuNsPerByte=1.788 loopAllocBytesPerPacket=1202.9 producerCpuNsPerPacket=418 wallMs=240.8
+decode candidate jvm6 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.095 allocBytesPerByte=0.035 wallMs=38.4
+decodesplit candidate jvm6 rep1: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.320 allocBytesPerByte=2.794 wallMs=134.9
+encode candidate jvm6 rep2: packets=100000 payloadBytes=117529702 messages=8290 messagesPer1000=82.9 flushesPer1000=80.0 wireBytes=117597558 loopCpuNsPerPacket=1897 loopCpuNsPerByte=1.614 loopAllocBytesPerPacket=1203.0 producerCpuNsPerPacket=365 wallMs=215.6
+decode candidate jvm6 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.088 allocBytesPerByte=0.035 wallMs=35.4
+decodesplit candidate jvm6 rep2: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.280 allocBytesPerByte=2.794 wallMs=117.8
+encode candidate jvm6 rep3: packets=100000 payloadBytes=117529702 messages=8295 messagesPer1000=83.0 flushesPer1000=80.0 wireBytes=117597584 loopCpuNsPerPacket=1785 loopCpuNsPerByte=1.519 loopAllocBytesPerPacket=1203.0 producerCpuNsPerPacket=355 wallMs=204.0
+decode candidate jvm6 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=37155 cpuNsPerByte=0.096 allocBytesPerByte=0.035 wallMs=39.0
+decodesplit candidate jvm6 rep3: passes=8 wireBytesPerPass=50365992 messagesPerPass=2670 packetsPerPass=41858 readsPerPass=34498 buffersOutPerPass=41858 cpuNsPerByte=0.298 allocBytesPerByte=2.794 wallMs=125.4
