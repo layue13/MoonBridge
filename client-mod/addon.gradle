@@ -8,3 +8,17 @@ tasks.named("test", Test) {
         exceptionFormat "full"
     }
 }
+
+// Client WebSocket codec microbenchmark (test sources, never packaged). See
+// testing/benchmarks/results/2026-10-23-client-websocket-codec.md. Example:
+//   ./gradlew codecBenchmark -PbenchArgs="--variant candidate --repeats 3"
+tasks.register("codecBenchmark", JavaExec) {
+    description = "Runs the client WebSocket codec microbenchmark (Netty 4.0.10 codec vs ClientFrameEncoder/Decoder)."
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = "dev.moonbridge.clientws.net.CodecBenchmark"
+    javaLauncher = tasks.named("test", Test).flatMap { it.javaLauncher }
+    jvmArgs "-Xms1g", "-Xmx1g", "-Dio.netty.leakDetectionLevel=disabled"
+    if (project.hasProperty("benchArgs")) {
+        args project.property("benchArgs").toString().split(" ")
+    }
+}

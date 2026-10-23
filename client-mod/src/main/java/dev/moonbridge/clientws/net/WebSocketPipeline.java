@@ -8,9 +8,9 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 
+import io.netty.channel.ChannelException;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
-import io.netty.handler.codec.http.websocketx.WebSocket13FrameDecoder;
-import io.netty.handler.codec.http.websocketx.WebSocket13FrameEncoder;
 import io.netty.handler.ssl.SslHandler;
 
 /**
@@ -51,10 +51,19 @@ public final class WebSocketPipeline {
 
     /** Variant with an explicit TLS context (tests); {@code tls} is ignored for {@code ws://}. */
     public static void install(ChannelPipeline pipeline, WebSocketAddress address, SSLContext tls) {
+        // Vanilla turns Nagle on just before this runs. The encoder already gathers a batch of packets into one
+        // message, so Nagle would only hold that message back for the previous one's ACK (a whole CDN round trip).
+        try {
+            pipeline.channel()
+                .config()
+                .setOption(ChannelOption.TCP_NODELAY, true);
+        } catch (ChannelException ignored) {
+            // Same as vanilla: keep going on platforms that refuse the option.
+        }
         // addFirst in reverse so the final order is ssl, handshake, decoder, encoder, frames, vanilla...
         pipeline.addFirst(FRAMES, new WebSocketFrameAdapter());
-        pipeline.addFirst(FRAME_ENCODER, new WebSocket13FrameEncoder(true));
-        pipeline.addFirst(FRAME_DECODER, new WebSocket13FrameDecoder(false, false, MAX_FRAME_PAYLOAD));
+        pipeline.addFirst(FRAME_ENCODER, new ClientFrameEncoder());
+        pipeline.addFirst(FRAME_DECODER, new ClientFrameDecoder());
         pipeline.addFirst(HANDSHAKE, new WebSocketHandshakeHandler(address));
         if (address.isSecure()) {
             pipeline.addFirst(SSL, new SslHandler(newClientEngine(tls, address)));

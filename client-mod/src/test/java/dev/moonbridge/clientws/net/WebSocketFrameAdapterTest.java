@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
@@ -25,7 +24,7 @@ class WebSocketFrameAdapterTest {
         EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
         ByteBuf payload = Unpooled.buffer()
             .writeBytes(new byte[] { 1, 2, 3 });
-        ch.writeInbound(new BinaryWebSocketFrame(payload));
+        ch.writeInbound(payload);
         ByteBuf out = (ByteBuf) ch.readInbound();
         assertSame(payload, out);
         assertEquals(1, out.refCnt());
@@ -37,7 +36,7 @@ class WebSocketFrameAdapterTest {
     void emptyAndControlFramesAreReleased() {
         EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
         ByteBuf empty = Unpooled.buffer();
-        ch.writeInbound(new BinaryWebSocketFrame(empty));
+        ch.writeInbound(empty);
         assertNull(ch.readInbound());
         assertEquals(0, empty.refCnt());
 
@@ -85,22 +84,5 @@ class WebSocketFrameAdapterTest {
         CloseWebSocketFrame reply = (CloseWebSocketFrame) ch.readOutbound();
         reply.release();
         assertFalse(ch.isOpen());
-    }
-
-    @Test
-    void outboundBuffersBecomeBinaryFrames() {
-        EmbeddedChannel ch = new EmbeddedChannel(new WebSocketFrameAdapter());
-        ByteBuf data = Unpooled.buffer()
-            .writeBytes(new byte[] { 4, 5 });
-        ch.writeOutbound(data);
-        BinaryWebSocketFrame frame = (BinaryWebSocketFrame) ch.readOutbound();
-        assertSame(data, frame.content());
-        frame.release();
-
-        ByteBuf empty = Unpooled.buffer();
-        ch.writeOutbound(empty);
-        assertNull(ch.readOutbound());
-        assertEquals(0, empty.refCnt());
-        ch.finish();
     }
 }
