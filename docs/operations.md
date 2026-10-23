@@ -19,6 +19,24 @@ java -jar moonbridge.jar --config config\moonbridge.yml
 
 采用统一事件模型后，已有配置中的 `plugins.accessTimeoutSeconds` 需要改为 `plugins.eventTimeoutSeconds`；旧键已删除，启动时会被当作未知配置拒绝。
 
+## 控制台命令
+
+在交互式终端中启动时，控制台使用 JLine：提示符固定在底部，日志在上方滚动（警告黄色、错误红色），支持历史（↑↓）和 Tab 补全命令、玩家名、服务器名和日志区域。没有终端时（Docker 日志、systemd、面板控制台）按行读取标准输入，输出为纯文本。控制台输入先交给内置命令，再交给插件注册的控制台命令；插件命令与内置命令同名时，启动日志会警告，该名字在控制台上执行内置命令，玩家仍可使用插件的 `/名字`。
+
+| 命令 | 作用 |
+| --- | --- |
+| `list` | 按服务器列出在线玩家 |
+| `servers` | 每个服务器的地址、在线人数和来源（静态配置、插件或控制通道实例） |
+| `player <名字>` | 玩家的 UUID、地址、TCP/WebSocket、所在服务器和在线时长 |
+| `status` | 版本、运行时长、网络传输层、监听地址、人数、堆内存，以及最近 10 分钟的加入、离开、拒绝、转服和过载次数 |
+| `send <玩家> <服务器>` | 通过正常转服流程把玩家移到另一个服务器 |
+| `kick <玩家> [原因]` | 断开玩家，原因省略时为 `Disconnected by an operator.` |
+| `loglevel [<区域> <级别>]` | 不带参数时列出区域和当前级别；`loglevel transfer debug` 等运行时修改，重启后恢复 `logback.xml` 的设置 |
+| `stop` | 正常关闭，与 Ctrl+C 相同 |
+| `help` | 列出以上命令 |
+
+`player` 和 `list` 中的地址不受 `logging.playerAddresses` 影响：该开关只决定日志文件里是否写 IP。`send`、`kick`、`loglevel` 和 `stop` 会以 INFO 写入 `moonbridge.admin`。Ctrl+D 只关闭控制台输入，代理继续运行。
+
 ## 从 StrataProxy 迁移
 
 MoonBridge 是破坏性改名，旧包名/API、启动程序和配置文件没有兼容别名。升级时将 `strataproxy` 启动程序改为 `moonbridge`、将 `strataproxy.yml` 迁移为 `moonbridge.yml`，并检查 `dev.strataproxy` Java 导入改为 `dev.moonbridge`。旧配置中的 `plugins.initialPlacementTimeoutSeconds` 改为 `initialRouting.timeoutSeconds`；首次登录入口应显式写入 `initialRouting.servers`，不要依赖注册顺序。

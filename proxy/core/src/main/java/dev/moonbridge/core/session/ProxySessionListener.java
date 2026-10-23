@@ -464,6 +464,11 @@ public final class ProxySessionListener implements Players {
         return sessionsByPlayerId.values().stream().flatMap(session -> session.onlineView().stream()).toList();
     }
 
+    /** Online players with their connection details, for the admin console. */
+    public List<OnlinePlayer> onlinePlayers() {
+        return sessionsByPlayerId.values().stream().flatMap(session -> session.onlinePlayer().stream()).toList();
+    }
+
     @Override public CompletionStage<TransferResult> transfer(PlayerIdentity identity, String backendName) {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(backendName, "backendName");

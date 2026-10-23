@@ -34,7 +34,13 @@ dependencies {
     implementation(libs.findLibrary("jackson-yaml").get())
     implementation(libs.findLibrary("adventure-gson").get())
     implementation(libs.findLibrary("adventure-plain").get())
-    runtimeOnly(libs.findLibrary("logback-classic").get())
+    // Compile-time: the console log appender and the loglevel command use Logback directly.
+    implementation(libs.findLibrary("logback-classic").get())
+    // The admin console: line editing, history and completion. The FFM provider talks to the terminal through
+    // Java's foreign function API, allowed by the jar manifest's Enable-Native-Access.
+    implementation(libs.findLibrary("jline-reader").get())
+    implementation(libs.findLibrary("jline-terminal").get())
+    runtimeOnly(libs.findLibrary("jline-terminal-ffm").get())
     testImplementation(project(":backend"))
     testImplementation(libs.findLibrary("logback-classic").get())
     testImplementation(libs.findLibrary("netty-pkitesting").get())

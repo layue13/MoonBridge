@@ -644,6 +644,11 @@ final class ProxySessionListenerTest {
                     sendLogin(client, username);
                     assertEquals(2, readVarInt(readFrame(new DataInputStream(client.getInputStream()))));
                     awaitOnlinePlayer(listener);
+                    var details = listener.onlinePlayers();
+                    assertEquals(1, details.size());
+                    assertEquals("127.0.0.1", details.get(0).address().getAddress().getHostAddress());
+                    assertFalse(details.get(0).webSocket());
+                    assertEquals(Optional.of("logged-lobby"), details.get(0).view().currentServer());
                 }
                 awaitCondition(() -> log.lines().stream().anyMatch(line -> line.contains(" left ")));
                 backendDone.get(5, TimeUnit.SECONDS);

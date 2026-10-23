@@ -16,6 +16,7 @@ public final class Overload {
 
     /** {@code area} is a fixed description such as "plugin commands"; never pass peer or plugin text. */
     public static void rejected(String area) {
+        ConnectionLog.overloaded();
         WARNINGS.computeIfAbsent(area, name -> new ThrottledWarning(LOGGER,
                 "Overloaded: rejected {} " + name + " request(s); a plugin may be blocking its worker threads",
                 1, TimeUnit.MINUTES)).record();

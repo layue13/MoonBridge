@@ -30,37 +30,61 @@ public final class ConnectionLog {
             "Connection limit reached: refused {} connection(s); raise maxConnections if this is expected load",
             1, TimeUnit.MINUTES);
 
+    /** Refusals of any kind (connection limit, full plugin pools), shared by every ConnectionLog in the process. */
+    private static final RecentCounter OVERLOADS = new RecentCounter();
+
     private final boolean playerAddresses;
+    private final RecentCounter joins = new RecentCounter();
+    private final RecentCounter leaves = new RecentCounter();
+    private final RecentCounter refused = new RecentCounter();
+    private final RecentCounter moves = new RecentCounter();
+    private final RecentCounter failedMoves = new RecentCounter();
 
     public ConnectionLog(boolean playerAddresses) { this.playerAddresses = playerAddresses; }
 
+    /** Counts of the events this log wrote in the last ten minutes. */
+    public RecentActivity activity() {
+        return new RecentActivity(joins.lastTenMinutes(), leaves.lastTenMinutes(), refused.lastTenMinutes(),
+                moves.lastTenMinutes(), failedMoves.lastTenMinutes(), OVERLOADS.lastTenMinutes());
+    }
+
+    static void overloaded() { OVERLOADS.increment(); }
+
     public void connected(String name, UUID playerId, InetSocketAddress from, boolean webSocket, String server) {
+        joins.increment();
         PLAYER_LOG.info("{} ({}) connected from {} via {} -> {}", LogText.clean(name), playerId, address(from),
                 webSocket ? "WebSocket" : "TCP", LogText.clean(server));
     }
 
     public void moved(String name, String from, String to) {
+        moves.increment();
         PLAYER_LOG.info("{} moved {} -> {}", LogText.clean(name), from == null ? "(no server)" : LogText.clean(from),
                 LogText.clean(to));
     }
 
     /** A transfer someone asked for did not happen; the player is still connected. */
     public void moveFailed(String name, String target, String reason, String current) {
+        failedMoves.increment();
         PLAYER_LOG.warn("{} could not move to {}: {} (stays on {})", LogText.clean(name), LogText.clean(target),
                 LogText.clean(reason), current == null ? "no server" : LogText.clean(current));
     }
 
     public void left(String name, String server, Duration online, String reason) {
+        leaves.increment();
         PLAYER_LOG.info("{} left {} after {}: {}", LogText.clean(name),
                 server == null ? "(no server)" : LogText.clean(server), duration(online), LogText.clean(reason));
     }
 
     /** The player sent Login Start but never reached a server: refused, timed out or gave up. */
     public void loginFailed(String name, InetSocketAddress from, String reason) {
+        refused.increment();
         PLAYER_LOG.info("{} from {} could not join: {}", LogText.clean(name), address(from), LogText.clean(reason));
     }
 
-    public static void connectionLimitReached() { CONNECTION_LIMIT.record(); }
+    public static void connectionLimitReached() {
+        OVERLOADS.increment();
+        CONNECTION_LIMIT.record();
+    }
 
     public static void serverRegistered(String name, URI address, String ownerId) {
         SERVER_LOG.info("Server {} registered by {} at {}", LogText.clean(name), owner(ownerId), hostPort(address));
@@ -96,7 +120,7 @@ public final class ConnectionLog {
     }
 
     /** Owner ids are "static-config", "backend-control:&lt;instance&gt;" or a plugin id. */
-    static String owner(String ownerId) {
+    public static String owner(String ownerId) {
         if ("static-config".equals(ownerId)) return "static config";
         if (ownerId.startsWith("backend-control:")) {
             return "control channel (" + LogText.clean(ownerId.substring("backend-control:".length())) + ")";
@@ -104,7 +128,7 @@ public final class ConnectionLog {
         return "plugin " + LogText.clean(ownerId);
     }
 
-    static String duration(Duration duration) {
+    public static String duration(Duration duration) {
         long seconds = Math.max(0, duration.toSeconds());
         if (seconds < 60) return seconds + "s";
         long minutes = seconds / 60;

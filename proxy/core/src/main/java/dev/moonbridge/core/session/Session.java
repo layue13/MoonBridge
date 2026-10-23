@@ -85,6 +85,10 @@ final class Session extends ChannelInboundHandlerAdapter {
     /** Why the session ended, for the operator log; the first reason recorded wins. */
     private final AtomicReference<String> endReason = new AtomicReference<>();
     private long publishedAtNanos;
+    /** Set once when the player is published; read by the admin console from any thread. */
+    private volatile Connection connection;
+
+    private record Connection(InetSocketAddress address, boolean webSocket, java.time.Instant since) { }
     private boolean frontendPlayPhase;
     private volatile boolean disconnecting;
     private TabCompletionBridge tabCompletion;
@@ -356,6 +360,9 @@ final class Session extends ChannelInboundHandlerAdapter {
             });
         });
         view = new PlayerView(identity, view.username(), selected.handle().id().value());
+        // Details first: published is volatile, so readers that see it also see the connection.
+        connection = new Connection(SessionChannels.clientAddress(frontend), SessionChannels.isWebSocket(frontend),
+                java.time.Instant.now());
         published = true;
         publishedAtNanos = System.nanoTime();
         owner.sessionPublished();
@@ -646,6 +653,11 @@ final class Session extends ChannelInboundHandlerAdapter {
                 view == null ? "<unknown>" : view.username(), cause);
         if (ctx.channel() == backend && loginDisconnectStarted) ctx.close();
         else closeBecause(ctx.channel() == frontend ? "client connection error" : "server connection error");
+    }
+
+    Optional<OnlinePlayer> onlinePlayer() {
+        Connection current = connection;
+        return onlineView().map(view -> new OnlinePlayer(view, current.address(), current.webSocket(), current.since()));
     }
 
     Optional<PlayerView> onlineView() {
