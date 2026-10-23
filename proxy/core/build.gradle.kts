@@ -30,6 +30,10 @@ dependencies {
     for (classifier in listOf("osx-x86_64", "osx-aarch_64")) {
         runtimeOnly(variantOf(libs.findLibrary("netty-transport-native-kqueue").get()) { classifier(classifier) })
     }
+    // BoringSSL for wss:// listeners; Netty uses it when it loads and falls back to the JDK provider otherwise.
+    for (classifier in listOf("linux-x86_64", "linux-aarch_64", "osx-x86_64", "osx-aarch_64", "windows-x86_64")) {
+        runtimeOnly(variantOf(libs.findLibrary("netty-tcnative-boringssl-static").get()) { classifier(classifier) })
+    }
     implementation(libs.findLibrary("jackson-databind").get())
     implementation(libs.findLibrary("jackson-yaml").get())
     implementation(libs.findLibrary("adventure-gson").get())

@@ -57,7 +57,8 @@ public final class ProxyConfigurationLoader {
         }
         return new WebSocketFrontend.Settings(websocket.path(), tls,
                 new ClientAddressPolicy(websocket.trustedProxies(), websocket.realIpHeader()),
-                Duration.ofSeconds(websocket.handshakeTimeoutSeconds()));
+                Duration.ofSeconds(websocket.handshakeTimeoutSeconds()),
+                Duration.ofSeconds(websocket.pingIntervalSeconds()));
     }
 
     private static String loadFavicon(Path configPath, String configuredPath) throws IOException {

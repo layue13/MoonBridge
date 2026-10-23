@@ -140,7 +140,11 @@ public final class ProxyMain {
             var listeners = new java.util.ArrayList<String>();
             listeners.add("TCP " + serverChannel.localAddress());
             if (webSocket != null) {
-                LOGGER.info("Listening for WebSocket{} on {}{}", webSocket.tls() == null ? "" : " (TLS)",
+                // OPENSSL is the bundled BoringSSL; JDK means it could not load on this platform.
+                LOGGER.info("Listening for WebSocket{} on {}{}", webSocket.tls() == null ? ""
+                                : " (TLS via " + (webSocket.tls()
+                                        instanceof io.netty.handler.ssl.ReferenceCountedOpenSslContext
+                                        ? "OPENSSL" : "JDK") + ")",
                         listener.webSocketChannel().localAddress(), webSocket.path());
                 listeners.add((webSocket.tls() == null ? "ws " : "wss ") + listener.webSocketChannel().localAddress()
                         + webSocket.path());

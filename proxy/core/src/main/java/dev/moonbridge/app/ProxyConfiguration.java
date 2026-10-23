@@ -131,7 +131,7 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
      * The TCP {@code listen} keeps working; both share {@code maxConnections}.
      */
     public record WebSocket(String listen, String path, Tls tls, List<String> trustedProxies, String realIpHeader,
-                            Integer handshakeTimeoutSeconds) {
+                            Integer handshakeTimeoutSeconds, Integer pingIntervalSeconds) {
         public WebSocket {
             if (listen == null || listen.isBlank()) throw new IllegalArgumentException("websocket.listen is required");
             if (parseAddress(listen).getPort() == 0) {
@@ -146,6 +146,11 @@ public record ProxyConfiguration(String listen, Authentication authentication, L
             handshakeTimeoutSeconds = handshakeTimeoutSeconds == null ? 10 : handshakeTimeoutSeconds;
             if (handshakeTimeoutSeconds < 1 || handshakeTimeoutSeconds > 60) {
                 throw new IllegalArgumentException("websocket.handshakeTimeoutSeconds must be between 1 and 60");
+            }
+            // Below the common CDN and load-balancer idle limits (60-100 s); 0 turns the ping off.
+            pingIntervalSeconds = pingIntervalSeconds == null ? 30 : pingIntervalSeconds;
+            if (pingIntervalSeconds < 0 || pingIntervalSeconds > 300) {
+                throw new IllegalArgumentException("websocket.pingIntervalSeconds must be between 0 and 300");
             }
         }
 

@@ -36,13 +36,20 @@ import java.util.function.BiConsumer;
  */
 public final class WebSocketFrontend {
     public static final String FRAME_ADAPTER = "websocket-frames";
+    static final String KEEPALIVE = "websocket-keepalive";
     private static final Logger LOGGER = LoggerFactory.getLogger(WebSocketFrontend.class);
     private static final int MAX_UPGRADE_REQUEST_BYTES = 8192;
     // One Minecraft 1.7.10 frame (three-byte length plus at most 0x1FFFFF bytes) fits in one message.
     private static final int MAX_FRAME_PAYLOAD = 0x1FFFFF + 3;
 
-    /** Immutable listener settings; a null TLS context means plain ws:// (TLS ends at a CDN or proxy). */
-    public record Settings(String path, SslContext tls, ClientAddressPolicy addresses, Duration handshakeTimeout) {
+    /**
+     * Immutable listener settings; a null TLS context means plain ws:// (TLS ends at a CDN or proxy). A zero
+     * {@code pingInterval} sends no keepalive pings.
+     */
+    public record Settings(String path, SslContext tls, ClientAddressPolicy addresses, Duration handshakeTimeout,
+                           Duration pingInterval) {
+        public static final Duration DEFAULT_PING_INTERVAL = Duration.ofSeconds(30);
+
         public Settings {
             Objects.requireNonNull(path, "path");
             if (!path.startsWith("/")) throw new IllegalArgumentException("websocket path must start with /");
@@ -51,6 +58,12 @@ public final class WebSocketFrontend {
             if (handshakeTimeout.isNegative() || handshakeTimeout.isZero()) {
                 throw new IllegalArgumentException("handshake timeout must be positive");
             }
+            Objects.requireNonNull(pingInterval, "pingInterval");
+            if (pingInterval.isNegative()) throw new IllegalArgumentException("ping interval must not be negative");
+        }
+
+        public Settings(String path, SslContext tls, ClientAddressPolicy addresses, Duration handshakeTimeout) {
+            this(path, tls, addresses, handshakeTimeout, DEFAULT_PING_INTERVAL);
         }
     }
 
@@ -128,6 +141,10 @@ public final class WebSocketFrontend {
                 return;
             }
             ctx.pipeline().replace(this, FRAME_ADAPTER, new WebSocketFrameAdapter());
+            if (!settings.pingInterval().isZero()) {
+                // Behind the encoder, so pings are framed and the adapter's writes count as activity.
+                ctx.pipeline().addBefore(FRAME_ADAPTER, KEEPALIVE, new WebSocketKeepalive(settings.pingInterval()));
+            }
             ready.accept(ctx.channel(), address);
         }
 
