@@ -10,8 +10,9 @@ CDN 能否降低延迟或丢包，取决于玩家到 CDN 边缘、以及边缘�
 
 - 标准 RFC 6455 WebSocket。客户端向配置的 `path` 发送 HTTP/1.1 `GET` 升级请求，不需要子协议，也不协商扩展（不压缩）。
 - 升级完成后，每条消息都是**二进制**帧，载荷是原始 Minecraft TCP 字节流的一段。这些字节与直连 TCP 时完全相同：带 VarInt 长度前缀，在线模式下还经过 Minecraft 自己的 AES/CFB8 加密。
-- 消息边界没有含义。一条消息可以只含半个 Minecraft 帧，也可以含多个帧；接收方必须按字节流拼接。代理对每次写出发送一条消息，单条消息载荷上限为一个 1.7.10 帧的最大值（2 MiB + 3 字节）。
+- 消息边界没有含义。一条消息可以只含半个 Minecraft 帧，也可以含多个帧；接收方必须按字节流拼接。代理把每次 flush 之前写出的数据合并为一条消息（单条上限 64 KiB，超过则拆成多条）；代理接收的单条消息载荷上限为一个 1.7.10 帧的最大值（2 MiB + 3 字节）。
 - 收到文本帧视为协议错误，代理直接关闭连接。Ping 由代理回复 Pong；关闭帧关闭连接。代理关闭会话时先发送关闭帧。
+- 升级完成后，代理保证朝客户端方向的静默不超过 `pingIntervalSeconds`：期间没有数据时发送一个空 Ping，客户端须回复 Pong（RFC 6455 本就要求）。这让 CDN 和负载均衡在登录、选服等安静阶段也能看到流量，不会按空闲超时切断连接。
 - 请求其他路径、非升级请求返回 `404` 并关闭。连接建立后，若在 `handshakeTimeoutSeconds` 内没有完成升级，代理关闭连接；尚未升级的连接同样占用 `maxConnections` 名额。
 
 ## 配置
@@ -26,16 +27,18 @@ websocket:
   trustedProxies: ["127.0.0.1"]   # 只有这些来源可以提供真实 IP 头
   realIpHeader: "X-Forwarded-For" # 默认值；也可用 CF-Connecting-IP、X-Real-IP
   handshakeTimeoutSeconds: 10     # 1–60，默认 10
+  pingIntervalSeconds: 30         # 0–300，默认 30；0 不发送 Ping
 ```
 
 | 键 | 说明 |
 | --- | --- |
 | `listen` | 必填，`host:port`，端口须大于 0。`OFFLINE` 模式下与 TCP `listen` 相同，必须是字面量回环 IP，除非设置 `allowOfflinePublicAccess: true`。 |
 | `path` | 升级请求的路径，须以 `/` 开头，不含查询串和空白。 |
-| `tls` | 可选。客户端 mod 只用 TLS 1.2（Minecraft 自带的 Netty 无法完成 TLS 1.3 握手），因此任何 TLS 终端都不能只开放 TLS 1.3。配置后监听端直接提供 `wss://`；PEM 证书链与**未加密的 PKCS#8** 私钥，路径相对于配置文件。PKCS#1 私钥（`BEGIN RSA PRIVATE KEY`）可用 `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem` 转换。不配置时为明文 `ws://`，由 CDN 或反向代理终结 TLS。 |
+| `tls` | 可选。客户端 mod 只用 TLS 1.2（Minecraft 自带的 Netty 无法完成 TLS 1.3 握手），因此任何 TLS 终端都不能只开放 TLS 1.3。配置后监听端直接提供 `wss://`；PEM 证书链与**未加密的 PKCS#8** 私钥，路径相对于配置文件。PKCS#1 私钥（`BEGIN RSA PRIVATE KEY`）可用 `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem` 转换。不配置时为明文 `ws://`，由 CDN 或反向代理终结 TLS。发行包附带 BoringSSL（Linux x86_64/aarch64、macOS、Windows x86_64），监听端用它处理 TLS，CPU 开销明显低于 JDK 实现；其他平台回落到 JDK，启动日志的 `TLS via OPENSSL/JDK` 标明实际所用。 |
 | `trustedProxies` | IP 或 CIDR 列表。仅当 TCP 对端属于该列表时才读取真实 IP 头；为空时始终使用 TCP 对端地址。 |
 | `realIpHeader` | 真实 IP 头名称，大小写不敏感。`X-Forwarded-For` 从右往左取第一个不属于 `trustedProxies` 的地址（全部可信时取最左项）；其他头必须恰好出现一次且是 IP 字面量。可信来源发送了格式错误的头时拒绝连接，不会回退。 |
 | `handshakeTimeoutSeconds` | 从建连到升级完成的期限。 |
+| `pingIntervalSeconds` | 代理朝客户端方向的静默不超过这个时长：每半个间隔检查一次，上半个间隔内没有写出就发送一个空 WebSocket Ping。须小于玩家与代理之间所有 CDN、负载均衡和反向代理的空闲超时；默认 30 秒低于常见的 60–100 秒。连接不可写时不发送（数据已在排队）。 |
 
 `--validate-config` 同样会加载并校验 TLS 证书和 `trustedProxies`。启动日志会打印 WebSocket 监听的地址与路径。
 
@@ -44,6 +47,17 @@ websocket:
 代理按上表确定的地址就是该玩家的地址，用于 `ConnectionAdmissionEvent`、`PlayerAdmissionEvent`、Mojang `hasJoined` 的 `ip` 参数和 Bungee 旧版转发写给后端的 IP。来源不可信时使用 TCP 对端地址，即 CDN 边缘或反向代理的地址，这时按 IP 封禁会作用于整个边缘节点。**经 CDN 接入时必须正确配置 `trustedProxies`**，同时不能把源站端口暴露给 CDN 以外的来源：任何能直连源站、且来源在 `trustedProxies` 内的人都可以伪造真实 IP 头。
 
 经 WebSocket 接入的连接在升级完成后才触发 `ConnectionAdmissionEvent`，这时已经确定了真实地址。
+
+## 经 CDN 部署
+
+以下适用于任何能转发 WebSocket 的 CDN 或负载均衡，Cloudflare 的具体设置见下一节示例。
+
+- **空闲超时。** CDN 和负载均衡会切断一段时间没有流量的连接，常见值为 60–100 秒，也有更短的。PLAY 阶段后端的 Keep Alive 足以保持连接；大型整合包登录、等待选服或后端卡顿时则可能长时间没有数据，`pingIntervalSeconds` 用来覆盖这些阶段。若链路上某一跳的空闲超时短于 30 秒，把它调到更小的值。nginx 等自建反向代理的 `proxy_read_timeout` 也须大于该值。
+- **真实 IP。** 在 `trustedProxies` 中列出 CDN 公布的回源 IP 段，`realIpHeader` 设为 CDN 写入客户端地址的头（`X-Forwarded-For`、`CF-Connecting-IP`、`True-Client-IP` 等，以 CDN 文档为准）。
+- **回源走 ws 还是 wss。** CDN 到源站走 TLS（`tls` 配置或前置 nginx 终结）时，这一段的 TLS 开销落在源站；回源走明文 ws 时，须用防火墙确保只有 CDN 能连到该端口。客户端到 CDN 边缘始终建议用 `wss://`。
+- **TLS 版本。** 客户端 mod 只用 TLS 1.2，CDN 边缘不能设为仅 TLS 1.3。
+- **不压缩。** 代理和客户端都不协商 permessage-deflate：在线模式下数据在分帧前已经 AES 加密，无法压缩；1.7.10 的区块数据本身已是 zlib 压缩；客户端使用的 Netty 4.0.10 也没有该扩展。
+- **延迟。** 每个连接要多走客户端到边缘和边缘到源站两段，加上 TLS 与 HTTP 升级各一到两次往返；登录与 Forge 握手的往返次数由协议决定。CDN 是否改善体验取决于实际线路，应在玩家所在地实测。
 
 ## 部署示例
 
@@ -103,6 +117,7 @@ Cloudflare 侧：
 - 错误路径返回 404、文本帧关闭连接；
 - 未升级连接占用并归还 `maxConnections` 名额，以及升级期限；
 - 由配置加载 PEM 证书后提供 `wss://`。
+- 升级后空闲的连接收到代理的 Ping；有写出时推迟 Ping，不可写时不发送（`WebSocketKeepaliveTest`）。
 
 另用客户端 mod 自己的管线（Netty 4.0.10，Java 8 与 21）对已安装的 MoonBridge 发行包实测过 `ws://` 与 `wss://` 的状态查询和登录阶段断开消息，以及错误路径的 404。
 

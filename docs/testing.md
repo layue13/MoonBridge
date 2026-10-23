@@ -88,6 +88,10 @@ sh testing/smoke/container-channel.sh
 
 `--websocket 1`（直接运行 Java 时）让代理阶段的客户端通过 `ws://` 连接代理的 WebSocket 监听器：完成升级后，客户端每次 flush 发送一条带掩码的二进制消息，读取时按 RFC 6455 拆出服务器消息的负载。直接阶段仍用 TCP 连接同一个模拟后端，所以代理/直连之比混入了 WebSocket 客户端自身的开销；比较 WebSocket 路径时以代理 I/O 线程每帧 CPU 为准。[2026-10-22 WebSocket 合并记录](../testing/benchmarks/results/2026-10-22-websocket-coalescing.md)用它比较了逐帧消息与按 flush 合并。
 
+`--websocket-tls 1`（需同时给 `--websocket 1`）让代理的 WebSocket 监听器提供 `wss://`：启动时用 JDK 的 `keytool` 生成一次性 ECDSA P-256 自签名证书，代理端按运行时可用的提供者（BoringSSL 可加载时为 OpenSSL，否则为 JDK）终结 TLS，客户端用 JDK `SSLSocket`。加 `-Dio.netty.handler.ssl.noOpenSsl=true` 可强制代理使用 JDK 提供者。
+
+`--profile modded` 把等长回显换成仿大型整合包的固定种子流量：每个往返是客户端一个 tick（模组自定义负载、位置包、着地包共 3 个包），后端回以该 tick 的下行包组（平均约 10 个包、6 KB：大量 20–600 字节的模组负载与方块实体更新，约每 3 个 tick 一个 2–8 KiB 负载，约每 20 个 tick 一个 30–60 KiB 区块）。每次 Position and Look 之后后端还发送约 2 MiB 的 30,000 字节负载，模拟 Forge 注册表同步；其耗时单独报告为 `login_burst_ms`，不计入计时。每个下行包都带 tick 序号并逐字节校验；帧数与每帧 CPU 计入双向。默认客户端每个包单独写出并 flush（与已发布的客户端 mod 一样每包一条消息），`--client-coalesce 1` 改为每个 tick 一次写出。[2026-10-23 CDN 场景记录](../testing/benchmarks/results/2026-10-23-websocket-cdn.md)用这两个模式测量了 ws/wss 基线、BoringSSL 与 JDK TLS 的对比和保活 Ping 的开销。
+
 原 stop-and-wait 小样本见 `testing/benchmarks/results/2026-09-25-proxy-session-benchmark-smoke.md`；Window 参数的小样本和 Window=1/16 重复测量见 `testing/benchmarks/results/2026-09-25-proxy-session-window.md`。这些是环回网络上的合成帧对照，不能代表 Forge 整合包、真实后端或跨主机部署的性能。
 
 ## 后端宿主真实服务端验收

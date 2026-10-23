@@ -350,10 +350,18 @@ final class ProxyConfigurationTest {
             var websocket = new ProxyConfigurationLoader().load(config).websocket();
             assertEquals("/mc", websocket.path());
             assertEquals(10, websocket.handshakeTimeoutSeconds());
+            assertEquals(30, websocket.pingIntervalSeconds());
             assertEquals(8080, websocket.listenAddress().getPort());
             var settings = new ProxyConfigurationLoader().loadWebSocket(new ProxyConfigurationLoader().load(config), config);
             assertEquals("/mc", settings.path());
             assertNull(settings.tls());
+            assertEquals(java.time.Duration.ofSeconds(30), settings.pingInterval());
+
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  pingIntervalSeconds: 0\n");
+            assertEquals(java.time.Duration.ZERO, new ProxyConfigurationLoader()
+                    .loadWebSocket(new ProxyConfigurationLoader().load(config), config).pingInterval());
+            Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n  pingIntervalSeconds: 301\n");
+            assertThrows(com.fasterxml.jackson.databind.JsonMappingException.class, () -> new ProxyConfigurationLoader().load(config));
 
             Files.writeString(config, base + "websocket:\n  listen: \"127.0.0.1:8080\"\n");
             assertEquals("/", new ProxyConfigurationLoader().load(config).websocket().path());

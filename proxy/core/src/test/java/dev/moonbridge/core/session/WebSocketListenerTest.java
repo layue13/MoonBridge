@@ -360,6 +360,27 @@ final class WebSocketListenerTest {
     }
 
     @Test
+    void anIdleUpgradedConnectionIsPinged() throws Exception {
+        var listener = new ProxySessionListener(LOOPBACK_ANY_PORT, new InMemoryBackendCatalog());
+        listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
+        listener.setWebSocket(LOOPBACK_ANY_PORT, new WebSocketFrontend.Settings("/", null, ClientAddressPolicy.direct(),
+                Duration.ofSeconds(5), Duration.ofMillis(200)));
+        try {
+            listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), port(listener.webSocketChannel()))) {
+                socket.setSoTimeout(5000);
+                assertTrue(TestWebSocketClient.upgrade(socket, "/", Map.of()).startsWith("HTTP/1.1 101"));
+                // Nothing is sent after the upgrade; the first server frame is an empty, unmasked ping.
+                InputStream input = socket.getInputStream();
+                assertEquals(0x80 | TestWebSocketClient.PING, input.read());
+                assertEquals(0, input.read());
+            }
+        } finally {
+            listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void idleConnectionIsClosedAtTheHandshakeDeadline() throws Exception {
         var listener = new ProxySessionListener(LOOPBACK_ANY_PORT, new InMemoryBackendCatalog());
         listener.setPlacement(player -> CompletableFuture.completedFuture(Optional.empty()));
@@ -387,7 +408,7 @@ final class WebSocketListenerTest {
         var configuration = new ProxyConfiguration("127.0.0.1:0", ProxyConfiguration.Authentication.OFFLINE, List.of(),
                 null, null, false, null, null, null, null,
                 new ProxyConfiguration.WebSocket("127.0.0.1:1", "/mc",
-                        new ProxyConfiguration.Tls("certs/chain.pem", "certs/key.pem"), null, null, null));
+                        new ProxyConfiguration.Tls("certs/chain.pem", "certs/key.pem"), null, null, null, null));
         var settings = new ProxyConfigurationLoader().loadWebSocket(configuration, directory.resolve("moonbridge.yml"));
 
         var listener = new ProxySessionListener(LOOPBACK_ANY_PORT, new InMemoryBackendCatalog());
@@ -395,17 +416,25 @@ final class WebSocketListenerTest {
         listener.setWebSocket(LOOPBACK_ANY_PORT, settings);
         try {
             listener.start().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            // The distribution bundles BoringSSL for this platform; the client mod offers TLS 1.2 only.
+            assertTrue(settings.tls() instanceof io.netty.handler.ssl.ReferenceCountedOpenSslContext,
+                    settings.tls().getClass().getName());
             SSLContext context = SSLContext.getInstance("TLS");
             context.init(null, certificate.toTrustManagerFactory().getTrustManagers(), null);
-            var socket = (SSLSocket) context.getSocketFactory().createSocket(InetAddress.getLoopbackAddress(),
-                    port(listener.webSocketChannel()));
-            var parameters = socket.getSSLParameters();
-            parameters.setServerNames(List.of(new SNIHostName("localhost")));
-            parameters.setEndpointIdentificationAlgorithm("HTTPS");
-            socket.setSSLParameters(parameters);
-            socket.setSoTimeout(5000);
-            try (var ws = TestWebSocketClient.connect(socket, "/mc", Map.of())) {
-                assertEquals("MoonBridge", requestStatus(ws.input(), ws.output()).path("description").path("text").asText());
+            for (String[] protocols : List.of(new String[] {"TLSv1.2"}, new String[] {"TLSv1.3", "TLSv1.2"})) {
+                var socket = (SSLSocket) context.getSocketFactory().createSocket(InetAddress.getLoopbackAddress(),
+                        port(listener.webSocketChannel()));
+                var parameters = socket.getSSLParameters();
+                parameters.setServerNames(List.of(new SNIHostName("localhost")));
+                parameters.setEndpointIdentificationAlgorithm("HTTPS");
+                parameters.setProtocols(protocols);
+                socket.setSSLParameters(parameters);
+                socket.setSoTimeout(5000);
+                try (var ws = TestWebSocketClient.connect(socket, "/mc", Map.of())) {
+                    assertEquals(protocols[0], socket.getSession().getProtocol());
+                    assertEquals("MoonBridge",
+                            requestStatus(ws.input(), ws.output()).path("description").path("text").asText());
+                }
             }
         } finally {
             listener.close().toCompletableFuture().get(5, TimeUnit.SECONDS);

@@ -50,6 +50,9 @@ public final class ProxySessionBenchmark {
         int commandInterceptor = intArg(args, "command-interceptor", 1);
         int burst = intArg(args, "burst", 1);
         int webSocket = intArg(args, "websocket", 0);
+        int webSocketTls = intArg(args, "websocket-tls", 0);
+        int clientCoalesce = intArg(args, "client-coalesce", 0);
+        String profile = stringArg(args, "profile", "echo");
         String mode = modeArg(args);
         var transport = dev.moonbridge.core.session.channel.NetworkTransport.select(
                 dev.moonbridge.core.session.channel.NetworkTransport.Preference.valueOf(
@@ -59,18 +62,30 @@ public final class ProxySessionBenchmark {
                 || warmup < 0 || warmup > 10_000 || payload < 5 || payload > 1_048_576
                 || repeats < 1 || repeats > 10 || window < 1 || window > 1024
                 || (commandInterceptor != 0 && commandInterceptor != 1) || burst < 1 || burst > 256
-                || (webSocket != 0 && webSocket != 1)) {
+                || (webSocket != 0 && webSocket != 1) || (webSocketTls != 0 && webSocketTls != 1)
+                || (clientCoalesce != 0 && clientCoalesce != 1)) {
             throw new IllegalArgumentException("bounds: connections 1..32, messages 1..100000, warmup 0..10000, "
                     + "payload 5..1048576, repeats 1..10, window 1..1024, burst 1..256");
         }
+        if (!profile.equals("echo") && !profile.equals("modded"))
+            throw new IllegalArgumentException("profile must be echo or modded");
+        if (webSocketTls == 1 && webSocket == 0) throw new IllegalArgumentException("--websocket-tls needs --websocket 1");
+        ModdedTraffic modded = profile.equals("modded") ? new ModdedTraffic() : null;
+        if (modded != null && burst != 1) throw new IllegalArgumentException("--profile modded sets its own frame mix; "
+                + "--burst does not apply");
+        if (modded == null && clientCoalesce == 1)
+            throw new IllegalArgumentException("--client-coalesce applies to --profile modded");
 
         byte[] playPayload = new byte[payload];
         playPayload[0] = 0x03; // PLAY packet ID; bytes 1..4 carry the per-request sequence.
         for (int i = 1; i < payload; i++) playPayload[i] = (byte) (i * 31 + 7);
         byte[] playFrame = frame(playPayload);
+        BenchmarkTls tls = webSocketTls == 1 ? BenchmarkTls.create() : null;
+        ClientOptions options = new ClientOptions(webSocket == 1, tls == null ? null : tls.client(), modded,
+                clientCoalesce == 1);
 
-        try (FakeBackend backend = new FakeBackend(connections, 42, burst);
-             FakeBackend replacement = afterTransfer ? new FakeBackend(connections, 99, burst) : null) {
+        try (FakeBackend backend = new FakeBackend(connections, 42, burst, modded);
+             FakeBackend replacement = afterTransfer ? new FakeBackend(connections, 99, burst, modded) : null) {
             backend.start();
             if (replacement != null) replacement.start();
             InMemoryBackendCatalog catalog = new InMemoryBackendCatalog();
@@ -88,7 +103,8 @@ public final class ProxySessionBenchmark {
             if (commandInterceptor == 1) proxy.setCommandDispatcher((player, message, reply, admission) -> false);
             if (webSocket == 1) {
                 proxy.setWebSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
-                        new dev.moonbridge.core.websocket.WebSocketFrontend.Settings(WEBSOCKET_PATH, null,
+                        new dev.moonbridge.core.websocket.WebSocketFrontend.Settings(WEBSOCKET_PATH,
+                                tls == null ? null : tls.server(),
                                 dev.moonbridge.core.websocket.ClientAddressPolicy.direct(), Duration.ofSeconds(10)));
             }
             try {
@@ -98,16 +114,19 @@ public final class ProxySessionBenchmark {
                 // because the fake backend is a Minecraft TCP server.
                 int proxyPort = webSocket == 1
                         ? ((InetSocketAddress) proxy.webSocketChannel().localAddress()).getPort() : tcpPort;
-                System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s payload=%d bytes frame=%d bytes "
-                                + "connections=%d measured_roundtrips_per_connection=%d warmup_per_connection=%d "
-                                + "window_per_connection=%d repeats=%d command_interceptor=%d burst=%d transport=%s "
-                                + "proxy_frontend=%s%n",
-                        mode, playPayload.length, playFrame.length, connections, messages, warmup, window, repeats,
-                        commandInterceptor, burst, transport.name(), webSocket == 1 ? "websocket" : "tcp");
-                if (webSocket == 1) System.out.println("Proxy clients connect over plain ws:// and send one masked binary "
+                System.out.printf("Offline synthetic Minecraft 1.7.10 PLAY echo; mode=%s profile=%s payload=%d bytes "
+                                + "frame=%d bytes connections=%d measured_roundtrips_per_connection=%d "
+                                + "warmup_per_connection=%d window_per_connection=%d repeats=%d command_interceptor=%d "
+                                + "burst=%d transport=%s proxy_frontend=%s client_coalesce=%d%n",
+                        mode, profile, playPayload.length, playFrame.length, connections, messages, warmup, window,
+                        repeats, commandInterceptor, burst, transport.name(),
+                        webSocket == 0 ? "tcp" : tls == null ? "websocket" : "websocket-tls", clientCoalesce);
+                if (webSocket == 1) System.out.println("Proxy clients connect over " + (tls == null ? "plain ws://"
+                        : "wss:// (JDK TLS client, " + tls.description() + ")") + " and send one masked binary "
                         + "message per client flush; direct clients use TCP to the same fake backend.");
                 if (burst > 1) System.out.println("Each roundtrip writes " + burst + " frames in one client write; "
                         + "the fake backend echoes them with one flush. Window counts bursts.");
+                if (modded != null) System.out.println(modded.description(clientCoalesce == 1));
                 System.out.println("Direct and proxy phases use the same JVM, fake backend, client code, framed payload, "
                         + "connection concurrency, and per-client in-flight window. Login/setup and warmup are excluded from timing.");
                 if (afterTransfer) System.out.println("Proxy clients switch from bench to replacement before warmup; "
@@ -119,14 +138,14 @@ public final class ProxySessionBenchmark {
                 for (int round = 0; round < repeats; round++) {
                     if (proxyFirst) {
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
+                                playFrame, playPayload, proxy, afterTransfer, burst, options);
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
+                                playFrame, playPayload, proxy, afterTransfer, burst, options);
                     } else {
                         runPhase("direct-" + (round + 1), directPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
+                                playFrame, playPayload, proxy, afterTransfer, burst, options);
                         runPhase("proxy-" + (round + 1), proxyPort, connections, messages, warmup, window,
-                                playFrame, playPayload, proxy, afterTransfer, burst, webSocket == 1);
+                                playFrame, playPayload, proxy, afterTransfer, burst, options);
                     }
                     proxyFirst = !proxyFirst;
                 }
@@ -138,7 +157,7 @@ public final class ProxySessionBenchmark {
 
     private static void runPhase(String name, int port, int connections, int messages, int warmup, int window,
                                  byte[] playFrame, byte[] playPayload, ProxySessionListener proxy,
-                                 boolean afterTransfer, int burst, boolean webSocket) throws Exception {
+                                 boolean afterTransfer, int burst, ClientOptions options) throws Exception {
         List<ClientWorker> clients = new ArrayList<>();
         CountDownLatch prepared = new CountDownLatch(connections);
         CountDownLatch begin = new CountDownLatch(1);
@@ -146,7 +165,7 @@ public final class ProxySessionBenchmark {
         for (int i = 0; i < connections; i++) {
             ClientWorker client = new ClientWorker(name, i, port, messages, warmup, window, playFrame,
                     playPayload, prepared, begin, finished, clients, proxy, afterTransfer, burst,
-                    webSocket && name.startsWith("proxy"));
+                    options.forPhase(name.startsWith("proxy")));
             clients.add(client);
         }
         for (ClientWorker client : clients) {
@@ -182,8 +201,12 @@ public final class ProxySessionBenchmark {
         Arrays.sort(samples);
         long measured = (long) connections * messages;
         double seconds = elapsed / 1_000_000_000.0;
-        long frames = measured * burst;
-        double oneWayMib = frames * (double) playPayload.length / (1024.0 * 1024.0) / seconds;
+        boolean modded = options.modded() != null;
+        // The modded profile counts frames and bytes in both directions; the echo profile counts one direction.
+        long frames = modded ? clients.stream().mapToLong(client -> client.frames).sum() : measured * burst;
+        double oneWayMib = modded
+                ? clients.stream().mapToLong(client -> client.serverBytes).sum() / (1024.0 * 1024.0) / seconds
+                : frames * (double) playPayload.length / (1024.0 * 1024.0) / seconds;
         long echoes = clients.stream().mapToLong(client -> client.echoes).sum();
         long correct = clients.stream().mapToLong(client -> client.correct).sum();
         long errors = clients.stream().mapToLong(client -> client.errors).sum();
@@ -197,6 +220,11 @@ public final class ProxySessionBenchmark {
                 percentile(samples, .50) / 1e6, percentile(samples, .95) / 1e6,
                 percentile(samples, .99) / 1e6, elapsed / 1e6, frames / seconds, ioCpu / (double) frames,
                 segments < 0 ? "n/a" : String.format("%.3f", segments / (double) frames));
+        if (modded) {
+            long[] bursts = clients.stream().mapToLong(client -> client.loginBurstNanos).sorted().toArray();
+            System.out.printf("%s: modded server_to_client_MiB/s=%.2f login_burst_ms_p50=%.3f max=%.3f%n", name,
+                    oneWayMib, percentile(bursts, .50) / 1e6, bursts[bursts.length - 1] / 1e6);
+        }
     }
 
     private static void closeClients(List<ClientWorker> clients) {
@@ -213,43 +241,58 @@ public final class ProxySessionBenchmark {
         final ProxySessionListener proxy;
         final boolean afterTransfer;
         final int burst;
-        final boolean webSocket;
+        final ClientOptions options;
+        final ModdedTraffic modded;
         volatile Exception failure;
         volatile Socket socket;
         long[] latencies;
         long echoes, correct, errors;
+        long frames, serverBytes, loginBurstNanos;
 
         ClientWorker(String phase, int index, int port, int messages, int warmup, int window, byte[] playFrame,
                      byte[] playPayload, CountDownLatch prepared, CountDownLatch begin, CountDownLatch finished,
                      List<ClientWorker> peers, ProxySessionListener proxy, boolean afterTransfer, int burst,
-                     boolean webSocket) {
+                     ClientOptions options) {
             this.phase = phase; this.index = index; this.port = port; this.messages = messages;
             this.warmup = warmup; this.window = window; this.playFrame = playFrame.clone(); this.playPayload = playPayload;
             this.prepared = prepared; this.begin = begin; this.finished = finished; this.peers = peers;
-            this.proxy = proxy; this.afterTransfer = afterTransfer; this.burst = burst; this.webSocket = webSocket;
+            this.proxy = proxy; this.afterTransfer = afterTransfer; this.burst = burst; this.options = options;
+            this.modded = options.modded();
         }
 
         @Override public void run() {
-            try (Socket socket = new Socket()) {
-                this.socket = socket;
-                socket.setTcpNoDelay(true);
-                socket.setSoTimeout(IO_TIMEOUT_MILLIS);
-                socket.connect(new InetSocketAddress("127.0.0.1", port), 5000);
+            try (Socket plain = new Socket()) {
+                this.socket = plain;
+                plain.setTcpNoDelay(true);
+                plain.setSoTimeout(IO_TIMEOUT_MILLIS);
+                plain.connect(new InetSocketAddress("127.0.0.1", port), 5000);
+                Socket socket = plain;
+                if (options.tls() != null) {
+                    var secure = (javax.net.ssl.SSLSocket) options.tls().getSocketFactory()
+                            .createSocket(plain, "localhost", port, true);
+                    secure.startHandshake();
+                    this.socket = socket = secure;
+                }
                 DataInputStream input;
                 DataOutputStream output;
-                if (webSocket) {
+                if (options.webSocket()) {
                     var streams = new WebSocketStreams(socket, port);
                     input = new DataInputStream(streams.input);
                     output = new DataOutputStream(streams.output);
                 } else {
-                    input = new DataInputStream(socket.getInputStream());
-                    output = new DataOutputStream(socket.getOutputStream());
+                    // The modded profile reads and writes packet by packet; buffering gives TCP the same read cost
+                    // as the WebSocket client's buffered input and the same write boundaries as its messages.
+                    input = new DataInputStream(modded == null ? socket.getInputStream()
+                            : new java.io.BufferedInputStream(socket.getInputStream(), 64 * 1024));
+                    output = new DataOutputStream(modded == null ? socket.getOutputStream()
+                            : new java.io.BufferedOutputStream(socket.getOutputStream(), 64 * 1024));
                 }
                 String username = "B" + (phase.startsWith("proxy") ? "P" : "D") + index + "X";
                 sendHandshakeAndLogin(output, username);
                 readLoginSuccess(input, username);
                 if (packetId(readFrame(input)) != 1) throw new IOException("expected Join Game before PLAY");
                 if (packetId(readFrame(input)) != 8) throw new IOException("expected Position and Look before PLAY");
+                if (modded != null) readLoginBurst(input);
                 if (afterTransfer && phase.startsWith("proxy")) {
                     PlayerView player = awaitPlayer(proxy, username);
                     var transfer = proxy.transfer(player.identity(), "replacement").toCompletableFuture();
@@ -257,6 +300,7 @@ public final class ProxySessionBenchmark {
                         throw new IOException("expected two Respawns from replacement backend");
                     if (packetId(readFrame(input)) != 8)
                         throw new IOException("expected Position and Look from replacement backend");
+                    if (modded != null) readLoginBurst(input);
                     var result = transfer.get(SETUP_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     if (result.status() != TransferStatus.NETWORK_READY)
                         throw new IOException("replacement transfer failed: " + result.status()
@@ -264,12 +308,15 @@ public final class ProxySessionBenchmark {
                     if (!proxy.find(player.identity()).flatMap(PlayerView::currentServer).orElse("")
                             .equals("replacement")) throw new IOException("replacement player view missing");
                 }
-                exchange(output, input, warmup, null, 0);
-                echoes = 0; correct = 0; errors = 0; // Warmup is validated, then omitted from reported phase counts.
+                if (modded != null) exchangeModded(output, input, warmup, null, 0);
+                else exchange(output, input, warmup, null, 0);
+                // Warmup is validated, then omitted from reported phase counts.
+                echoes = 0; correct = 0; errors = 0; frames = 0; serverBytes = 0;
                 latencies = new long[messages];
                 prepared.countDown();
                 begin.await();
-                exchange(output, input, messages, latencies, warmup);
+                if (modded != null) exchangeModded(output, input, messages, latencies, warmup);
+                else exchange(output, input, messages, latencies, warmup);
             } catch (Exception problem) {
                 failure = problem;
                 if (latencies == null) prepared.countDown();
@@ -310,6 +357,57 @@ public final class ProxySessionBenchmark {
                         throw new IOException("echo validation failed at roundtrip " + received + ": "
                                 + mismatch.getMessage(), mismatch);
                     }
+                }
+                echoes++;
+                correct++;
+                received++;
+            }
+        }
+
+        /** The backend's registry-sync stand-in after each Position and Look; its wall time is reported, not timed. */
+        private void readLoginBurst(DataInputStream input) throws IOException {
+            long started = System.nanoTime();
+            ModdedTraffic.Packet[] login = modded.login;
+            for (int i = 0; i < login.length; i++) modded.verify(login[i], readFrame(input), i);
+            loginBurstNanos = System.nanoTime() - started;
+        }
+
+        /**
+         * One roundtrip is one client tick: three small serverbound packets, answered by the backend with that
+         * tick's clientbound mix. Without client coalescing each packet is its own write and flush, as the released
+         * client mod sends one WebSocket message per vanilla packet.
+         */
+        private void exchangeModded(DataOutputStream output, DataInputStream input, int count, long[] samples,
+                                    int firstSequence) throws Exception {
+            long[] outstandingSince = new long[Math.min(window, Math.max(1, count))];
+            int sent = 0;
+            int received = 0;
+            while (received < count) {
+                while (sent < count && sent - received < outstandingSince.length) {
+                    int sequence = firstSequence + sent;
+                    outstandingSince[sent % outstandingSince.length] = System.nanoTime();
+                    for (ModdedTraffic.Packet packet : modded.client(sequence)) {
+                        output.write(modded.frame(packet, sequence));
+                        if (!options.coalesce()) output.flush();
+                        frames++;
+                    }
+                    if (options.coalesce()) output.flush();
+                    sent++;
+                }
+                int sequence = firstSequence + received;
+                for (ModdedTraffic.Packet packet : modded.server(sequence)) {
+                    byte[] body = readFrame(input);
+                    try {
+                        modded.verify(packet, body, sequence);
+                    } catch (IOException mismatch) {
+                        errors++;
+                        throw new IOException("tick " + received + ": " + mismatch.getMessage(), mismatch);
+                    }
+                    frames++;
+                    serverBytes += body.length;
+                }
+                if (samples != null) {
+                    samples[received] = System.nanoTime() - outstandingSince[received % outstandingSince.length];
                 }
                 echoes++;
                 correct++;
@@ -424,6 +522,205 @@ public final class ProxySessionBenchmark {
         }
     }
 
+    /** How a phase's clients connect and what they send; direct phases always use plain TCP to the fake backend. */
+    private record ClientOptions(boolean webSocket, javax.net.ssl.SSLContext tls, ModdedTraffic modded,
+                                 boolean coalesce) {
+        ClientOptions forPhase(boolean proxyPhase) {
+            return proxyPhase ? this : new ClientOptions(false, null, modded, coalesce);
+        }
+    }
+
+    /**
+     * Fixed-seed traffic shaped like a large 1.7.10 modpack. Each client tick sends a mod custom payload, a position
+     * packet and an on-ground packet. Each server tick answers with 6-14 small packets (mod custom payloads and tile
+     * entity updates of 20-600 bytes), a 2-8 KiB custom payload on about one tick in three and a 30-60 KiB chunk on
+     * about one in twenty. After each Position and Look the backend also sends a ~2 MiB burst of 30,000-byte custom
+     * payloads, standing in for Forge registry sync. Every clientbound packet carries the tick sequence at a known
+     * offset, so the client checks every byte. 256 templates repeat by sequence.
+     */
+    private static final class ModdedTraffic {
+        private static final int TEMPLATES = 256;
+        private static final int LOGIN_PACKETS = 70;
+        private static final String[] CHANNELS = {"gregtech", "appliedenergistics2", "Forestry", "IC2",
+                "Thaumcraft", "BuildCraft|TE", "OpenComputers", "journeymap"};
+
+        /** A packet body; {@code stamp} is where the 4-byte sequence goes, or -1 for none. */
+        record Packet(byte[] body, int stamp) { }
+
+        final Packet[] login = new Packet[LOGIN_PACKETS];
+        private final Packet[][] client = new Packet[TEMPLATES][];
+        private final Packet[][] server = new Packet[TEMPLATES][];
+
+        ModdedTraffic() {
+            try {
+                for (int t = 0; t < TEMPLATES; t++) {
+                    var random = new java.util.SplittableRandom(0x5EED0000L + t);
+                    client[t] = new Packet[] {
+                            customPayload(0x17, channel(random), 10 + random.nextInt(71), random),
+                            position(random), new Packet(new byte[] {0x03, 1}, -1)};
+                    List<Packet> packets = new ArrayList<>();
+                    int small = 6 + random.nextInt(9);
+                    for (int i = 0; i < small; i++) {
+                        packets.add(random.nextInt(10) < 7
+                                ? customPayload(0x3F, channel(random), 20 + random.nextInt(281), random)
+                                : tileEntity(100 + random.nextInt(501), random));
+                    }
+                    if (random.nextInt(3) == 0) {
+                        packets.add(customPayload(0x3F, channel(random), 2048 + random.nextInt(6145), random));
+                    }
+                    if (random.nextInt(20) == 0) packets.add(chunk(30 * 1024 + random.nextInt(30 * 1024 + 1), random));
+                    server[t] = packets.toArray(Packet[]::new);
+                }
+                var random = new java.util.SplittableRandom(0x10C1L);
+                for (int i = 0; i < LOGIN_PACKETS; i++) login[i] = customPayload(0x3F, "gregtech", 30_000, random);
+            } catch (IOException impossible) {
+                throw new java.io.UncheckedIOException(impossible);
+            }
+        }
+
+        Packet[] client(int sequence) { return client[Math.floorMod(sequence, TEMPLATES)]; }
+        Packet[] server(int sequence) { return server[Math.floorMod(sequence, TEMPLATES)]; }
+
+        String description(boolean coalesce) {
+            long frames = 0, bytes = 0;
+            for (Packet[] tick : server) for (Packet packet : tick) { frames++; bytes += packet.body().length; }
+            long loginBytes = 0;
+            for (Packet packet : login) loginBytes += packet.body().length;
+            return String.format("Modded profile: per roundtrip the client sends 3 packets (%s) and the backend "
+                            + "answers with %.1f packets / %.0f bytes on average over %d templates; frame counts "
+                            + "include both directions. Login burst: %d packets / %d bytes after each Position and Look.",
+                    coalesce ? "one write and flush per tick" : "one write and flush per packet",
+                    frames / (double) TEMPLATES, bytes / (double) TEMPLATES, TEMPLATES, LOGIN_PACKETS, loginBytes);
+        }
+
+        byte[] frame(Packet packet, int sequence) throws IOException {
+            byte[] body = packet.body().clone();
+            if (packet.stamp() >= 0) stamp(body, packet.stamp(), sequence);
+            return ProxySessionBenchmark.frame(body);
+        }
+
+        void verify(Packet expected, byte[] body, int sequence) throws IOException {
+            byte[] want = expected.body();
+            int at = expected.stamp();
+            if (body.length != want.length) throw new IOException("length " + body.length + " expected " + want.length);
+            if (Arrays.mismatch(body, 0, at, want, 0, at) >= 0
+                    || Arrays.mismatch(body, at + 4, body.length, want, at + 4, want.length) >= 0) {
+                throw new IOException("packet bytes differ from the template");
+            }
+            int actual = ((body[at] & 0xff) << 24) | ((body[at + 1] & 0xff) << 16)
+                    | ((body[at + 2] & 0xff) << 8) | (body[at + 3] & 0xff);
+            if (actual != sequence) throw new IOException("sequence " + actual + " expected " + sequence);
+        }
+
+        /** The backend reads the tick sequence from the client's custom payload, which each tick sends first. */
+        static int sequenceOf(byte[] body) throws IOException {
+            ByteArrayInputStream input = new ByteArrayInputStream(body);
+            if (readVarInt(input) != 0x17) throw new IOException("expected the tick's custom payload first");
+            readString(input, 20);
+            DataInputStream data = new DataInputStream(input);
+            data.readUnsignedShort();
+            return data.readInt();
+        }
+
+        private static String channel(java.util.SplittableRandom random) {
+            return CHANNELS[random.nextInt(CHANNELS.length)];
+        }
+
+        /** C17/S3F: channel, a short length (Forge's VarShort is the same two bytes below 32 KiB), then data. */
+        private static Packet customPayload(int id, String channel, int length, java.util.SplittableRandom random)
+                throws IOException {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            writeVarInt(bytes, id);
+            writeString(bytes, channel);
+            new DataOutputStream(bytes).writeShort(length);
+            int stamp = bytes.size();
+            bytes.write(randomBytes(length, random));
+            return new Packet(bytes.toByteArray(), stamp);
+        }
+
+        /** S35 Update Tile Entity: the sequence sits in x, then y, z, action and the NBT bytes. */
+        private static Packet tileEntity(int nbtLength, java.util.SplittableRandom random) throws IOException {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            writeVarInt(bytes, 0x35);
+            out.writeInt(0); out.writeShort(64); out.writeInt(random.nextInt(1 << 16)); out.writeByte(1);
+            out.writeShort(nbtLength);
+            bytes.write(randomBytes(nbtLength, random));
+            return new Packet(bytes.toByteArray(), 1);
+        }
+
+        /** S21 Chunk Data: the sequence sits in the chunk x, then z, flags and the (already deflated) data. */
+        private static Packet chunk(int dataLength, java.util.SplittableRandom random) throws IOException {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            writeVarInt(bytes, 0x21);
+            out.writeInt(0); out.writeInt(random.nextInt(64)); out.writeBoolean(true);
+            out.writeShort(0xFFFF); out.writeShort(0); out.writeInt(dataLength);
+            bytes.write(randomBytes(dataLength, random));
+            return new Packet(bytes.toByteArray(), 1);
+        }
+
+        /** C04 Player Position: x, feet y, stance, z, on ground. */
+        private static Packet position(java.util.SplittableRandom random) throws IOException {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            writeVarInt(bytes, 0x04);
+            double y = 64 + random.nextDouble();
+            out.writeDouble(random.nextDouble() * 100); out.writeDouble(y); out.writeDouble(y + 1.62);
+            out.writeDouble(random.nextDouble() * 100); out.writeBoolean(true);
+            return new Packet(bytes.toByteArray(), -1);
+        }
+
+        private static byte[] randomBytes(int length, java.util.SplittableRandom random) {
+            byte[] bytes = new byte[length];
+            random.nextBytes(bytes);
+            return bytes;
+        }
+
+        private static void stamp(byte[] body, int at, int sequence) {
+            body[at] = (byte) (sequence >>> 24);
+            body[at + 1] = (byte) (sequence >>> 16);
+            body[at + 2] = (byte) (sequence >>> 8);
+            body[at + 3] = (byte) sequence;
+        }
+    }
+
+    /** A throwaway ECDSA P-256 key and self-signed certificate made with the JDK's keytool, for --websocket-tls. */
+    private record BenchmarkTls(io.netty.handler.ssl.SslContext server, javax.net.ssl.SSLContext client,
+                                String description) {
+        static BenchmarkTls create() throws Exception {
+            java.nio.file.Path directory = java.nio.file.Files.createTempDirectory("moonbridge-bench-tls");
+            java.nio.file.Path store = directory.resolve("bench.p12");
+            String password = "benchmark";
+            var keys = java.security.KeyStore.getInstance("PKCS12");
+            try {
+                Process keytool = new ProcessBuilder(
+                        java.nio.file.Path.of(System.getProperty("java.home"), "bin", "keytool").toString(),
+                        "-genkeypair", "-alias", "bench", "-keyalg", "EC", "-groupname", "secp256r1",
+                        "-dname", "CN=localhost", "-ext", "SAN=dns:localhost", "-validity", "2",
+                        "-storetype", "PKCS12", "-keystore", store.toString(),
+                        "-storepass", password, "-keypass", password).redirectErrorStream(true).start();
+                String output = new String(keytool.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                if (keytool.waitFor() != 0) throw new IOException("keytool failed: " + output);
+                try (var input = java.nio.file.Files.newInputStream(store)) { keys.load(input, password.toCharArray()); }
+            } finally {
+                java.nio.file.Files.deleteIfExists(store);
+                java.nio.file.Files.deleteIfExists(directory);
+            }
+            var keyManagers = javax.net.ssl.KeyManagerFactory.getInstance(
+                    javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+            keyManagers.init(keys, password.toCharArray());
+            var trust = javax.net.ssl.TrustManagerFactory.getInstance(
+                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            trust.init(keys);
+            var client = javax.net.ssl.SSLContext.getInstance("TLS");
+            client.init(null, trust.getTrustManagers(), null);
+            var server = io.netty.handler.ssl.SslContextBuilder.forServer(keyManagers).build();
+            return new BenchmarkTls(server, client, "proxy SslProvider "
+                    + io.netty.handler.ssl.SslContext.defaultServerProvider() + ", ECDSA P-256 certificate");
+        }
+    }
+
     private static PlayerView awaitPlayer(ProxySessionListener proxy, String username) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(SETUP_TIMEOUT_SECONDS);
         while (System.nanoTime() < deadline) {
@@ -465,9 +762,12 @@ public final class ProxySessionBenchmark {
         private volatile boolean closed;
         private Thread acceptThread;
 
-        FakeBackend(int concurrency, int entityId, int burst) throws IOException {
+        private final ModdedTraffic modded;
+
+        FakeBackend(int concurrency, int entityId, int burst, ModdedTraffic modded) throws IOException {
             this.entityId = entityId;
             this.burst = burst;
+            this.modded = modded;
             clients = Executors.newFixedThreadPool(concurrency);
             server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), concurrency * 2);
         }
@@ -505,7 +805,21 @@ public final class ProxySessionBenchmark {
                 writeFrame(output, success.toByteArray());
                 writeFrame(output, joinGame(entityId));
                 writeFrame(output, positionAndLook());
-                if (burst == 1) {
+                if (modded != null) {
+                    ByteArrayOutputStream batch = new ByteArrayOutputStream();
+                    for (int i = 0; i < modded.login.length; i++) batch.write(modded.frame(modded.login[i], i));
+                    batch.writeTo(output);
+                    output.flush();
+                    while (!closed && !socket.isClosed()) {
+                        int sequence = ModdedTraffic.sequenceOf(readFrame(input));
+                        for (int k = 1; k < modded.client(sequence).length; k++) readFrame(input);
+                        batch.reset();
+                        for (ModdedTraffic.Packet packet : modded.server(sequence))
+                            batch.write(modded.frame(packet, sequence));
+                        batch.writeTo(output);
+                        output.flush();
+                    }
+                } else if (burst == 1) {
                     while (!closed && !socket.isClosed()) {
                         byte[] body = readFrame(input);
                         writeFrame(output, body);
@@ -663,7 +977,8 @@ public final class ProxySessionBenchmark {
         int found = fallback;
         boolean seen = false;
         List<String> known = List.of("connections", "messages", "warmup", "payload", "repeats", "window",
-                "mode", "command-interceptor", "burst", "transport", "websocket");
+                "mode", "command-interceptor", "burst", "transport", "websocket", "websocket-tls", "profile",
+                "client-coalesce");
         for (int i = 0; i < args.length; i++) {
             if (args[i].startsWith("--") && !known.contains(args[i].substring(2)))
                 throw new IllegalArgumentException("unknown option " + args[i]);

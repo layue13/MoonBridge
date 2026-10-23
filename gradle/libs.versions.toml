@@ -1,6 +1,7 @@
 [versions]
 junit = "5.14.1"
 netty = "4.2.18.Final"
+netty-tcnative = "2.0.84.Final"
 jackson = "2.20.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
@@ -20,6 +21,7 @@ netty-transport-classes-epoll = { module = "io.netty:netty-transport-classes-epo
 netty-transport-native-epoll = { module = "io.netty:netty-transport-native-epoll", version.ref = "netty" }
 netty-transport-classes-kqueue = { module = "io.netty:netty-transport-classes-kqueue", version.ref = "netty" }
 netty-transport-native-kqueue = { module = "io.netty:netty-transport-native-kqueue", version.ref = "netty" }
+netty-tcnative-boringssl-static = { module = "io.netty:netty-tcnative-boringssl-static", version.ref = "netty-tcnative" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
