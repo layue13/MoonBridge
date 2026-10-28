@@ -148,7 +148,7 @@ public final class PluginHost implements AutoCloseable, EventDispatcher {
                 maxPendingAccess);
         this.localMessaging = new LocalMessaging(Endpoint.proxy(),
                 new HostMessagingOutbound(this::localMessaging, () -> backendChannelTransport), backendWorkers, timer);
-        this.commandService = new CommandService(lifecycle, this, players, permissionService, commandWorkers, timer);
+        this.commandService = new CommandService(lifecycle, this, players, permissionService, commandWorkers, timer, events);
         this.placement = new PlacementService(lifecycle, this, catalog, placementTimeout, callbacks, timer);
         this.services = new HostServices(catalog, players, proxyEpoch, permissionService, localMessaging,
                 commandService, events, lifecycle, pluginServices, () -> pluginInfos);

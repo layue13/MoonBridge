@@ -1,6 +1,7 @@
 package dev.moonbridge.core.plugin;
 
 import dev.moonbridge.core.log.Overload;
+import dev.moonbridge.api.AccessDecision;
 import dev.moonbridge.api.AsyncCommandHandler;
 import dev.moonbridge.api.CommandCompleter;
 import dev.moonbridge.api.CommandCompletion;
@@ -12,6 +13,7 @@ import dev.moonbridge.api.PlayerIdentity;
 import dev.moonbridge.api.PlayerView;
 import dev.moonbridge.api.Players;
 import dev.moonbridge.api.Plugin;
+import dev.moonbridge.api.event.PlayerCommandEvent;
 import dev.moonbridge.api.permission.PermissionResult;
 import net.kyori.adventure.text.Component;
 import dev.moonbridge.core.event.PermissionService;
@@ -63,6 +65,7 @@ final class CommandService {
     private final PermissionService permissionService;
     private final ThreadPoolExecutor commandWorkers;
     private final ScheduledThreadPoolExecutor timer;
+    private final EventRouter events;
     private final ConcurrentHashMap<String, RegisteredCommand> commands = new ConcurrentHashMap<>();
     private final Set<PendingCompletion> pendingCompletions = ConcurrentHashMap.newKeySet();
     private final Set<CommandExecution> pendingCommandExecutions = ConcurrentHashMap.newKeySet();
@@ -70,13 +73,14 @@ final class CommandService {
     private final AtomicInteger pendingCommandCount = new AtomicInteger();
 
     CommandService(HostLifecycle lifecycle, Object lock, Players players, PermissionService permissionService,
-                   ThreadPoolExecutor commandWorkers, ScheduledThreadPoolExecutor timer) {
+                   ThreadPoolExecutor commandWorkers, ScheduledThreadPoolExecutor timer, EventRouter events) {
         this.lifecycle = lifecycle;
         this.lock = lock;
         this.players = players;
         this.permissionService = permissionService;
         this.commandWorkers = commandWorkers;
         this.timer = timer;
+        this.events = events;
     }
 
     /** Registers {@code name} for {@code context}; the returned handle unregisters it. */
@@ -236,8 +240,22 @@ final class CommandService {
             } catch (RuntimeException failure) {
                 finishCompletion(pending, null, failure, true);
             }
-            return Optional.of(pending.result);
+            return Optional.of(gateCompletion(player, name, arguments, pending.result));
         }
+    }
+
+    /** {@link PlayerCommandEvent} 拒绝的命令也不给参数补全（补全可能列出岛屿、玩家等）；失败或超时同样不给。 */
+    private CompletionStage<List<String>> gateCompletion(PlayerView player, String name, String arguments,
+                                                        CompletionStage<List<String>> suggestions) {
+        if (!events.hasSubscribers(PlayerCommandEvent.class)) return suggestions;
+        CompletionStage<AccessDecision> decision;
+        try {
+            decision = events.dispatch(new PlayerCommandEvent(player, name, arguments));
+        } catch (Throwable failure) {
+            decision = CompletableFuture.failedFuture(failure);
+        }
+        return decision.handle((result, failure) -> failure == null && result instanceof AccessDecision.Allowed)
+                .thenCompose(allowed -> allowed ? suggestions : CompletableFuture.completedFuture(List.<String>of()));
     }
 
     private boolean reserveCompletionSlot() {
@@ -369,15 +387,10 @@ final class CommandService {
                     execution.finish(null, null, null);
                     return;
                 }
-                try {
-                    if (!authorized(player, registered)) {
-                        invocation.reply("You do not have permission to use this command.");
-                        execution.finish(null, null, null);
-                        return;
-                    }
-                    invokeAsyncCommand(registered, invocation, execution);
-                } catch (Throwable failure) {
-                    execution.finish(failure, invocation, "Proxy command failed.");
+                if (events.hasSubscribers(PlayerCommandEvent.class)) {
+                    checkCommandEvent(player, name, registered, invocation, execution);
+                } else {
+                    runPlayerCommand(player, name, registered, invocation, execution);
                 }
             });
         } catch (RejectedExecutionException overloaded) {
@@ -385,6 +398,54 @@ final class CommandService {
             execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
         }
         return true;
+    }
+
+    /** Asks {@link PlayerCommandEvent} listeners first; failure or timeout denies, like admission. */
+    private void checkCommandEvent(PlayerView player, String name, RegisteredCommand registered,
+                                   CommandInvocation invocation, CommandExecution execution) {
+        CompletionStage<AccessDecision> decision;
+        try {
+            decision = events.dispatch(new PlayerCommandEvent(player, name, invocation.arguments()));
+        } catch (Throwable failure) {
+            decision = CompletableFuture.failedFuture(failure);
+        }
+        decision.whenComplete((result, failure) -> {
+            if (execution.finished.get()) return;
+            if (failure != null || !(result instanceof AccessDecision.Allowed)) {
+                if (result instanceof AccessDecision.Denied denied) {
+                    invocation.reply(denied.reason());
+                } else {
+                    invocation.reply("This command is not available right now.");
+                }
+                execution.finish(null, null, null);
+                return;
+            }
+            try {
+                commandWorkers.execute(() -> runPlayerCommand(player, name, registered, invocation, execution));
+            } catch (RejectedExecutionException overloaded) {
+                Overload.rejected("plugin command");
+                execution.finish(overloaded, invocation, "Proxy command service is busy. Please try again.");
+            }
+        });
+    }
+
+    private void runPlayerCommand(PlayerView player, String name, RegisteredCommand registered,
+                                  CommandInvocation invocation, CommandExecution execution) {
+        if (execution.finished.get()) return;
+        if (!lifecycle.enabled() || !registered.context.active || commands.get(name) != registered) {
+            execution.finish(null, null, null);
+            return;
+        }
+        try {
+            if (!authorized(player, registered)) {
+                invocation.reply("You do not have permission to use this command.");
+                execution.finish(null, null, null);
+                return;
+            }
+            invokeAsyncCommand(registered, invocation, execution);
+        } catch (Throwable failure) {
+            execution.finish(failure, invocation, "Proxy command failed.");
+        }
     }
 
     /** Dispatches a command from the trusted local console, with no synthetic player identity. */
