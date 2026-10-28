@@ -157,7 +157,7 @@ context.events().subscribe(PlayerAdmissionEvent.class, event -> {
 
 ### 玩家命令检查
 
-`PlayerCommandEvent(PlayerView player, String command, String arguments)` 在玩家输入的代理命令执行前触发：根命令已确认注册，权限检查和处理器都还没运行。`command` 是小写的根命令名，`arguments` 是未拆词的其余部分。结果类型与准入相同（`AccessDecision`）：全部监听器允许才执行；首个拒绝即停止，代理消费这条命令，把拒绝原因发给玩家。异常、超时、空结果都按拒绝处理，玩家看到通用提示。未注册的命令照常交给后端、不触发该事件；控制台命令和插件经 `Commands.execute` 发起的命令也不触发。该事件与准入事件共用同一组有界队列和 `plugins.eventTimeoutSeconds` 期限；没有订阅者时不派发，命令路径不变。
+`PlayerCommandEvent(PlayerView player, String command, String arguments)` 在玩家输入的代理命令执行前触发：根命令已确认注册，权限检查和处理器都还没运行。`command` 是小写的根命令名，`arguments` 是未拆词的其余部分。结果类型与准入相同（`AccessDecision`）：全部监听器允许才执行；首个拒绝即停止，代理消费这条命令，把拒绝原因发给玩家。异常、超时、空结果都按拒绝处理，玩家看到通用提示。被拒绝的命令也不给参数补全（补全可能列出岛屿、玩家名）。未注册的命令照常交给后端、不触发该事件；控制台命令和插件经 `Commands.execute` 发起的命令也不触发。该事件与准入事件共用同一组有界队列和 `plugins.eventTimeoutSeconds` 期限；没有订阅者时不派发，命令路径不变。
 
 典型用途是离线模式的登录插件：玩家在后端完成密码登录前，拒绝他的所有代理命令，以免冒用别人名字的人在登录前用 `/is`、`/lp` 等命令。
 

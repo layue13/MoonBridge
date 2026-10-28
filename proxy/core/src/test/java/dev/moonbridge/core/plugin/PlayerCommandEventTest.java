@@ -90,6 +90,22 @@ class PlayerCommandEventTest {
         }
     }
 
+    @Test
+    void deniedCommandsGetNoArgumentCompletions() throws Exception {
+        var plugin = new Plugin() {
+            @Override public void onLoad(PluginContext context) {
+                context.events().subscribe(PlayerCommandEvent.class, event ->
+                        CompletableFuture.completedFuture(AccessDecision.deny("Log in first.")));
+                context.commands().register("island", invocation -> { },
+                        completion -> CompletableFuture.completedFuture(List.of("secret-island")));
+            }
+        };
+        try (var host = host(plugin)) {
+            assertEquals(List.of(), host.completeCommand(PLAYER, "/island ").orElseThrow()
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS));
+        }
+    }
+
     private static PluginHost host(Plugin plugin) {
         var host = new PluginHost(new InMemoryBackendCatalog(), players(), Duration.ofSeconds(1));
         host.load(List.of(plugin));

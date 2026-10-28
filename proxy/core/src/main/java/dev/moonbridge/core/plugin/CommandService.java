@@ -240,8 +240,22 @@ final class CommandService {
             } catch (RuntimeException failure) {
                 finishCompletion(pending, null, failure, true);
             }
-            return Optional.of(pending.result);
+            return Optional.of(gateCompletion(player, name, arguments, pending.result));
         }
+    }
+
+    /** {@link PlayerCommandEvent} 拒绝的命令也不给参数补全（补全可能列出岛屿、玩家等）；失败或超时同样不给。 */
+    private CompletionStage<List<String>> gateCompletion(PlayerView player, String name, String arguments,
+                                                        CompletionStage<List<String>> suggestions) {
+        if (!events.hasSubscribers(PlayerCommandEvent.class)) return suggestions;
+        CompletionStage<AccessDecision> decision;
+        try {
+            decision = events.dispatch(new PlayerCommandEvent(player, name, arguments));
+        } catch (Throwable failure) {
+            decision = CompletableFuture.failedFuture(failure);
+        }
+        return decision.handle((result, failure) -> failure == null && result instanceof AccessDecision.Allowed)
+                .thenCompose(allowed -> allowed ? suggestions : CompletableFuture.completedFuture(List.<String>of()));
     }
 
     private boolean reserveCompletionSlot() {
