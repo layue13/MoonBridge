@@ -155,6 +155,18 @@ context.events().subscribe(PlayerAdmissionEvent.class, event -> {
 
 插件自行维护封禁数据与权限策略；核心不保存封禁名单，也不定义封禁期限或申诉流程。异步数据库查询可以直接返回 stage；查询异常或超时会使该次准入失败。更新封禁名单后，插件可调用 `Players.disconnect` 踢出对应的在线连接。玩家准入策略不会在转服时重复执行。
 
+### 玩家命令检查
+
+`PlayerCommandEvent(PlayerView player, String command, String arguments)` 在玩家输入的代理命令执行前触发：根命令已确认注册，权限检查和处理器都还没运行。`command` 是小写的根命令名，`arguments` 是未拆词的其余部分。结果类型与准入相同（`AccessDecision`）：全部监听器允许才执行；首个拒绝即停止，代理消费这条命令，把拒绝原因发给玩家。异常、超时、空结果都按拒绝处理，玩家看到通用提示。未注册的命令照常交给后端、不触发该事件；控制台命令和插件经 `Commands.execute` 发起的命令也不触发。该事件与准入事件共用同一组有界队列和 `plugins.eventTimeoutSeconds` 期限；没有订阅者时不派发，命令路径不变。
+
+典型用途是离线模式的登录插件：玩家在后端完成密码登录前，拒绝他的所有代理命令，以免冒用别人名字的人在登录前用 `/is`、`/lp` 等命令。
+
+```java
+context.events().subscribe(PlayerCommandEvent.class, event ->
+    CompletableFuture.completedFuture(loggedIn.contains(event.player().identity())
+        ? AccessDecision.allow() : AccessDecision.deny("请先登录。")));
+```
+
 ### 会话通知
 
 `ServerConnectedEvent(player, previousServer)` 在在线玩家首次发布（后端登录校验后，此时 `previousServer` 为空）以及转服提交完成时触发（此时携带原后端名称）。它表示代理会话已发布/切换，不承诺 Forge 或玩法世界已经就绪。`PlayerDisconnectedEvent(player)` 对每个曾经发布的玩家，在会话关闭时恰好触发一次；被拒绝的登录从未发布，不产生此事件。

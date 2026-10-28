@@ -6,6 +6,7 @@ import dev.moonbridge.api.event.Event;
 import dev.moonbridge.api.event.EventListener;
 import dev.moonbridge.api.event.EventSubscription;
 import dev.moonbridge.api.event.PlayerAdmissionEvent;
+import dev.moonbridge.api.event.PlayerCommandEvent;
 import dev.moonbridge.api.event.PlayerDisconnectedEvent;
 import dev.moonbridge.api.event.ServerConnectedEvent;
 import dev.moonbridge.api.event.TransferDecision;
@@ -132,7 +133,8 @@ final class EventRouter {
             return CompletableFuture.failedFuture(new IllegalStateException("Plugin host is not enabled"));
         }
         List<EventRegistration<?, ?>> registrations = eventListeners.getOrDefault(event.getClass(), List.of());
-        if (event instanceof ConnectionAdmissionEvent || event instanceof PlayerAdmissionEvent) {
+        if (event instanceof ConnectionAdmissionEvent || event instanceof PlayerAdmissionEvent
+                || event instanceof PlayerCommandEvent) {
             return dispatchWithPolicy(admissionEvents, event, registrations, admissionPolicy);
         }
         if (event instanceof ServerConnectedEvent || event instanceof PlayerDisconnectedEvent) {
@@ -252,7 +254,7 @@ final class EventRouter {
         Objects.requireNonNull(listener, "listener");
         if (eventType != ConnectionAdmissionEvent.class && eventType != PlayerAdmissionEvent.class
                 && eventType != ServerConnectedEvent.class && eventType != PlayerDisconnectedEvent.class
-                && eventType != TransferPreparingEvent.class)
+                && eventType != TransferPreparingEvent.class && eventType != PlayerCommandEvent.class)
             throw new IllegalArgumentException("Unsupported event type: " + eventType.getName());
         requireEventRegistrationState();
         synchronized (lock) {
