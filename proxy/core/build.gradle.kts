@@ -3,6 +3,7 @@ import org.gradle.api.tasks.Exec
 
 plugins {
     id("moonbridge.java-library-conventions")
+    id("moonbridge.publishing-conventions")
     distribution
     id("com.gradleup.shadow") version "9.6.1"
 }
@@ -158,6 +159,17 @@ distributions {
             from("src/main/resources/config") {
                 into("config")
             }
+        }
+    }
+}
+
+// The proxy distribution (the zip `release` puts under server/) is published too, as uk.potatolab.moonbridge:
+// moonbridge-server:<version>@zip, so a deployment bundle (the TDLM modpack's proxy pack) can fetch it like any module.
+publishing {
+    publications {
+        create<MavenPublication>("server") {
+            artifactId = "moonbridge-server"
+            artifact(tasks.named("distZip"))
         }
     }
 }
