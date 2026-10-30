@@ -17,7 +17,7 @@ abstract class MoonBridgePublicationExtension {
 }
 
 /**
- * Adds the shared package repository. A module that sets `moonbridgePublication.artifactId` also gets the
+ * Adds the shared package repository (and the organisation's Nexus when NEXUS_URL is set). A module that sets `moonbridgePublication.artifactId` also gets the
  * standard publication; a module with an unusual artifact (the LuckPerms plugin) declares its own instead.
  */
 class MoonBridgePublishingConventionsPlugin : Plugin<Project> {
@@ -32,6 +32,19 @@ class MoonBridgePublishingConventionsPlugin : Plugin<Project> {
                 credentials {
                     username = project.providers.environmentVariable("MAVEN_USER").orElse("NONE").get()
                     password = project.providers.environmentVariable("MAVEN_PASSWORD").orElse("NONE").get()
+                }
+            }
+            // Optional second destination (the TDLM organisation's Nexus, where the modpack build reads from).
+            // Only added when NEXUS_URL is set, so builds without it publish exactly as before.
+            val nexusUrl = project.providers.environmentVariable("NEXUS_URL").orNull
+            if (!nexusUrl.isNullOrBlank()) {
+                repositories.maven {
+                    name = "nexus"
+                    url = project.uri(nexusUrl)
+                    credentials {
+                        username = project.providers.environmentVariable("NEXUS_USER").orElse("NONE").get()
+                        password = project.providers.environmentVariable("NEXUS_PASSWORD").orElse("NONE").get()
+                    }
                 }
             }
         }
